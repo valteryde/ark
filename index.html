@@ -4,6 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#ffffff" />
+    <meta
+      name="description"
+      content="Ark — configurable spreadsheet UI for roadmap and data backed by your API."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -23,20 +28,15 @@
     <div id="root" class="app">
       <header class="app-chrome">
         <div class="app-chrome__row app-chrome__row--top">
-          <i class="ph ph-squares-four" style="font-size: 1.25rem; color: #6b6b6b;"></i>
-          <!-- <h1 class="app-chrome__title">Product Roadmap 2026</h1> -->
-          
+          <i class="ph ph-squares-four" style="font-size: 1.25rem; color: #6b6b6b;" aria-hidden="true"></i>
+          <h1 class="app-chrome__title">Product Roadmap 2026</h1>
+          <div style="margin-left: auto;"></div>
+          <!--
           <div class="app-search" role="search">
             <i class="ph ph-magnifying-glass app-search__icon" aria-hidden="true"></i>
             <input type="search" class="app-search__input" placeholder="Search" aria-label="Search" />
           </div>
-          
-          <div style="margin-left: auto;"></div>
-
-          <!-- <button type="button" class="app-btn app-btn--share app-btn--with-icon">
-            <i class="ph ph-share-network" aria-hidden="true"></i>
-            Share
-          </button> -->
+          -->
         </div>
         <div class="app-chrome__row app-chrome__row--toolbar" aria-label="Formatting toolbar">
           <div id="formatting-toolbar-mount"></div>

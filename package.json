@@ -1,15 +1,20 @@
 {
   "name": "ark",
-  "version": "0.0.0",
-  "description": "",
+  "version": "0.1.0",
+  "description": "Configurable spreadsheet UI (demo shell + embeddable grid) for API-driven data.",
   "type": "module",
   "scripts": {
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
-    "serve": "vite preview"
+    "serve": "vite preview",
+    "gateway": "node gateway/server.mjs"
   },
   "license": "MIT",
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "sirv": "^3.0.0"
+  },
   "devDependencies": {
     "typescript": "^5.7.2",
     "vite": "^7.1.4"

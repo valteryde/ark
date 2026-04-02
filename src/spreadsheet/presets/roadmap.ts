@@ -4,7 +4,7 @@ import type { SpreadsheetConfig } from '../types.ts';
 const roadmapInitial: Record<string, InMemoryDataInitValue> = {
   '1:1': {
     value: 'Launch Q1 marketing campaign',
-    style: { 'background-color': 'red' },
+    style: { 'background-color': '#fef3c7' },
     comment: 'Kickoff sync with sales next week.',
   },
   '1:2': 'HIGH',
@@ -93,11 +93,9 @@ const roadmapColumnsAndChrome = (): Omit<SpreadsheetConfig, 'data'> => ({
     'format-strikethrough',
     'fill',
     'borders',
-    'merge',
     'align',
     'link',
     'comment',
-    'filter',
     'functions',
   ],
 });

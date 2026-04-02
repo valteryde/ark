@@ -10,11 +10,9 @@ const CAP_ICONS: Record<UiToolbarCapability, string> = {
   'format-strikethrough': 'ph-text-strikethrough',
   fill: 'ph-paint-bucket',
   borders: 'ph-grid-four',
-  merge: 'ph-columns',
   align: 'ph-text-align-left',
   link: 'ph-link',
   comment: 'ph-chat-circle-text',
-  filter: 'ph-funnel',
   functions: 'ph-sigma',
 };
 
@@ -22,10 +20,10 @@ const CAP_ICONS: Record<UiToolbarCapability, string> = {
 const TOOLBAR_GROUPS: UiToolbarCapability[][] = [
   ['undo', 'redo'],
   ['format-bold', 'format-italic', 'format-strikethrough'],
-  ['fill', 'borders', 'merge'],
+  ['fill', 'borders'],
   ['align'],
   ['link', 'comment'],
-  ['filter', 'functions'],
+  ['functions'],
 ];
 
 function sep(): HTMLSpanElement {
@@ -63,7 +61,7 @@ function iconButton(iconPh: string, title: string): HTMLButtonElement {
 
 /**
  * Renders formatting controls from `capabilities` and wires them to `sheet`.
- * Undo/redo are enabled when `sheet.historyEnabled`. Filter and functions remain disabled stubs; merge shows a notice.
+ * Undo/redo are enabled when `sheet.historyEnabled`. Functions remains a disabled stub (not implemented in v1).
  */
 export function mountFormattingToolbar(
   host: HTMLElement,
@@ -142,27 +140,17 @@ export function mountFormattingToolbar(
         continue;
       }
 
-      if (cap === 'filter' || cap === 'functions') {
-        const b =
-          cap === 'functions'
-            ? (() => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'app-toolbar__fx';
-                btn.disabled = true;
-                btn.title = 'Functions';
-                const i = document.createElement('i');
-                i.className = `ph ${CAP_ICONS[cap]}`;
-                i.setAttribute('aria-hidden', 'true');
-                btn.appendChild(i);
-                return btn;
-              })()
-            : (() => {
-                const btn = iconButton(CAP_ICONS[cap], 'Filter');
-                btn.disabled = true;
-                return btn;
-              })();
-        host.appendChild(b);
+      if (cap === 'functions') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'app-toolbar__fx';
+        btn.disabled = true;
+        btn.title = 'Functions';
+        const i = document.createElement('i');
+        i.className = `ph ${CAP_ICONS.functions}`;
+        i.setAttribute('aria-hidden', 'true');
+        btn.appendChild(i);
+        host.appendChild(btn);
         continue;
       }
 
@@ -237,15 +225,6 @@ export function mountFormattingToolbar(
           sheet.mergeCellStyleOnSelection({ 'box-shadow': on ? undefined : BORDER_INSET });
         });
         ui.borders = b;
-        host.appendChild(b);
-        continue;
-      }
-
-      if (cap === 'merge') {
-        const b = iconButton(CAP_ICONS[cap], 'Merge cells');
-        b.addEventListener('click', () => {
-          window.alert('Merge cells is not supported in this grid yet.');
-        });
         host.appendChild(b);
         continue;
       }

@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.idea
+.DS_Store
+*.md
+!README.md
+.env
+.env.*
+.wrangler
+.output
+.vercel
+.netlify
+.vinxi
+.cursor

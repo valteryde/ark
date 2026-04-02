@@ -11,7 +11,19 @@ This document is the contract that both sides should align on.
 1. **`SpreadsheetConfig`** — Declares columns (id, header, width, optional `displayStyle`, optional `readOnly` for system/computed columns shown darker and non-editable), optional **value typing** (`valueType`, `selectOptions`, `allowEmpty`), row count, default row height, which **cell renderers** are allowed, and which **UI capabilities** the backend says are available (toolbar, future actions).
 2. **`SpreadsheetDataStore`** — Synchronous `get` / `set` per `(row, col)` plus optional **`getCellStyle(row, col)`** returning inline CSS as kebab-case keys (e.g. `{ "background-color": "#f5f5f5" }`) applied to the cell shell. **This is the seam for REST**: implement with `fetch`, cache, PATCH/PUT on commit, etc. The default **`createInMemoryDataStore(initial)`** accepts either a plain `string | number` or `{ value, style? }` per `"row:col"` key for demos and tests. For **undo/redo**, the in-memory store also implements **`hasCell`**, **`getStoredCell`**, and **`replaceCell(row, col, cell | null)`** (`null` removes the key). Custom adapters that omit these methods get **`historyEnabled: false`** on the mount handle; undo/redo shortcuts and toolbar actions stay inert.
 3. **Cell display styles** — Named renderers (`priority`, `status`, `assignee`, `plain`). The backend sends **`enabledCellStyles`**: if `priority` is not enabled, priority columns render as escaped plain text even if the column asks for `displayStyle: 'priority'`. That keeps presentation policy on the server.
-4. **`enabledUiCapabilities`** — Optional set of toolbar/feature flags (undo, bold, filter, …). The shell can hide or disable controls based on this once wired; today it is the **documented contract** for future chrome.
+4. **`enabledUiCapabilities`** — Optional set of toolbar/feature flags (undo, bold, fill, …). The shell hides or disables controls based on this; it is the **documented contract** for API payloads.
+
+### Naming: `mergeCellStyle` vs toolbar
+
+The data store’s **`mergeCellStyle`** (and the mount handle’s **`mergeCellStyleOnSelection`**) means **merge CSS property patches** onto a cell (bold, background, borders)—not “merge cells” spanning columns. There is **no** merge-cells spanning feature in v1.
+
+### Toolbar behavior (v1)
+
+- **`functions`** — If listed in `enabledUiCapabilities`, the toolbar may show a **disabled** control (not implemented yet).
+- **`link`** — Uses a browser **`prompt`** for URL entry; clearing the URL toggles underline styling. Document if you expose this capability to end users.
+- **`comment`** — Requires `comment` in `enabledUiCapabilities` **and** a history-capable store (`getStoredCell` / `replaceCell`) for the comment UI to be active.
+
+The demo app shell (tabs, header) is **not** part of the spreadsheet package; only the grid and toolbar are driven by config.
 
 ### Column value types (`valueType`)
 
@@ -33,14 +45,14 @@ Rich cell HTML is built only from **known templates** + escaped user text. Do no
 
 ## Undo / redo
 
-- **Gestures**: Each committed cell edit, range clear (**Backspace** with a multi-cell selection), and formatting change (toolbar merges) is one undo step. Fill color drags in the native picker are **batched** into one step per pick session.
+- **Gestures**: Each committed cell edit, range clear (**Backspace** with a multi-cell selection), and formatting change (toolbar applying CSS via `mergeCellStyle`) is one undo step. Fill color drags in the native picker are **batched** into one step per pick session.
 - **Keyboard**: **Cmd+Z** / **Ctrl+Z** undo; **Cmd+Shift+Z** / **Ctrl+Shift+Z** redo; **Ctrl+Y** redo (Windows-style).
 - **Handle**: `SpreadsheetMountHandle` exposes **`undo()`**, **`redo()`**, **`canUndo()`**, **`canRedo()`**, **`subscribeHistoryChange`**, **`runHistoryBatch`**, **`beginHistoryBatch`**, **`endHistoryBatch`**, and **`historyEnabled`**.
 
 ## API entrypoints (TypeScript)
 
-- `mountSpreadsheet(container, config)` — Build the grid once; returns a **`SpreadsheetMountHandle`** (merge styles on selection, subscribe to selection changes, undo/redo when the store supports it) for `mountFormattingToolbar(toolbarEl, handle, resolveEnabledUiCapabilities(config.enabledUiCapabilities))`.
-- `mountFormattingToolbar` — Renders toolbar controls from **`enabledUiCapabilities`**; styling actions call `mergeCellStyle` on the store (in-memory preset implements it).
+- `mountSpreadsheet(container, config)` — Build the grid once; returns a **`SpreadsheetMountHandle`** (apply CSS patches on selection, subscribe to selection changes, undo/redo when the store supports it) for `mountFormattingToolbar(toolbarEl, handle, resolveEnabledUiCapabilities(config.enabledUiCapabilities))`.
+- `mountFormattingToolbar` — Renders toolbar controls from **`enabledUiCapabilities`**; styling actions call **`mergeCellStyle`** on the store (in-memory preset implements it).
 - `createInMemoryDataStore(initial?)` — In-memory `row:col` map for prototyping.
 - Presets (e.g. `createRoadmapPreset()`) — Example configs only; production should build config from JSON your API returns.
 
@@ -53,7 +65,7 @@ Your backend can return JSON that maps almost 1:1 to `SpreadsheetConfig` (minus 
   "rowCount": 100,
   "defaultRowHeightPx": 28,
   "enabledCellStyles": ["priority", "status", "assignee"],
-  "enabledUiCapabilities": ["undo", "redo", "filter", "functions"],
+  "enabledUiCapabilities": ["undo", "redo", "functions"],
   "columns": [
     { "id": "title", "header": "TASK NAME", "widthPx": 240, "displayStyle": "plain" },
     { "id": "priority", "header": "PRIORITY", "widthPx": 108, "displayStyle": "priority" },

@@ -1,36 +1,88 @@
-## Usage
+# Ark
 
-Those templates dependencies are maintained via [pnpm](https://pnpm.io) via `pnpm up -Lri`.
+Configurable spreadsheet UI for **API-driven** row/column data: a demo “Product Roadmap” shell plus an embeddable grid you mount with `mountSpreadsheet`. Vite builds static assets; **your backend owns routes, auth, and persistence**—see [docs/SPREADSHEET.md](docs/SPREADSHEET.md) for the config contract and TypeScript entrypoints (`src/spreadsheet/index.ts`).
 
-This is the reason you see a `pnpm-lock.yaml`. That being said, any package manager will work. This file can be safely be removed once you clone a template.
+## Requirements
+
+- Node.js 20+ (for `npm` / local dev and Docker build stages)
+
+## Local development
 
 ```bash
-$ npm install # or pnpm install or yarn install
+npm install
+npm run dev
 ```
 
-### Learn more on the [Solid Website](https://solidjs.com) and come chat with us on our [Discord](https://discord.com/invite/solidjs)
+Opens the Vite dev server at [http://localhost:3000](http://localhost:3000).
 
-## Available Scripts
+### Deno task aliases
 
-In the project directory, you can run:
+If you use Deno, `deno task dev` / `deno task build` forward to the same npm scripts ([deno.json](deno.json)).
 
-### `npm run dev` or `npm start`
+### Proxying your API in dev
 
-Runs the app in the development mode.<br>
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+Vite does not implement your HTTP API. Point the dev server at your backend with `server.proxy` in [vite.config.ts](vite.config.ts) (commented example for `/api` and `/ws`).
 
-The page will reload if you make edits.<br>
+## Production build
 
-### `npm run build`
+```bash
+npm run build
+```
 
-Builds the app for production to the `dist` folder.<br>
-It correctly bundles Solid in production mode and optimizes the build for the best performance.
+Output: `dist/`. Preview locally with `npm run serve`.
 
-The build is minified and the filenames include the hashes.<br>
-Your app is ready to be deployed!
+## Embedding and “your own router”
 
-## Deployment
+- **Static hosting**: Deploy `dist/` behind nginx, Caddy, Kubernetes ingress, or any app server. Your service handles `/api/*` (and optional WebSockets) on the same host or another origin (configure CORS if split).
+- **Vite dev**: UI on port 3000; backend on its own port; use `server.proxy` so the browser talks same-origin.
+- **Node gateway** (Docker-friendly): One process serves `dist/` and reverse-proxies `/api` and `/ws` to `BACKEND_URL`—see [gateway/server.mjs](gateway/server.mjs). Useful when the browser should only see one origin and a future collab service lives on an internal network.
 
-You can deploy the `dist` folder to any static host provider (netlify, surge, now, etc.)
+After `npm run build`, run `npm run gateway` (default **8080**). Use `PORT=4174 npm run gateway` if that port is busy.
 
-## This project was created with the [Solid CLI](https://github.com/solidjs-community/solid-cli)
+## Docker
+
+**Static image** (nginx + `dist/`):
+
+```bash
+docker build -t ark:web .
+docker run --rm -p 8080:80 ark:web
+```
+
+**Gateway image** (static UI + proxy to your API):
+
+```bash
+docker build -f Dockerfile.gateway -t ark:gateway .
+docker run --rm -p 4174:8080 -e BACKEND_URL=http://host.docker.internal:3000 ark:gateway
+```
+
+On Linux, `host.docker.internal` may require `extra_hosts`; prefer a Compose service name (e.g. `http://api:3000`) on a shared network.
+
+**Compose** (default: static on 8080):
+
+```bash
+docker compose up --build
+```
+
+Optional gateway profile:
+
+```bash
+docker compose --profile gateway up --build
+```
+
+## Public API (TypeScript)
+
+Import from `./spreadsheet` or paths under `src/spreadsheet/`:
+
+- `mountSpreadsheet`, `mountFormattingToolbar`
+- `createInMemoryDataStore`, types (`SpreadsheetConfig`, `SpreadsheetDataStore`, …)
+- Example presets: `createRoadmapPreset`, etc. (demos only—build real configs from your API JSON)
+
+## Manual smoke check
+
+- Switch sheet tabs (Quarterly / Backlog / Archive).
+- Edit a cell, undo/redo (keyboard or toolbar).
+- Formatting toolbar: bold, fill, borders, alignment, link (prompt).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

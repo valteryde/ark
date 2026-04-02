@@ -16,11 +16,9 @@ export type UiToolbarCapability =
   | 'format-strikethrough'
   | 'fill'
   | 'borders'
-  | 'merge'
   | 'align'
   | 'link'
   | 'comment'
-  | 'filter'
   | 'functions';
 
 /** Stored cell value is always the canonical `value` string. */
@@ -113,11 +111,9 @@ export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
   'format-strikethrough',
   'fill',
   'borders',
-  'merge',
   'align',
   'link',
   'comment',
-  'filter',
   'functions',
 ];
 
@@ -143,8 +139,9 @@ export function resolveEnabledUiCapabilities(
 
 /** Returned by `mountSpreadsheet` for wiring the formatting toolbar and extensions. */
 export interface SpreadsheetMountHandle {
+  /** Apply CSS property patches to the current selection (via store `mergeCellStyle`). */
   mergeCellStyleOnSelection(patch: Record<string, string | undefined>): void;
-  /** Per-cell merge when values differ (e.g. mixed strikethrough). */
+  /** Per-cell CSS patches when values differ across the selection (e.g. mixed strikethrough). */
   mergeCellStyleOnEachTarget(
     patchForCell: (row: number, col: number) => Record<string, string | undefined>,
   ): void;
