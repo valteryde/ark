@@ -73,31 +73,6 @@ function persistActiveInput(
 }
 
 
-function renderSelectArea(
-  viewport: HTMLElement,
-  cells: Map<string, HTMLDivElement>,
-): void {
-  viewport.querySelectorAll('.sheet-cell-select-area').forEach((el) => {
-    el.classList.remove('sheet-cell-select-area');
-  });
-
-  if (!selectArea.active) return;
-
-  const minRow = Math.min(selectArea.row, selectArea.rowEnd);
-  const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
-  const minCol = Math.min(selectArea.col, selectArea.colEnd);
-  const maxCol = Math.max(selectArea.col, selectArea.colEnd);
-
-  for (let row = minRow; row <= maxRow; row++) {
-    for (let col = minCol; col <= maxCol; col++) {
-      const cell = cells.get(cellKey(row, col));
-      if (!cell) continue;
-      cell.classList.add('sheet-cell-select-area');
-    }
-  }
-}
-
-
 function clampRow(row: number): number {
   return Math.max(1, Math.min(rowCountTotal, row));
 }
@@ -105,6 +80,23 @@ function clampRow(row: number): number {
 function clampCol(col: number): number {
   return Math.max(1, Math.min(columnCountTotal, col));
 }
+
+
+function doOnEverySelectedCell(cells: Map<string, HTMLDivElement>, callback: (cell: HTMLDivElement) => void): void {
+  const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+  const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+  const minCol = Math.min(selectArea.col, selectArea.colEnd);
+  const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
+      const cell = cells.get(cellKey(row, col));
+      if (!cell) continue;
+      callback(cell);
+    }
+  }
+}
+  
+
 
 /** Build grid once; delegated pointer + keyboard; active cell + optional range selection. */
 export function mountSheet(container: HTMLElement): void {
@@ -115,6 +107,8 @@ export function mountSheet(container: HTMLElement): void {
   let dragging = false;
   let dragAnchor = { row: 1, col: 1 };
   let dragMoved = false;
+  let dragRaf: number | null = null;
+  let dragPendingEnd: { row: number; col: number } | null = null;
 
   const root = document.createElement('div');
   root.className = 'sheet-root';
@@ -210,6 +204,73 @@ export function mountSheet(container: HTMLElement): void {
     viewport.focus();
   }
 
+  let lastSelectKeys = new Set<string>();
+  /** True after we blurred the cell input for a multi-cell range (drag or Shift); reset when returning to single-cell edit. */
+  let rangeConsumedEditorFocus = false;
+
+  function exitRangeSelectionUi(): void {
+    rangeConsumedEditorFocus = false;
+  }
+
+  function enterRangeSelectionUi(): void {
+    if (!rangeConsumedEditorFocus) {
+      leaveEditorFocusSheet();
+      rangeConsumedEditorFocus = true;
+    }
+  }
+
+  /** Incremental class updates — avoids querySelectorAll + full-grid repaints. */
+  function syncSelectionHighlight(): void {
+    const nextKeys = new Set<string>();
+    if (selectArea.active) {
+      const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+      const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+      const minCol = Math.min(selectArea.col, selectArea.colEnd);
+      const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+      for (let row = minRow; row <= maxRow; row++) {
+        for (let col = minCol; col <= maxCol; col++) {
+          nextKeys.add(cellKey(row, col));
+        }
+      }
+    }
+    for (const key of lastSelectKeys) {
+      if (!nextKeys.has(key)) {
+        cells.get(key)?.classList.remove('sheet-cell-select-area');
+      }
+    }
+    for (const key of nextKeys) {
+      if (!lastSelectKeys.has(key)) {
+        cells.get(key)?.classList.add('sheet-cell-select-area');
+      }
+    }
+    lastSelectKeys = nextKeys;
+  }
+
+  function flushDragPaint(): void {
+    if (dragRaf !== null) {
+      cancelAnimationFrame(dragRaf);
+      dragRaf = null;
+    }
+    if (dragPendingEnd !== null) {
+      const p = dragPendingEnd;
+      dragPendingEnd = null;
+      applyDragRange(p.row, p.col);
+    }
+  }
+
+  function scheduleDragPaint(): void {
+    if (dragRaf !== null) return;
+    dragRaf = requestAnimationFrame(() => {
+      dragRaf = null;
+      if (!dragging) return;
+      const p = dragPendingEnd;
+      if (p === null) return;
+      dragPendingEnd = null;
+      applyDragRange(p.row, p.col);
+      if (dragPendingEnd !== null) scheduleDragPaint();
+    });
+  }
+
   /** Collapse range highlight to anchor; keep `active` cell. */
   function collapseRange(): void {
     selectArea.row = active.row;
@@ -217,7 +278,8 @@ export function mountSheet(container: HTMLElement): void {
     selectArea.rowEnd = active.row;
     selectArea.colEnd = active.col;
     selectArea.active = false;
-    renderSelectArea(viewport, cells);
+    exitRangeSelectionUi();
+    syncSelectionHighlight();
   }
 
   function setActive(row: number, col: number): void {
@@ -231,12 +293,13 @@ export function mountSheet(container: HTMLElement): void {
       return;
     }
 
+    exitRangeSelectionUi();
     selectArea.active = false;
     selectArea.row = row;
     selectArea.col = col;
     selectArea.rowEnd = row;
     selectArea.colEnd = col;
-    renderSelectArea(viewport, cells);
+    syncSelectionHighlight();
 
     persistActiveInput(cells, active);
 
@@ -265,8 +328,8 @@ export function mountSheet(container: HTMLElement): void {
     const multi =
       selectArea.row !== selectArea.rowEnd || selectArea.col !== selectArea.colEnd;
     selectArea.active = multi;
-    renderSelectArea(viewport, cells);
-    if (multi) leaveEditorFocusSheet();
+    syncSelectionHighlight();
+    if (multi) enterRangeSelectionUi();
   }
 
   function endPointerDrag(focusIfClick: boolean): void {
@@ -278,7 +341,7 @@ export function mountSheet(container: HTMLElement): void {
       collapseRange();
       if (focusIfClick) focusActiveInput();
     } else if (selectArea.active) {
-      leaveEditorFocusSheet();
+      /* focus already moved to viewport on first multi frame */
     } else {
       focusActiveInput();
     }
@@ -297,6 +360,13 @@ export function mountSheet(container: HTMLElement): void {
     col = clampCol(col);
 
     e.preventDefault();
+    if (dragRaf !== null) {
+      cancelAnimationFrame(dragRaf);
+      dragRaf = null;
+    }
+    dragPendingEnd = null;
+    exitRangeSelectionUi();
+
     dragging = true;
     dragMoved = false;
     dragPointerId = e.pointerId;
@@ -309,7 +379,7 @@ export function mountSheet(container: HTMLElement): void {
     selectArea.col = col;
     selectArea.rowEnd = row;
     selectArea.colEnd = col;
-    renderSelectArea(viewport, cells);
+    syncSelectionHighlight();
 
     persistActiveInput(cells, active);
     cells.get(cellKey(active.row, active.col))?.classList.remove('sheet-cell-active');
@@ -329,7 +399,8 @@ export function mountSheet(container: HTMLElement): void {
     const hit = cellFromPoint(e.clientX, e.clientY);
     if (!hit) return;
     if (hit.row !== dragAnchor.row || hit.col !== dragAnchor.col) dragMoved = true;
-    applyDragRange(hit.row, hit.col);
+    dragPendingEnd = hit;
+    scheduleDragPaint();
   });
 
   viewport.addEventListener('pointerup', (e) => {
@@ -339,6 +410,7 @@ export function mountSheet(container: HTMLElement): void {
     } catch {
       /* released */
     }
+    flushDragPaint();
     endPointerDrag(true);
   });
 
@@ -349,6 +421,7 @@ export function mountSheet(container: HTMLElement): void {
     } catch {
       /* released */
     }
+    flushDragPaint();
     endPointerDrag(false);
   });
 
@@ -376,6 +449,18 @@ export function mountSheet(container: HTMLElement): void {
     if (e.key === 'Enter') {
       e.preventDefault();
       setActive(row + 1, col);
+      return;
+    }
+
+    if (e.key === 'Backspace' && selectArea.active) {
+      e.preventDefault();
+      doOnEverySelectedCell(cells, (cell) => {
+        mockRows[cellKey(row, col)] = { value: '' };
+        cell.querySelector<HTMLDivElement>('.sheet-cell-content')!.textContent = '';
+        cell.querySelector<HTMLInputElement>('.sheet-cell-input')!.value = '';
+      });
+      exitRangeSelectionUi();
+      syncSelectionHighlight();
       return;
     }
 
@@ -416,13 +501,14 @@ export function mountSheet(container: HTMLElement): void {
         selectArea.col = minCol;
         selectArea.rowEnd = minRow;
         selectArea.colEnd = minCol;
-        renderSelectArea(viewport, cells);
+        exitRangeSelectionUi();
+        syncSelectionHighlight();
         focusActiveInput();
         return;
       }
 
-      renderSelectArea(viewport, cells);
-      leaveEditorFocusSheet();
+      syncSelectionHighlight();
+      enterRangeSelectionUi();
       return;
     }
 
