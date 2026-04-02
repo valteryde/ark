@@ -69,6 +69,28 @@ Optional gateway profile:
 docker compose --profile gateway up --build
 ```
 
+### CI: GitHub's registry (no Docker Hub)
+
+Images are pushed to **GitHub Container Registry** ([`ghcr.io`](https://docs.github.com/packages/working-with-a-github-packages-registry/working-with-the-container-registry)) — GitHub's built-in Docker/OCI store (GitHub Packages). The workflow uses only `GITHUB_TOKEN`; you do not need a separate registry account.
+
+On every push to **`main`**, [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) publishes:
+
+| Tag | Image |
+|-----|--------|
+| `latest` | Static nginx (`Dockerfile`) |
+| `sha-<short>` | Same commit digest |
+| `gateway` | Node gateway (`Dockerfile.gateway`) |
+| `gateway-sha-<short>` | Gateway at that commit |
+
+Pull examples (replace `OWNER/REPO` with your GitHub `owner/repo`, lowercase):
+
+```bash
+docker pull ghcr.io/OWNER/REPO:latest
+docker pull ghcr.io/OWNER/REPO:gateway
+```
+
+The workflow uses `GITHUB_TOKEN`; ensure the repository **Actions** permissions allow **read and write** for packages (Settings → Actions → General → Workflow permissions), and set the published package visibility under **Packages** if needed.
+
 ## Public API (TypeScript)
 
 Import from `./spreadsheet` or paths under `src/spreadsheet/`:
