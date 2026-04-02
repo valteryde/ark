@@ -2,6 +2,8 @@
 
 Configurable spreadsheet UI for **API-driven** row/column data: a demo “Product Roadmap” shell plus an embeddable grid you mount with `mountSpreadsheet`. Vite builds static assets; **your backend owns routes, auth, and persistence**—see [docs/SPREADSHEET.md](docs/SPREADSHEET.md) for the config contract and TypeScript entrypoints (`src/spreadsheet/index.ts`).
 
+**New here?** Follow **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for step-by-step setup (Node, first run, build, Docker, and connecting your API).
+
 ## Requirements
 
 - Node.js 20+ (for `npm` / local dev and Docker build stages)
