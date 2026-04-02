@@ -47,11 +47,11 @@ const selectArea: {
   rowEnd: number;
   colEnd: number;
 } = {
-  active: true,
-  row: 2,
-  col: 2,
-  rowEnd: 10,
-  colEnd: 10,
+  active: false,
+  row: 1,
+  col: 1,
+  rowEnd: 1,
+  colEnd: 1,
 };
 
 function cellKey(row: number, col: number): string {
@@ -73,15 +73,16 @@ function persistActiveInput(
 }
 
 
-function renderSelectArea(cells: Map<string, HTMLDivElement>): void {
-  // Clear all select area cells
-  document.querySelectorAll('.sheet-cell-select-area').forEach(cell => {
-    cell.classList.remove('sheet-cell-select-area');
+function renderSelectArea(
+  viewport: HTMLElement,
+  cells: Map<string, HTMLDivElement>,
+): void {
+  viewport.querySelectorAll('.sheet-cell-select-area').forEach((el) => {
+    el.classList.remove('sheet-cell-select-area');
   });
 
   if (!selectArea.active) return;
 
-  // Render the new select area
   const minRow = Math.min(selectArea.row, selectArea.rowEnd);
   const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
   const minCol = Math.min(selectArea.col, selectArea.colEnd);
@@ -97,10 +98,23 @@ function renderSelectArea(cells: Map<string, HTMLDivElement>): void {
 }
 
 
-/** Build grid once; delegated clicks; imperative active cell + focus. */
+function clampRow(row: number): number {
+  return Math.max(1, Math.min(rowCountTotal, row));
+}
+
+function clampCol(col: number): number {
+  return Math.max(1, Math.min(columnCountTotal, col));
+}
+
+/** Build grid once; delegated pointer + keyboard; active cell + optional range selection. */
 export function mountSheet(container: HTMLElement): void {
   const cells = new Map<string, HTMLDivElement>();
   let active = { row: 1, col: 1 };
+
+  let dragPointerId: number | null = null;
+  let dragging = false;
+  let dragAnchor = { row: 1, col: 1 };
+  let dragMoved = false;
 
   const root = document.createElement('div');
   root.className = 'sheet-root';
@@ -120,6 +134,7 @@ export function mountSheet(container: HTMLElement): void {
 
   const viewport = document.createElement('div');
   viewport.className = 'sheet-viewport';
+  viewport.tabIndex = 0;
   viewport.style.width = `${sheetTotalWidth}px`;
   viewport.style.height = `${sheetTotalHeight}px`;
 
@@ -164,12 +179,54 @@ export function mountSheet(container: HTMLElement): void {
   root.append(headerRow, viewport);
   container.appendChild(root);
 
-  /* Set the active cell and focus the input */
+  function cellFromPoint(clientX: number, clientY: number): { row: number; col: number } | null {
+    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const hit = el?.closest('.sheet-cell');
+    if (!hit || !viewport.contains(hit)) return null;
+    const cell = hit as HTMLElement;
+    const row = Number(cell.dataset.row);
+    const col = Number(cell.dataset.col);
+    if (!Number.isFinite(row) || !Number.isFinite(col)) return null;
+    return { row: clampRow(row), col: clampCol(col) };
+  }
+
+  function focusActiveInput(): void {
+    const inp = cells
+      .get(cellKey(active.row, active.col))
+      ?.querySelector<HTMLInputElement>('.sheet-cell-input');
+    setTimeout(() => inp?.focus(), 0);
+  }
+
+  function blurActiveInput(): void {
+    cells
+      .get(cellKey(active.row, active.col))
+      ?.querySelector<HTMLInputElement>('.sheet-cell-input')
+      ?.blur();
+  }
+
+  /** Blur the cell editor and move focus to the viewport so arrows / Shift+arrows still work. */
+  function leaveEditorFocusSheet(): void {
+    blurActiveInput();
+    viewport.focus();
+  }
+
+  /** Collapse range highlight to anchor; keep `active` cell. */
+  function collapseRange(): void {
+    selectArea.row = active.row;
+    selectArea.col = active.col;
+    selectArea.rowEnd = active.row;
+    selectArea.colEnd = active.col;
+    selectArea.active = false;
+    renderSelectArea(viewport, cells);
+  }
+
   function setActive(row: number, col: number): void {
-    if (active.row === row && active.col === col) {
+    row = clampRow(row);
+    col = clampCol(col);
+
+    if (active.row === row && active.col === col && !selectArea.active) {
       queueMicrotask(() => {
-        const el = cells.get(cellKey(row, col));
-        el?.querySelector<HTMLInputElement>('.sheet-cell-input')?.focus();
+        cells.get(cellKey(row, col))?.querySelector<HTMLInputElement>('.sheet-cell-input')?.focus();
       });
       return;
     }
@@ -179,8 +236,7 @@ export function mountSheet(container: HTMLElement): void {
     selectArea.col = col;
     selectArea.rowEnd = row;
     selectArea.colEnd = col;
-    
-    renderSelectArea(cells);
+    renderSelectArea(viewport, cells);
 
     persistActiveInput(cells, active);
 
@@ -199,53 +255,192 @@ export function mountSheet(container: HTMLElement): void {
     }
   }
 
-  viewport.addEventListener('click', (e) => {
-    const target = e.target as HTMLElement | null;
-    const cell = target?.closest('.sheet-cell');
-    if (!cell || !viewport.contains(cell)) return;
-    const row = Number(cell.dataset.row);
-    const col = Number(cell.dataset.col);
-    if (!Number.isFinite(row) || !Number.isFinite(col)) return;
-    setActive(row, col);
-  });
-  
-  viewport.addEventListener('keydown', (e) => {
-    const target = e.target as HTMLElement | null;
-    const cell = target?.closest('.sheet-cell');
-    if (!cell || !viewport.contains(cell)) return;
-    const row = Number(cell?.dataset.row);
-    const col = Number(cell?.dataset.col);
+  function applyDragRange(endRow: number, endCol: number): void {
+    endRow = clampRow(endRow);
+    endCol = clampCol(endCol);
+    selectArea.row = dragAnchor.row;
+    selectArea.col = dragAnchor.col;
+    selectArea.rowEnd = endRow;
+    selectArea.colEnd = endCol;
+    const multi =
+      selectArea.row !== selectArea.rowEnd || selectArea.col !== selectArea.colEnd;
+    selectArea.active = multi;
+    renderSelectArea(viewport, cells);
+    if (multi) leaveEditorFocusSheet();
+  }
 
-    
-    if (e.key === 'Escape') {
-      setActive(-1, -1);
-    } else if (e.key === 'Enter') {
-      setActive(row + 1, col);
-    }
-    
-    if (e.shiftKey) {
-      selectArea.active = true;
-      if (e.key === 'ArrowUp') {
-        selectArea.rowEnd -= 1;
-      } else if (e.key === 'ArrowDown') {
-        selectArea.rowEnd += 1;
-      } else if (e.key === 'ArrowLeft') {
-        selectArea.colEnd -= 1;
-      } else if (e.key === 'ArrowRight') {
-        selectArea.colEnd += 1;
-      }
-      renderSelectArea(cells);
+  function endPointerDrag(focusIfClick: boolean): void {
+    viewport.classList.remove('sheet-viewport--dragging');
+    dragging = false;
+    dragPointerId = null;
+
+    if (!dragMoved) {
+      collapseRange();
+      if (focusIfClick) focusActiveInput();
+    } else if (selectArea.active) {
+      leaveEditorFocusSheet();
     } else {
-      if (e.key === 'ArrowUp') {
-        setActive(row - 1, col);
-      } else if (e.key === 'ArrowDown') {
-        setActive(row + 1, col);
-      } else if (e.key === 'ArrowLeft') {
-        setActive(row, col - 1);
-      } else if (e.key === 'ArrowRight') {
-        setActive(row, col + 1);
-      }
+      focusActiveInput();
+    }
+  }
+
+  viewport.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    const hit = target.closest('.sheet-cell');
+    if (!hit || !viewport.contains(hit)) return;
+    const cell = hit as HTMLElement;
+    let row = Number(cell.dataset.row);
+    let col = Number(cell.dataset.col);
+    if (!Number.isFinite(row) || !Number.isFinite(col)) return;
+    row = clampRow(row);
+    col = clampCol(col);
+
+    e.preventDefault();
+    dragging = true;
+    dragMoved = false;
+    dragPointerId = e.pointerId;
+    dragAnchor = { row, col };
+    viewport.classList.add('sheet-viewport--dragging');
+    viewport.setPointerCapture(e.pointerId);
+
+    selectArea.active = false;
+    selectArea.row = row;
+    selectArea.col = col;
+    selectArea.rowEnd = row;
+    selectArea.colEnd = col;
+    renderSelectArea(viewport, cells);
+
+    persistActiveInput(cells, active);
+    cells.get(cellKey(active.row, active.col))?.classList.remove('sheet-cell-active');
+
+    active = { row, col };
+    const next = cells.get(cellKey(row, col));
+    next?.classList.add('sheet-cell-active');
+    const inp = next?.querySelector<HTMLInputElement>('.sheet-cell-input');
+    if (inp) {
+      const k = cellKey(row, col);
+      inp.value = mockRows[k] !== undefined ? String(mockRows[k]!.value) : '';
     }
   });
 
+  viewport.addEventListener('pointermove', (e) => {
+    if (!dragging || e.pointerId !== dragPointerId) return;
+    const hit = cellFromPoint(e.clientX, e.clientY);
+    if (!hit) return;
+    if (hit.row !== dragAnchor.row || hit.col !== dragAnchor.col) dragMoved = true;
+    applyDragRange(hit.row, hit.col);
+  });
+
+  viewport.addEventListener('pointerup', (e) => {
+    if (e.pointerId !== dragPointerId) return;
+    try {
+      viewport.releasePointerCapture(e.pointerId);
+    } catch {
+      /* released */
+    }
+    endPointerDrag(true);
+  });
+
+  viewport.addEventListener('pointercancel', (e) => {
+    if (e.pointerId !== dragPointerId) return;
+    try {
+      viewport.releasePointerCapture(e.pointerId);
+    } catch {
+      /* released */
+    }
+    endPointerDrag(false);
+  });
+
+  function handleSheetKeydown(e: KeyboardEvent): void {
+    const target = e.target as HTMLElement | null;
+    if (!target || !viewport.contains(target)) return;
+
+    const hit = target.closest('.sheet-cell');
+    const focusRowCol = hit
+      ? {
+          row: clampRow(Number((hit as HTMLElement).dataset.row)),
+          col: clampCol(Number((hit as HTMLElement).dataset.col)),
+        }
+      : { row: active.row, col: active.col };
+
+    const { row, col } = focusRowCol;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      collapseRange();
+      focusActiveInput();
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      setActive(row + 1, col);
+      return;
+    }
+
+    if (e.shiftKey) {
+      if (
+        e.key !== 'ArrowUp' &&
+        e.key !== 'ArrowDown' &&
+        e.key !== 'ArrowLeft' &&
+        e.key !== 'ArrowRight'
+      ) {
+        return;
+      }
+      e.preventDefault();
+      // Anchor (row,col) must stay fixed while extending; only move rowEnd/colEnd (like pre-drag behavior).
+      if (!selectArea.active) {
+        const ar = row;
+        const ac = col;
+        selectArea.row = ar;
+        selectArea.col = ac;
+        selectArea.rowEnd = ar;
+        selectArea.colEnd = ac;
+      }
+      selectArea.active = true;
+      if (e.key === 'ArrowUp') selectArea.rowEnd = clampRow(selectArea.rowEnd - 1);
+      else if (e.key === 'ArrowDown') selectArea.rowEnd = clampRow(selectArea.rowEnd + 1);
+      else if (e.key === 'ArrowLeft') selectArea.colEnd = clampCol(selectArea.colEnd - 1);
+      else if (e.key === 'ArrowRight') selectArea.colEnd = clampCol(selectArea.colEnd + 1);
+
+      const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+      const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+      const minCol = Math.min(selectArea.col, selectArea.colEnd);
+      const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+      const multi = minRow !== maxRow || minCol !== maxCol;
+
+      if (!multi) {
+        selectArea.active = false;
+        selectArea.row = minRow;
+        selectArea.col = minCol;
+        selectArea.rowEnd = minRow;
+        selectArea.colEnd = minCol;
+        renderSelectArea(viewport, cells);
+        focusActiveInput();
+        return;
+      }
+
+      renderSelectArea(viewport, cells);
+      leaveEditorFocusSheet();
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive(row - 1, col);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive(row + 1, col);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      setActive(row, col - 1);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      setActive(row, col + 1);
+    }
+  }
+
+  // Capture so Shift+Arrow and arrows are handled before the cell <input> uses them (caret / text selection).
+  viewport.addEventListener('keydown', handleSheetKeydown, true);
 }
