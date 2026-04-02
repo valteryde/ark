@@ -85,6 +85,8 @@ export function mountSpreadsheet(
 
   const sheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
   const sheetTotalHeight = rowHeights.reduce((a, b) => a + b, 0);
+  /** Fixed gutter for row indices; added to horizontal extent and cell `left` offsets. */
+  const rowHeaderWidthPx = 48;
 
   const data = config.data;
 
@@ -360,11 +362,17 @@ export function mountSpreadsheet(
 
   const gridInner = document.createElement('div');
   gridInner.className = 'sheet-grid-inner';
-  gridInner.style.width = `${sheetTotalWidth}px`;
+  gridInner.style.width = `${rowHeaderWidthPx + sheetTotalWidth}px`;
 
   const headerRow = document.createElement('div');
   headerRow.className = 'sheet-header-row';
   headerRow.style.width = '100%';
+
+  const headerCorner = document.createElement('div');
+  headerCorner.className = 'sheet-header-corner';
+  headerCorner.style.width = `${rowHeaderWidthPx}px`;
+  headerCorner.setAttribute('aria-hidden', 'true');
+  headerRow.appendChild(headerCorner);
 
   for (let c = 0; c < columns.length; c++) {
     const h = document.createElement('div');
@@ -384,6 +392,17 @@ export function mountSpreadsheet(
     rowEl.className = 'sheet-row';
     rowEl.style.height = `${rowHeights[row - 1]}px`;
     rowEl.style.top = `${cumulativeRowHeights[row - 1]}px`;
+
+    const rowGutter = document.createElement('div');
+    rowGutter.className = 'sheet-row-gutter';
+    rowGutter.style.flex = `0 0 ${rowHeaderWidthPx}px`;
+    rowGutter.style.width = `${rowHeaderWidthPx}px`;
+    rowGutter.textContent = String(row);
+    rowGutter.setAttribute('aria-hidden', 'true');
+
+    const rowCells = document.createElement('div');
+    rowCells.className = 'sheet-row-cells';
+    rowCells.style.width = `${sheetTotalWidth}px`;
 
     for (let col = 1; col <= columnCountTotal; col++) {
       const cell = document.createElement('div');
@@ -428,8 +447,9 @@ export function mountSpreadsheet(
 
       cell.append(content, input);
       cells.set(key, cell);
-      rowEl.appendChild(cell);
+      rowCells.appendChild(cell);
     }
+    rowEl.append(rowGutter, rowCells);
     gridBody.appendChild(rowEl);
   }
 

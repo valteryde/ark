@@ -407,13 +407,24 @@ body {
   flex-direction: row;
   align-items: stretch;
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
   position: sticky;
   top: 0;
   z-index: 4;
   background: var(--sheet-header-bg);
   border-bottom: 1px solid var(--sheet-border);
   box-shadow: 0 1px 0 rgb(0 0 0 / 3%);
+}
+
+.sheet-header-corner {
+  flex: 0 0 auto;
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  box-sizing: border-box;
+  border-right: 1px solid var(--sheet-border);
+  background: #e8eaef;
+  background: linear-gradient(180deg, #eceef2 0%, #e4e7ec 100%);
 }
 
 .sheet-grid-body {
@@ -494,8 +505,38 @@ body {
 .sheet-row {
   position: absolute;
   left: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
   width: 100%;
   border-bottom: 1px solid rgb(232 232 232 / 0.95);
+}
+
+.sheet-row-cells {
+  position: relative;
+  flex: 0 0 auto;
+  height: 100%;
+}
+
+.sheet-row-gutter {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--sheet-header-text);
+  border-right: 1px solid rgb(232 232 232 / 0.85);
+  background: #f1f2f4;
+  user-select: none;
+  pointer-events: none;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  align-self: stretch;
 }
 
 .sheet-row:last-child {
