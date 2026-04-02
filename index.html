@@ -46,15 +46,57 @@
         </div>
       </header>
 
-        <div class="app-sheet-wrap">
+        <div
+          class="app-sheet-wrap"
+          id="sheet-panel"
+          role="tabpanel"
+          aria-labelledby="sheet-tab-quarterly"
+        >
           <div id="sheet-mount" class="app-sheet-mount"></div>
         </div>
 
-      <nav class="app-sheet-tabs" aria-label="Sheet views">
-        <button type="button" class="app-sheet-tabs__tab app-sheet-tabs__tab--active">Quarterly plan</button>
-        <button type="button" class="app-sheet-tabs__tab">Backlog</button>
-        <button type="button" class="app-sheet-tabs__tab">Archive</button>
-        <button type="button" class="app-sheet-tabs__tab app-sheet-tabs__tab--add app-sheet-tabs__tab--with-icon">
+      <nav class="app-sheet-tabs" aria-label="Sheet views" role="tablist">
+        <button
+          type="button"
+          class="app-sheet-tabs__tab app-sheet-tabs__tab--active"
+          id="sheet-tab-quarterly"
+          role="tab"
+          aria-selected="true"
+          aria-controls="sheet-panel"
+          tabindex="0"
+          data-sheet-view="quarterly"
+        >
+          Quarterly plan
+        </button>
+        <button
+          type="button"
+          class="app-sheet-tabs__tab"
+          id="sheet-tab-backlog"
+          role="tab"
+          aria-selected="false"
+          aria-controls="sheet-panel"
+          tabindex="-1"
+          data-sheet-view="backlog"
+        >
+          Backlog
+        </button>
+        <button
+          type="button"
+          class="app-sheet-tabs__tab"
+          id="sheet-tab-archive"
+          role="tab"
+          aria-selected="false"
+          aria-controls="sheet-panel"
+          tabindex="-1"
+          data-sheet-view="archive"
+        >
+          Archive
+        </button>
+        <button
+          type="button"
+          class="app-sheet-tabs__tab app-sheet-tabs__tab--add app-sheet-tabs__tab--with-icon"
+          title="Coming soon"
+        >
           <i class="ph ph-plus" aria-hidden="true"></i>
           Add new
         </button>

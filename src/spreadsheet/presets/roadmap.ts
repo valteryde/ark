@@ -51,10 +51,8 @@ const roadmapInitial: Record<string, InMemoryDataInitValue> = {
   '4:16': 'Notion',
 };
 
-/** Example preset matching the Product Roadmap demo; build real configs from your API JSON. */
-export function createRoadmapPreset(): SpreadsheetConfig {
-  return {
-    columns: [
+const roadmapColumnsAndChrome = (): Omit<SpreadsheetConfig, 'data'> => ({
+  columns: [
       { id: 'title', header: 'TASK NAME', widthPx: 240, displayStyle: 'plain' },
       { id: 'priority', header: 'PRIORITY', widthPx: 108, displayStyle: 'priority' },
       {
@@ -83,23 +81,63 @@ export function createRoadmapPreset(): SpreadsheetConfig {
       { id: 'score', header: 'SCORE', widthPx: 72, displayStyle: 'plain', readOnly: true },
       { id: 'source', header: 'SOURCE', widthPx: 88, displayStyle: 'plain', readOnly: true },
     ],
-    rowCount: 100,
-    defaultRowHeightPx: 28,
+  rowCount: 100,
+  defaultRowHeightPx: 28,
+  enabledCellStyles: ['priority', 'status', 'assignee'],
+  enabledUiCapabilities: [
+    'undo',
+    'redo',
+    'format-bold',
+    'format-italic',
+    'format-strikethrough',
+    'fill',
+    'borders',
+    'merge',
+    'align',
+    'link',
+    'filter',
+    'functions',
+  ],
+});
+
+/** Example preset matching the Product Roadmap demo; build real configs from your API JSON. */
+export function createRoadmapPreset(): SpreadsheetConfig {
+  return {
+    ...roadmapColumnsAndChrome(),
     data: createInMemoryDataStore(roadmapInitial),
-    enabledCellStyles: ['priority', 'status', 'assignee'],
-    enabledUiCapabilities: [
-      'undo',
-      'redo',
-      'format-bold',
-      'format-italic',
-      'format-strikethrough',
-      'fill',
-      'borders',
-      'merge',
-      'align',
-      'link',
-      'filter',
-      'functions',
-    ],
+  };
+}
+
+/** Same grid as the roadmap; empty cells for triage / unprioritized work. */
+export function createRoadmapBacklogPreset(): SpreadsheetConfig {
+  return {
+    ...roadmapColumnsAndChrome(),
+    data: createInMemoryDataStore({}),
+  };
+}
+
+const archiveInitial: Record<string, InMemoryDataInitValue> = {
+  '1:1': 'Legacy billing export tool',
+  '1:2': 'LOW',
+  '1:3': 'Completed',
+  '1:4': 'Alex Morgan',
+  '1:5': 'Sep 30, 2025',
+  '2:1': 'Mobile v1 sunsetting',
+  '2:2': 'MEDIUM',
+  '2:3': 'Completed',
+  '2:4': 'Jordan Lee',
+  '2:5': 'Nov 1, 2025',
+  '3:1': 'Hackathon prototype — archived',
+  '3:2': 'LOW',
+  '3:3': 'Completed',
+  '3:4': 'Sam Rivera',
+  '3:5': 'Aug 12, 2025',
+};
+
+/** Completed-style sample rows for a read-only-feeling archive sheet. */
+export function createRoadmapArchivePreset(): SpreadsheetConfig {
+  return {
+    ...roadmapColumnsAndChrome(),
+    data: createInMemoryDataStore(archiveInitial),
   };
 }

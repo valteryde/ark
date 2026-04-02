@@ -28,4 +28,8 @@ export {
 export { formatCellHtml } from './cell-display.ts';
 export { mountSpreadsheet } from './mount-spreadsheet.ts';
 export { mountFormattingToolbar } from './formatting-toolbar.ts';
-export { createRoadmapPreset } from './presets/roadmap.ts';
+export {
+  createRoadmapArchivePreset,
+  createRoadmapBacklogPreset,
+  createRoadmapPreset,
+} from './presets/roadmap.ts';
