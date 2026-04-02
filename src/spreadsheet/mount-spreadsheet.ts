@@ -437,6 +437,89 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
     endPointerDrag(false);
   });
 
+  function isOccupied(r: number, c: number): boolean {
+    const v = data.get(r, c);
+    if (v === undefined) return false;
+    if (typeof v === 'number') return true;
+    return String(v).trim().length > 0;
+  }
+
+  function jumpCol(r: number, c: number, directionRight: boolean): number {
+    r = clampRow(r);
+    c = clampCol(c);
+    const step = directionRight ? 1 : -1;
+    const limit = directionRight ? columnCountTotal : 1;
+
+    if (!isOccupied(r, c)) {
+      let j = c + step;
+      while (directionRight ? j <= limit : j >= limit) {
+        if (isOccupied(r, j)) return j;
+        j += step;
+      }
+      return limit;
+    }
+
+    const neighbor = c + step;
+    const outOfBounds = directionRight ? neighbor > limit : neighbor < limit;
+    if (outOfBounds) return c;
+
+    if (isOccupied(r, neighbor)) {
+      let j = neighbor;
+      while (true) {
+        const next = j + step;
+        const past = directionRight ? next > limit : next < limit;
+        if (past) return j;
+        if (!isOccupied(r, next)) return j;
+        j = next;
+      }
+    }
+
+    let j = neighbor;
+    while (directionRight ? j <= limit : j >= limit) {
+      if (isOccupied(r, j)) return j;
+      j += step;
+    }
+    return limit;
+  }
+
+  function jumpRow(r: number, c: number, directionDown: boolean): number {
+    r = clampRow(r);
+    c = clampCol(c);
+    const step = directionDown ? 1 : -1;
+    const limit = directionDown ? rowCountTotal : 1;
+
+    if (!isOccupied(r, c)) {
+      let i = r + step;
+      while (directionDown ? i <= limit : i >= limit) {
+        if (isOccupied(i, c)) return i;
+        i += step;
+      }
+      return limit;
+    }
+
+    const neighbor = r + step;
+    const outOfBounds = directionDown ? neighbor > limit : neighbor < limit;
+    if (outOfBounds) return r;
+
+    if (isOccupied(neighbor, c)) {
+      let i = neighbor;
+      while (true) {
+        const next = i + step;
+        const past = directionDown ? next > limit : next < limit;
+        if (past) return i;
+        if (!isOccupied(next, c)) return i;
+        i = next;
+      }
+    }
+
+    let i = neighbor;
+    while (directionDown ? i <= limit : i >= limit) {
+      if (isOccupied(i, c)) return i;
+      i += step;
+    }
+    return limit;
+  }
+
   function handleSheetKeydown(e: KeyboardEvent): void {
     const target = e.target as HTMLElement | null;
     if (!target || !viewport.contains(target)) return;
@@ -450,6 +533,7 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
       : { row: active.row, col: active.col };
 
     const { row, col } = focusRowCol;
+    const sheetMod = e.metaKey || e.ctrlKey;
 
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -477,6 +561,55 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
       });
       exitRangeSelectionUi();
       syncSelectionHighlight();
+      return;
+    }
+
+    if (sheetMod && e.shiftKey) {
+      if (
+        e.key !== 'ArrowUp' &&
+        e.key !== 'ArrowDown' &&
+        e.key !== 'ArrowLeft' &&
+        e.key !== 'ArrowRight'
+      ) {
+        return;
+      }
+      e.preventDefault();
+      if (!selectArea.active) {
+        const ar = row;
+        const ac = col;
+        selectArea.row = ar;
+        selectArea.col = ac;
+        selectArea.rowEnd = ar;
+        selectArea.colEnd = ac;
+      }
+      selectArea.active = true;
+      const cr = selectArea.rowEnd;
+      const cc = selectArea.colEnd;
+      if (e.key === 'ArrowUp') selectArea.rowEnd = jumpRow(cr, cc, false);
+      else if (e.key === 'ArrowDown') selectArea.rowEnd = jumpRow(cr, cc, true);
+      else if (e.key === 'ArrowLeft') selectArea.colEnd = jumpCol(cr, cc, false);
+      else if (e.key === 'ArrowRight') selectArea.colEnd = jumpCol(cr, cc, true);
+
+      const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+      const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+      const minCol = Math.min(selectArea.col, selectArea.colEnd);
+      const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+      const multi = minRow !== maxRow || minCol !== maxCol;
+
+      if (!multi) {
+        selectArea.active = false;
+        selectArea.row = minRow;
+        selectArea.col = minCol;
+        selectArea.rowEnd = minRow;
+        selectArea.colEnd = minCol;
+        exitRangeSelectionUi();
+        syncSelectionHighlight();
+        focusActiveInput();
+        return;
+      }
+
+      syncSelectionHighlight();
+      enterRangeSelectionUi();
       return;
     }
 
@@ -524,6 +657,26 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
 
       syncSelectionHighlight();
       enterRangeSelectionUi();
+      return;
+    }
+
+    if (sheetMod) {
+      if (
+        e.key !== 'ArrowUp' &&
+        e.key !== 'ArrowDown' &&
+        e.key !== 'ArrowLeft' &&
+        e.key !== 'ArrowRight'
+      ) {
+        return;
+      }
+      e.preventDefault();
+      let nr = row;
+      let nc = col;
+      if (e.key === 'ArrowUp') nr = jumpRow(row, col, false);
+      else if (e.key === 'ArrowDown') nr = jumpRow(row, col, true);
+      else if (e.key === 'ArrowLeft') nc = jumpCol(row, col, false);
+      else if (e.key === 'ArrowRight') nc = jumpCol(row, col, true);
+      setActive(nr, nc);
       return;
     }
 
