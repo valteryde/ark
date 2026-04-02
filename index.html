@@ -3,17 +3,102 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content="#ffffff" />
 
-    <title>Ark</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css"
+    />
+
+    <title>Product Roadmap 2026 — Ark</title>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root">
-      <header class="app-toolbar">
-        <h1 class="app-toolbar-title">Ark</h1>
+    <div id="root" class="app">
+      <header class="app-chrome">
+        <div class="app-chrome__row app-chrome__row--top">
+          <h1 class="app-chrome__title">Product Roadmap 2026</h1>
+          
+          <div class="app-search" role="search">
+            <i class="ph ph-magnifying-glass app-search__icon" aria-hidden="true"></i>
+            <input type="search" class="app-search__input" placeholder="Search" aria-label="Search" />
+          </div>
+          
+          <div style="margin-left: auto;"></div>
+
+          <button type="button" class="app-btn app-btn--ghost app-btn--with-icon">
+            <i class="ph ph-chat-circle-text" aria-hidden="true"></i>
+            Comment
+          </button>
+          <button type="button" class="app-btn app-btn--share app-btn--with-icon">
+            <i class="ph ph-share-network" aria-hidden="true"></i>
+            Share
+          </button>
+        </div>
+        <div class="app-chrome__row app-chrome__row--toolbar" aria-label="Formatting toolbar">
+          <span class="app-toolbar__zoom">100%</span>
+          <span class="app-toolbar__sep" aria-hidden="true"></span>
+          <button type="button" class="app-toolbar__icon" title="Undo">
+            <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="app-toolbar__icon" title="Redo">
+            <i class="ph ph-arrow-clockwise" aria-hidden="true"></i>
+          </button>
+          <span class="app-toolbar__sep" aria-hidden="true"></span>
+          <button type="button" class="app-toolbar__icon" title="Bold">
+            <i class="ph ph-text-b" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="app-toolbar__icon" title="Italic">
+            <i class="ph ph-text-italic" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="app-toolbar__icon" title="Strikethrough">
+            <i class="ph ph-text-strikethrough" aria-hidden="true"></i>
+          </button>
+          <span class="app-toolbar__sep" aria-hidden="true"></span>
+          <button type="button" class="app-toolbar__icon" title="Fill color">
+            <i class="ph ph-paint-bucket" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="app-toolbar__icon" title="Borders">
+            <i class="ph ph-grid-four" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="app-toolbar__icon" title="Merge cells">
+            <i class="ph ph-columns" aria-hidden="true"></i>
+          </button>
+          <span class="app-toolbar__sep" aria-hidden="true"></span>
+          <button type="button" class="app-toolbar__icon" title="Align left">
+            <i class="ph ph-text-align-left" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="app-toolbar__icon" title="Insert link">
+            <i class="ph ph-link" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="app-toolbar__icon" title="Filter">
+            <i class="ph ph-funnel" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="app-toolbar__fx" title="Functions">
+            <i class="ph ph-sigma" aria-hidden="true"></i>
+          </button>
+        </div>
       </header>
-      <div id="sheet-mount"></div>
+
+        <div class="app-sheet-wrap">
+          <div id="sheet-mount" class="app-sheet-mount"></div>
+        </div>
+
+      <nav class="app-sheet-tabs" aria-label="Sheet views">
+        <button type="button" class="app-sheet-tabs__tab app-sheet-tabs__tab--active">Quarterly plan</button>
+        <button type="button" class="app-sheet-tabs__tab">Backlog</button>
+        <button type="button" class="app-sheet-tabs__tab">Archive</button>
+        <button type="button" class="app-sheet-tabs__tab app-sheet-tabs__tab--add app-sheet-tabs__tab--with-icon">
+          <i class="ph ph-plus" aria-hidden="true"></i>
+          Add new
+        </button>
+      </nav>
     </div>
 
     <script src="/src/main.ts" type="module"></script>

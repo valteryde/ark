@@ -1,7 +1,7 @@
-import { mountSheet } from './sheet';
+import { createRoadmapPreset, mountSpreadsheet } from './spreadsheet';
 
 const sheetHost = document.getElementById('sheet-mount');
 if (!sheetHost) {
   throw new Error('Missing #sheet-mount');
 }
-mountSheet(sheetHost);
+mountSpreadsheet(sheetHost, createRoadmapPreset());
