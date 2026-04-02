@@ -8,6 +8,7 @@ import {
   parseCommittedCellValue,
 } from './cell-value.ts';
 import { cellKey } from './data-store.ts';
+import { cellMapsEqual, createSpreadsheetHistory, type HistoryCellMap } from './history.ts';
 import type {
   CellDisplayStyle,
   SpreadsheetColumn,
@@ -87,6 +88,66 @@ export function mountSpreadsheet(
 
   const data = config.data;
 
+  const historyEnabled =
+    typeof data.replaceCell === 'function' &&
+    typeof data.hasCell === 'function' &&
+    typeof data.getStoredCell === 'function';
+
+  const history = historyEnabled ? createSpreadsheetHistory() : null;
+
+  function keyToRowCol(k: string): { row: number; col: number } {
+    const [rs, cs] = k.split(':');
+    return { row: Number(rs), col: Number(cs) };
+  }
+
+  function captureSnapshot(keys: readonly string[]): HistoryCellMap {
+    const m: HistoryCellMap = new Map();
+    for (const k of keys) {
+      const { row, col } = keyToRowCol(k);
+      if (data.hasCell?.(row, col)) {
+        m.set(k, data.getStoredCell?.(row, col));
+      } else {
+        m.set(k, undefined);
+      }
+    }
+    return m;
+  }
+
+  function applySnapshot(snapshot: HistoryCellMap): void {
+    if (!data.replaceCell) return;
+    for (const [k, state] of snapshot) {
+      const { row, col } = keyToRowCol(k);
+      data.replaceCell(row, col, state === undefined ? null : state);
+    }
+  }
+
+  function hydrateCellFromStore(row: number, col: number): void {
+    const el = cells.get(cellKey(row, col));
+    if (!el) return;
+    const colDef = columnAt(col);
+    const raw = data.get(row, col);
+    const display = raw !== undefined ? String(raw) : '';
+    const content = el.querySelector<HTMLDivElement>('.sheet-cell-content');
+    if (content) applyCellDisplay(content, colDef, display, enabledCellStyles);
+    syncCellChrome(row, col);
+    const inp = getCellEditor(el);
+    if (inp) inp.value = raw !== undefined ? String(raw) : '';
+  }
+
+  function hydrateFromHistoryRecord(before: HistoryCellMap, after: HistoryCellMap): void {
+    const keys = new Set<string>([...before.keys(), ...after.keys()]);
+    for (const k of keys) {
+      const { row, col } = keyToRowCol(k);
+      hydrateCellFromStore(row, col);
+    }
+  }
+
+  function pushHistoryIfChanged(before: HistoryCellMap, after: HistoryCellMap): void {
+    if (!history) return;
+    if (cellMapsEqual(before, after)) return;
+    history.pushRecord(before, after);
+  }
+
   const selectArea: {
     active: boolean;
     row: number;
@@ -105,12 +166,21 @@ export function mountSpreadsheet(
   let active = { row: 1, col: 1 };
 
   const selectionChangeListeners = new Set<() => void>();
+  const historyChangeListeners = new Set<() => void>();
 
   function notifySelectionChange(): void {
     for (const fn of selectionChangeListeners) {
       fn();
     }
   }
+
+  function notifyHistoryChange(): void {
+    for (const fn of historyChangeListeners) {
+      fn();
+    }
+  }
+
+  let persistActiveInputSkipHistory = false;
 
   let dragPointerId: number | null = null;
   let dragging = false;
@@ -149,9 +219,47 @@ export function mountSpreadsheet(
       input.value = stored !== undefined ? String(stored) : '';
       return;
     }
+    const k = cellKey(active.row, active.col);
+    const recordHistory = history !== null && !persistActiveInputSkipHistory;
+    const before = recordHistory ? captureSnapshot([k]) : null;
     data.set(active.row, active.col, parsed.value);
     applyCellDisplay(content, col, String(parsed.value), enabledCellStyles);
     syncCellChrome(active.row, active.col);
+    if (recordHistory && before) {
+      const after = captureSnapshot([k]);
+      pushHistoryIfChanged(before, after);
+    }
+  }
+
+  function flushActiveInputSkippingHistory(): void {
+    persistActiveInputSkipHistory = true;
+    try {
+      persistActiveInput();
+    } finally {
+      persistActiveInputSkipHistory = false;
+    }
+  }
+
+  function doUndo(): boolean {
+    if (!history || !data.replaceCell) return false;
+    flushActiveInputSkippingHistory();
+    const rec = history.undo();
+    if (!rec) return false;
+    applySnapshot(rec.before);
+    hydrateFromHistoryRecord(rec.before, rec.after);
+    notifySelectionChange();
+    return true;
+  }
+
+  function doRedo(): boolean {
+    if (!history || !data.replaceCell) return false;
+    flushActiveInputSkippingHistory();
+    const rec = history.redo();
+    if (!rec) return false;
+    applySnapshot(rec.after);
+    hydrateFromHistoryRecord(rec.before, rec.after);
+    notifySelectionChange();
+    return true;
   }
 
   function syncCellChrome(row: number, col: number): void {
@@ -183,9 +291,15 @@ export function mountSpreadsheet(
     persistActiveInput();
     const targets = getFormattingTargets();
     if (targets.length === 0) return;
+    const keys = targets.map(({ row, col }) => cellKey(row, col));
+    const before = history ? captureSnapshot(keys) : null;
     for (const { row, col } of targets) {
       data.mergeCellStyle(row, col, patch);
       syncCellChrome(row, col);
+    }
+    if (history && before) {
+      const after = captureSnapshot(keys);
+      pushHistoryIfChanged(before, after);
     }
     notifySelectionChange();
   }
@@ -197,9 +311,15 @@ export function mountSpreadsheet(
     persistActiveInput();
     const targets = getFormattingTargets();
     if (targets.length === 0) return;
+    const keys = targets.map(({ row, col }) => cellKey(row, col));
+    const before = history ? captureSnapshot(keys) : null;
     for (const { row, col } of targets) {
       data.mergeCellStyle(row, col, patchForCell(row, col));
       syncCellChrome(row, col);
+    }
+    if (history && before) {
+      const after = captureSnapshot(keys);
+      pushHistoryIfChanged(before, after);
     }
     notifySelectionChange();
   }
@@ -887,6 +1007,20 @@ export function mountSpreadsheet(
     const { row, col } = focusRowCol;
     const sheetMod = e.metaKey || e.ctrlKey;
 
+    if (history && sheetMod && (e.key === 'z' || e.key === 'Z') && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.shiftKey) doRedo();
+      else doUndo();
+      return;
+    }
+    if (history && e.ctrlKey && !e.metaKey && (e.key === 'y' || e.key === 'Y') && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      doRedo();
+      return;
+    }
+
     if (e.key === 'Escape') {
       e.preventDefault();
       hideSuggestions();
@@ -904,6 +1038,13 @@ export function mountSpreadsheet(
 
     if (e.key === 'Backspace' && selectArea.active) {
       e.preventDefault();
+      const keys: string[] = [];
+      doOnEverySelectedCell((cell) => {
+        const r = clampRow(Number(cell.dataset.row));
+        const c = clampCol(Number(cell.dataset.col));
+        if (!isReadOnlyCol(c)) keys.push(cellKey(r, c));
+      });
+      const before = history && keys.length > 0 ? captureSnapshot(keys) : null;
       doOnEverySelectedCell((cell) => {
         const r = clampRow(Number(cell.dataset.row));
         const c = clampCol(Number(cell.dataset.col));
@@ -914,6 +1055,10 @@ export function mountSpreadsheet(
         getCellEditor(cell)!.value = '';
         syncCellChrome(r, c);
       });
+      if (history && before) {
+        const after = captureSnapshot(keys);
+        pushHistoryIfChanged(before, after);
+      }
       exitRangeSelectionUi();
       syncSelectionHighlight();
       return;
@@ -1052,7 +1197,12 @@ export function mountSpreadsheet(
 
   viewport.addEventListener('keydown', handleSheetKeydown, true);
 
+  if (history) {
+    history.subscribe(notifyHistoryChange);
+  }
+
   const handle: SpreadsheetMountHandle = {
+    historyEnabled,
     mergeCellStyleOnSelection,
     mergeCellStyleOnEachTarget,
     everyTargetCellStyle,
@@ -1062,6 +1212,24 @@ export function mountSpreadsheet(
     subscribeSelectionChange(cb) {
       selectionChangeListeners.add(cb);
       return () => selectionChangeListeners.delete(cb);
+    },
+    undo: () => doUndo(),
+    redo: () => doRedo(),
+    canUndo: () => history?.canUndo() ?? false,
+    canRedo: () => history?.canRedo() ?? false,
+    subscribeHistoryChange(cb) {
+      historyChangeListeners.add(cb);
+      return () => historyChangeListeners.delete(cb);
+    },
+    runHistoryBatch(fn) {
+      if (history) history.runBatch(fn);
+      else fn();
+    },
+    beginHistoryBatch() {
+      history?.beginBatch();
+    },
+    endHistoryBatch() {
+      history?.endBatch();
     },
   };
 

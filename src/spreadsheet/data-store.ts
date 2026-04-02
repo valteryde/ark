@@ -66,5 +66,30 @@ export function createInMemoryDataStore(
       }
       map.set(k, { value, style: nextStyle });
     },
+    hasCell(row: number, col: number) {
+      return map.has(cellKey(row, col));
+    },
+    getStoredCell(row: number, col: number): SpreadsheetCellInit | undefined {
+      const cell = map.get(cellKey(row, col));
+      if (cell === undefined) return undefined;
+      const style = cell.style;
+      return {
+        value: cell.value,
+        ...(style !== undefined && Object.keys(style).length > 0
+          ? { style: { ...style } }
+          : {}),
+      };
+    },
+    replaceCell(row: number, col: number, cell: SpreadsheetCellInit | null) {
+      const k = cellKey(row, col);
+      if (cell === null) {
+        map.delete(k);
+        return;
+      }
+      const style = cell.style;
+      const nextStyle =
+        style !== undefined && Object.keys(style).length > 0 ? { ...style } : undefined;
+      map.set(k, { value: cell.value, style: nextStyle });
+    },
   };
 }

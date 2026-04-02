@@ -76,6 +76,12 @@ export interface SpreadsheetDataStore {
   getCellStyle?(row: number, col: number): SpreadsheetCellStyleDeclarations | undefined;
   /** Merge CSS keys onto the cell; `undefined` or empty string removes that property. */
   mergeCellStyle?(row: number, col: number, patch: Record<string, string | undefined>): void;
+  /** True if the backing map has an entry for this cell (used for undo snapshots). */
+  hasCell?(row: number, col: number): boolean;
+  /** Full `{ value, style }` for the cell, or `undefined` if the key is absent. */
+  getStoredCell?(row: number, col: number): SpreadsheetCellInit | undefined;
+  /** Set cell exactly, or `null` to remove the key. Required for undo/redo when implemented. */
+  replaceCell?(row: number, col: number, cell: SpreadsheetCellInit | null): void;
 }
 
 export interface SpreadsheetConfig {
@@ -145,4 +151,16 @@ export interface SpreadsheetMountHandle {
   ): boolean;
   getCellStyleAt(row: number, col: number): SpreadsheetCellStyleDeclarations | undefined;
   subscribeSelectionChange(cb: () => void): () => void;
+  /** Whether undo/redo is available (requires `replaceCell` on the data store). */
+  readonly historyEnabled: boolean;
+  undo(): boolean;
+  redo(): boolean;
+  canUndo(): boolean;
+  canRedo(): boolean;
+  subscribeHistoryChange(cb: () => void): () => void;
+  /** Coalesce multiple mutations into one undo step (e.g. color picker drag). */
+  runHistoryBatch(fn: () => void): void;
+  /** Start a coalesced undo group; pair with `endHistoryBatch` (e.g. native color UI). */
+  beginHistoryBatch(): void;
+  endHistoryBatch(): void;
 }

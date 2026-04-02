@@ -62,7 +62,7 @@ function iconButton(iconPh: string, title: string): HTMLButtonElement {
 
 /**
  * Renders formatting controls from `capabilities` and wires them to `sheet`.
- * Non-styling capabilities (undo, redo, filter, functions) render disabled stubs; merge shows a notice.
+ * Undo/redo are enabled when `sheet.historyEnabled`. Filter and functions remain disabled stubs; merge shows a notice.
  */
 export function mountFormattingToolbar(
   host: HTMLElement,
@@ -79,6 +79,8 @@ export function mountFormattingToolbar(
   host.appendChild(sep());
 
   const ui: {
+    undo?: HTMLButtonElement;
+    redo?: HTMLButtonElement;
     bold?: HTMLButtonElement;
     italic?: HTMLButtonElement;
     strike?: HTMLButtonElement;
@@ -123,7 +125,23 @@ export function mountFormattingToolbar(
         continue;
       }
 
-      if (cap === 'undo' || cap === 'redo' || cap === 'filter' || cap === 'functions') {
+      if (cap === 'undo' || cap === 'redo') {
+        const btn = iconButton(CAP_ICONS[cap], cap === 'undo' ? 'Undo' : 'Redo');
+        if (sheet.historyEnabled) {
+          btn.addEventListener('click', () => {
+            if (cap === 'undo') sheet.undo();
+            else sheet.redo();
+          });
+        } else {
+          btn.disabled = true;
+        }
+        if (cap === 'undo') ui.undo = btn;
+        else ui.redo = btn;
+        host.appendChild(btn);
+        continue;
+      }
+
+      if (cap === 'filter' || cap === 'functions') {
         const b =
           cap === 'functions'
             ? (() => {
@@ -139,7 +157,7 @@ export function mountFormattingToolbar(
                 return btn;
               })()
             : (() => {
-                const btn = iconButton(CAP_ICONS[cap], cap === 'undo' ? 'Undo' : cap === 'redo' ? 'Redo' : 'Filter');
+                const btn = iconButton(CAP_ICONS[cap], 'Filter');
                 btn.disabled = true;
                 return btn;
               })();
@@ -190,10 +208,18 @@ export function mountFormattingToolbar(
         colorInput.value = '#fff59d';
         colorInput.setAttribute('aria-hidden', 'true');
         colorInput.tabIndex = -1;
+        const endFillBatch = (): void => {
+          if (sheet.historyEnabled) sheet.endHistoryBatch();
+        };
         colorInput.addEventListener('input', () => {
           sheet.mergeCellStyleOnSelection({ 'background-color': colorInput.value });
         });
+        colorInput.addEventListener('change', endFillBatch);
+        colorInput.addEventListener('blur', endFillBatch);
         const b = iconButton(CAP_ICONS[cap], 'Fill color');
+        b.addEventListener('pointerdown', () => {
+          if (sheet.historyEnabled) sheet.beginHistoryBatch();
+        });
         b.addEventListener('click', () => colorInput.click());
         host.appendChild(colorInput);
         host.appendChild(b);
@@ -256,6 +282,19 @@ export function mountFormattingToolbar(
     }
   }
 
+  function refreshHistoryButtons(): void {
+    if (ui.undo) {
+      const on = sheet.canUndo();
+      ui.undo.disabled = !on;
+      ui.undo.setAttribute('aria-disabled', on ? 'false' : 'true');
+    }
+    if (ui.redo) {
+      const on = sheet.canRedo();
+      ui.redo.disabled = !on;
+      ui.redo.setAttribute('aria-disabled', on ? 'false' : 'true');
+    }
+  }
+
   function refreshToggleStates(): void {
     if (ui.bold) {
       const on = sheet.everyTargetCellStyle('font-weight', isBoldValue);
@@ -303,5 +342,7 @@ export function mountFormattingToolbar(
   }
 
   refreshToggleStates();
+  refreshHistoryButtons();
   sheet.subscribeSelectionChange(refreshToggleStates);
+  sheet.subscribeHistoryChange(refreshHistoryButtons);
 }
