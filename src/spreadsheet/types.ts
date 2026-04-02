@@ -22,6 +22,14 @@ export type UiToolbarCapability =
   | 'filter'
   | 'functions';
 
+/** Stored cell value is always the canonical `value` string. */
+export interface SpreadsheetSelectOption {
+  value: string;
+  label?: string;
+}
+
+export type SpreadsheetColumnValueType = 'text' | 'number' | 'select';
+
 export interface SpreadsheetColumn {
   /** Stable id for CRUD mapping (e.g. API field name). */
   id: string;
@@ -33,6 +41,18 @@ export interface SpreadsheetColumn {
    * When true, cells are display-only (darker styling, no edit). Backend-driven computed / system fields.
    */
   readOnly?: boolean;
+  /**
+   * Value kind for commit-time validation and editors. Omitted means `'text'`.
+   */
+  valueType?: SpreadsheetColumnValueType;
+  /**
+   * Allowed values when `valueType === 'select'`. User picks via suggestions / autofill; commit must match `value`.
+   */
+  selectOptions?: ReadonlyArray<SpreadsheetSelectOption>;
+  /**
+   * When false on a select column, empty input commits as the first option’s value. Default true.
+   */
+  allowEmpty?: boolean;
 }
 
 /**

@@ -8,10 +8,18 @@ This document is the contract that both sides should align on.
 
 ## Architecture
 
-1. **`SpreadsheetConfig`** — Declares columns (id, header, width, optional `displayStyle`, optional `readOnly` for system/computed columns shown darker and non-editable), row count, default row height, which **cell renderers** are allowed, and which **UI capabilities** the backend says are available (toolbar, future actions).
+1. **`SpreadsheetConfig`** — Declares columns (id, header, width, optional `displayStyle`, optional `readOnly` for system/computed columns shown darker and non-editable), optional **value typing** (`valueType`, `selectOptions`, `allowEmpty`), row count, default row height, which **cell renderers** are allowed, and which **UI capabilities** the backend says are available (toolbar, future actions).
 2. **`SpreadsheetDataStore`** — Synchronous `get` / `set` per `(row, col)` plus optional **`getCellStyle(row, col)`** returning inline CSS as kebab-case keys (e.g. `{ "background-color": "#f5f5f5" }`) applied to the cell shell. **This is the seam for REST**: implement with `fetch`, cache, PATCH/PUT on commit, etc. The default **`createInMemoryDataStore(initial)`** accepts either a plain `string | number` or `{ value, style? }` per `"row:col"` key for demos and tests.
 3. **Cell display styles** — Named renderers (`priority`, `status`, `assignee`, `plain`). The backend sends **`enabledCellStyles`**: if `priority` is not enabled, priority columns render as escaped plain text even if the column asks for `displayStyle: 'priority'`. That keeps presentation policy on the server.
 4. **`enabledUiCapabilities`** — Optional set of toolbar/feature flags (undo, bold, filter, …). The shell can hide or disable controls based on this once wired; today it is the **documented contract** for future chrome.
+
+### Column value types (`valueType`)
+
+- **`text`** (default) — Free text; commit stores the string as entered (no extra validation in v1).
+- **`number`** — Commit accepts a trimmed string that parses to a finite number; empty string is allowed; invalid input is rejected and the editor reverts to the last stored value.
+- **`select`** — Constrained to **`selectOptions`**: each entry is `{ "value": string, "label"?: string }`. The store always holds the canonical **`value`**. The cell editor is still a text field; a **suggestion list** filters options as the user types (prefix then substring, case-insensitive). **Alt+ArrowDown** opens the full list. With the list open, **ArrowUp/ArrowDown** move the highlight, **Enter** applies the highlight (or commits the typed value if none), **Tab** applies the highlight or the first match, **Escape** closes the list. A value that does not match any option on commit is rejected and the editor reverts. If **`allowEmpty`** is `false`, an empty cell commits as the first option’s value (default `allowEmpty` is true).
+
+Display styles (e.g. `status` pills) still use the canonical **`value`** for styling; **`label`** is only for showing a different string in the suggestion list and in the cell when provided.
 
 ## Data flow (REST mental model)
 
@@ -42,7 +50,19 @@ Your backend can return JSON that maps almost 1:1 to `SpreadsheetConfig` (minus 
   "enabledUiCapabilities": ["undo", "redo", "filter", "functions"],
   "columns": [
     { "id": "title", "header": "TASK NAME", "widthPx": 240, "displayStyle": "plain" },
-    { "id": "priority", "header": "PRIORITY", "widthPx": 108, "displayStyle": "priority" }
+    { "id": "priority", "header": "PRIORITY", "widthPx": 108, "displayStyle": "priority" },
+    {
+      "id": "status",
+      "header": "STATUS",
+      "widthPx": 128,
+      "displayStyle": "status",
+      "valueType": "select",
+      "selectOptions": [
+        { "value": "In Progress" },
+        { "value": "Not Started" },
+        { "value": "Completed" }
+      ]
+    }
   ]
 }
 ```

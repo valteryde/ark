@@ -1,14 +1,25 @@
 import '../sheet.css';
 
 import { formatCellHtml } from './cell-display.ts';
+import {
+  columnValueType,
+  filterSelectOptions,
+  isSelectColumn,
+  parseCommittedCellValue,
+} from './cell-value.ts';
 import { cellKey } from './data-store.ts';
 import type {
   CellDisplayStyle,
   SpreadsheetColumn,
   SpreadsheetConfig,
   SpreadsheetMountHandle,
+  SpreadsheetSelectOption,
 } from './types.ts';
 import { resolveEnabledCellStyles } from './types.ts';
+
+function getCellEditor(cell: HTMLElement): HTMLInputElement | null {
+  return cell.querySelector<HTMLInputElement>('.sheet-cell-input');
+}
 
 function applyCellDisplay(
   content: HTMLDivElement,
@@ -128,11 +139,18 @@ export function mountSpreadsheet(
     if (isReadOnlyCol(active.col)) return;
     const el = cells.get(cellKey(active.row, active.col));
     if (!el) return;
-    const input = el.querySelector<HTMLInputElement>('.sheet-cell-input');
+    const input = getCellEditor(el);
     const content = el.querySelector<HTMLDivElement>('.sheet-cell-content');
     if (!input || !content) return;
-    data.set(active.row, active.col, input.value);
-    applyCellDisplay(content, columnAt(active.col), input.value, enabledCellStyles);
+    const col = columnAt(active.col);
+    const parsed = parseCommittedCellValue(col, input.value);
+    if (!parsed.ok) {
+      const stored = data.get(active.row, active.col);
+      input.value = stored !== undefined ? String(stored) : '';
+      return;
+    }
+    data.set(active.row, active.col, parsed.value);
+    applyCellDisplay(content, col, String(parsed.value), enabledCellStyles);
     syncCellChrome(active.row, active.col);
   }
 
@@ -266,8 +284,15 @@ export function mountSpreadsheet(
       const input = document.createElement('input');
       input.className = 'sheet-cell-input';
       input.type = 'text';
-      input.value = display;
+      input.autocomplete = 'off';
       const colDef = columnAt(col);
+      if (columnValueType(colDef) === 'number') {
+        input.inputMode = 'decimal';
+      }
+      if (isSelectColumn(colDef)) {
+        input.dataset.sheetValueType = 'select';
+      }
+      input.value = display;
       if (colDef?.readOnly) {
         cell.classList.add('sheet-cell-readonly');
         input.readOnly = true;
@@ -288,10 +313,222 @@ export function mountSpreadsheet(
     gridBody.appendChild(rowEl);
   }
 
+  const suggestPopover = document.createElement('div');
+  suggestPopover.className = 'sheet-suggest-popover';
+  suggestPopover.hidden = true;
+  suggestPopover.setAttribute('role', 'listbox');
+  const suggestScroll = document.createElement('div');
+  suggestScroll.className = 'sheet-suggest-scroll';
+  suggestPopover.appendChild(suggestScroll);
+
+  let suggestionMatches: SpreadsheetSelectOption[] = [];
+  let suggestionHighlight = -1;
+  let blurHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function hideSuggestions(): void {
+    if (blurHideTimer !== null) {
+      clearTimeout(blurHideTimer);
+      blurHideTimer = null;
+    }
+    suggestionHighlight = -1;
+    suggestionMatches = [];
+    suggestScroll.replaceChildren();
+    suggestPopover.hidden = true;
+    suggestPopover.classList.remove('sheet-suggest-popover--open');
+  }
+
+  function positionSuggestPopover(): void {
+    const cell = cells.get(cellKey(active.row, active.col));
+    if (!cell) return;
+    const r = cell.getBoundingClientRect();
+    suggestPopover.style.top = `${r.bottom + 2}px`;
+    suggestPopover.style.left = `${r.left}px`;
+    suggestPopover.style.minWidth = `${Math.max(r.width, 100)}px`;
+  }
+
+  function updateSuggestionHighlightClass(): void {
+    const rows = suggestScroll.querySelectorAll('.sheet-suggest-row');
+    rows.forEach((row, i) => {
+      row.classList.toggle('sheet-suggest-row--active', i === suggestionHighlight);
+      if (i === suggestionHighlight) {
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+
+  function renderSuggestionRows(matches: SpreadsheetSelectOption[]): void {
+    suggestScroll.replaceChildren();
+    suggestionMatches = matches;
+    for (let i = 0; i < matches.length; i++) {
+      const row = document.createElement('div');
+      row.className = 'sheet-suggest-row';
+      row.setAttribute('role', 'option');
+      row.dataset.index = String(i);
+      const opt = matches[i]!;
+      row.textContent = opt.label ?? opt.value;
+      row.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        if (blurHideTimer !== null) {
+          clearTimeout(blurHideTimer);
+          blurHideTimer = null;
+        }
+        applySuggestionByIndex(i);
+      });
+      suggestScroll.appendChild(row);
+    }
+    updateSuggestionHighlightClass();
+  }
+
+  function showSuggestionsFromQuery(query: string): void {
+    const col = columnAt(active.col);
+    if (!isSelectColumn(col) || isReadOnlyCol(active.col)) {
+      hideSuggestions();
+      return;
+    }
+    const matches = filterSelectOptions(col, query);
+    if (matches.length === 0) {
+      hideSuggestions();
+      return;
+    }
+    renderSuggestionRows(matches);
+    positionSuggestPopover();
+    suggestPopover.hidden = false;
+    suggestPopover.classList.add('sheet-suggest-popover--open');
+    updateSuggestionHighlightClass();
+  }
+
+  function applySuggestionByIndex(i: number): void {
+    if (i < 0 || i >= suggestionMatches.length) return;
+    const opt = suggestionMatches[i]!;
+    const cell = cells.get(cellKey(active.row, active.col));
+    const input = cell ? getCellEditor(cell) : null;
+    if (!input) return;
+    input.value = opt.value;
+    hideSuggestions();
+    input.focus();
+  }
+
+  function openFullSuggestionList(): void {
+    const col = columnAt(active.col);
+    if (!isSelectColumn(col) || isReadOnlyCol(active.col)) return;
+    showSuggestionsFromQuery('');
+    suggestionHighlight = suggestionMatches.length > 0 ? 0 : -1;
+    updateSuggestionHighlightClass();
+  }
+
+  function suggestionKeysConsumed(e: KeyboardEvent): boolean {
+    const ae = document.activeElement;
+    if (!(ae instanceof HTMLInputElement) || ae.dataset.sheetValueType !== 'select') {
+      return false;
+    }
+    const cellEl = ae.closest('.sheet-cell');
+    if (!cellEl || !viewport.contains(cellEl)) return false;
+    const r = clampRow(Number((cellEl as HTMLElement).dataset.row));
+    const c = clampCol(Number((cellEl as HTMLElement).dataset.col));
+    if (r !== active.row || c !== active.col) return false;
+
+    const sheetMod = e.metaKey || e.ctrlKey;
+
+    if (e.altKey && e.key === 'ArrowDown' && !sheetMod && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      openFullSuggestionList();
+      return true;
+    }
+
+    if (suggestPopover.hidden) return false;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      hideSuggestions();
+      return true;
+    }
+
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (suggestionMatches.length > 0) {
+        const i = suggestionHighlight >= 0 ? suggestionHighlight : 0;
+        applySuggestionByIndex(i);
+      }
+      return true;
+    }
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (suggestionHighlight >= 0) {
+        applySuggestionByIndex(suggestionHighlight);
+      } else {
+        hideSuggestions();
+      }
+      setActive(active.row + 1, active.col);
+      return true;
+    }
+
+    if (e.key === 'ArrowDown' && !sheetMod && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (suggestionMatches.length === 0) return true;
+      if (suggestionHighlight < suggestionMatches.length - 1) suggestionHighlight++;
+      else suggestionHighlight = 0;
+      updateSuggestionHighlightClass();
+      return true;
+    }
+
+    if (e.key === 'ArrowUp' && !sheetMod && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (suggestionMatches.length === 0) return true;
+      if (suggestionHighlight > 0) suggestionHighlight--;
+      else suggestionHighlight = suggestionMatches.length - 1;
+      updateSuggestionHighlightClass();
+      return true;
+    }
+
+    return false;
+  }
+
   gridInner.append(headerRow, gridBody);
   viewport.append(gridInner);
-  root.append(viewport);
+  root.append(viewport, suggestPopover);
   container.appendChild(root);
+
+  viewport.addEventListener('scroll', () => {
+    if (!suggestPopover.hidden) positionSuggestPopover();
+  });
+
+  viewport.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement) || t.dataset.sheetValueType !== 'select') return;
+    const cellEl = t.closest('.sheet-cell');
+    if (!cellEl) return;
+    const row = clampRow(Number((cellEl as HTMLElement).dataset.row));
+    const col = clampCol(Number((cellEl as HTMLElement).dataset.col));
+    if (row !== active.row || col !== active.col) return;
+    suggestionHighlight = -1;
+    showSuggestionsFromQuery(t.value);
+  });
+
+  viewport.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement) || t.dataset.sheetValueType !== 'select') return;
+    const cellEl = t.closest('.sheet-cell');
+    if (!cellEl) return;
+    const row = clampRow(Number((cellEl as HTMLElement).dataset.row));
+    const col = clampCol(Number((cellEl as HTMLElement).dataset.col));
+    if (row !== active.row || col !== active.col) return;
+    showSuggestionsFromQuery(t.value);
+  });
+
+  viewport.addEventListener('focusout', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement) || t.dataset.sheetValueType !== 'select') return;
+    const rt = e.relatedTarget as Node | null;
+    if (rt && suggestPopover.contains(rt)) return;
+    blurHideTimer = setTimeout(() => hideSuggestions(), 120);
+  });
 
   function cellFromPoint(clientX: number, clientY: number): { row: number; col: number } | null {
     const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
@@ -309,17 +546,14 @@ export function mountSpreadsheet(
       setTimeout(() => viewport.focus(), 0);
       return;
     }
-    const inp = cells
-      .get(cellKey(active.row, active.col))
-      ?.querySelector<HTMLInputElement>('.sheet-cell-input');
+    const cell = cells.get(cellKey(active.row, active.col));
+    const inp = cell ? getCellEditor(cell) : null;
     setTimeout(() => inp?.focus(), 0);
   }
 
   function blurActiveInput(): void {
-    cells
-      .get(cellKey(active.row, active.col))
-      ?.querySelector<HTMLInputElement>('.sheet-cell-input')
-      ?.blur();
+    const cell = cells.get(cellKey(active.row, active.col));
+    if (cell) getCellEditor(cell)?.blur();
   }
 
   function leaveEditorFocusSheet(): void {
@@ -410,11 +644,15 @@ export function mountSpreadsheet(
     if (active.row === row && active.col === col && !selectArea.active) {
       queueMicrotask(() => {
         if (isReadOnlyCol(col)) viewport.focus();
-        else cells.get(cellKey(row, col))?.querySelector<HTMLInputElement>('.sheet-cell-input')?.focus();
+        else {
+          const c = cells.get(cellKey(row, col));
+          if (c) getCellEditor(c)?.focus();
+        }
       });
       return;
     }
 
+    hideSuggestions();
     exitRangeSelectionUi();
     selectArea.active = false;
     selectArea.row = row;
@@ -432,7 +670,7 @@ export function mountSpreadsheet(
     const next = cells.get(cellKey(row, col));
     next?.classList.add('sheet-cell-active');
 
-    const inp = next?.querySelector<HTMLInputElement>('.sheet-cell-input');
+    const inp = next ? getCellEditor(next) : null;
     if (inp) {
       const stored = data.get(row, col);
       inp.value = stored !== undefined ? String(stored) : '';
@@ -504,13 +742,14 @@ export function mountSpreadsheet(
     selectArea.colEnd = col;
     syncSelectionHighlight();
 
+    hideSuggestions();
     persistActiveInput();
     cells.get(cellKey(active.row, active.col))?.classList.remove('sheet-cell-active');
 
     active = { row, col };
     const next = cells.get(cellKey(row, col));
     next?.classList.add('sheet-cell-active');
-    const inp = next?.querySelector<HTMLInputElement>('.sheet-cell-input');
+    const inp = next ? getCellEditor(next) : null;
     if (inp) {
       const stored = data.get(row, col);
       inp.value = stored !== undefined ? String(stored) : '';
@@ -635,6 +874,8 @@ export function mountSpreadsheet(
     const target = e.target as HTMLElement | null;
     if (!target || !viewport.contains(target)) return;
 
+    if (suggestionKeysConsumed(e)) return;
+
     const hit = target.closest('.sheet-cell');
     const focusRowCol = hit
       ? {
@@ -648,6 +889,7 @@ export function mountSpreadsheet(
 
     if (e.key === 'Escape') {
       e.preventDefault();
+      hideSuggestions();
       collapseRange();
       focusActiveInput();
       return;
@@ -655,6 +897,7 @@ export function mountSpreadsheet(
 
     if (e.key === 'Enter') {
       e.preventDefault();
+      hideSuggestions();
       setActive(row + 1, col);
       return;
     }
@@ -668,7 +911,7 @@ export function mountSpreadsheet(
         data.set(r, c, '');
         const contentEl = cell.querySelector<HTMLDivElement>('.sheet-cell-content')!;
         applyCellDisplay(contentEl, columnAt(c), '', enabledCellStyles);
-        cell.querySelector<HTMLInputElement>('.sheet-cell-input')!.value = '';
+        getCellEditor(cell)!.value = '';
         syncCellChrome(r, c);
       });
       exitRangeSelectionUi();

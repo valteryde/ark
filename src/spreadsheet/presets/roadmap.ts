@@ -57,7 +57,18 @@ export function createRoadmapPreset(): SpreadsheetConfig {
     columns: [
       { id: 'title', header: 'TASK NAME', widthPx: 240, displayStyle: 'plain' },
       { id: 'priority', header: 'PRIORITY', widthPx: 108, displayStyle: 'priority' },
-      { id: 'status', header: 'STATUS', widthPx: 128, displayStyle: 'status' },
+      {
+        id: 'status',
+        header: 'STATUS',
+        widthPx: 128,
+        displayStyle: 'status',
+        valueType: 'select',
+        selectOptions: [
+          { value: 'In Progress' },
+          { value: 'Not Started' },
+          { value: 'Completed' },
+        ],
+      },
       { id: 'assignee', header: 'ASSIGNEE', widthPx: 188, displayStyle: 'assignee' },
       { id: 'dueDate', header: 'DATE', widthPx: 118, displayStyle: 'plain' },
       { id: 'notes', header: 'NOTES', widthPx: 100, displayStyle: 'plain' },

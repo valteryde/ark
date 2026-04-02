@@ -1,3 +1,4 @@
+import { columnValueType, resolveSelectLabel } from './cell-value.ts';
 import type { CellDisplayStyle, SpreadsheetColumn } from './types.ts';
 
 function escapeHtml(s: string): string {
@@ -16,40 +17,46 @@ export function formatCellHtml(
   value: string,
   enabledStyles: ReadonlySet<CellDisplayStyle>,
 ): string {
-  const v = value.trim();
-  if (!v) return '';
+  const canonical = value.trim();
+  if (!canonical) return '';
+
+  const displayText =
+    columnValueType(column) === 'select'
+      ? resolveSelectLabel(column, canonical).trim()
+      : canonical;
+  if (!displayText) return '';
 
   const requested = column?.displayStyle ?? 'plain';
   if (requested === 'plain' || !enabledStyles.has(requested)) {
-    return escapeHtml(v);
+    return escapeHtml(displayText);
   }
 
   if (requested === 'priority') {
-    const u = v.toUpperCase();
+    const u = canonical.toUpperCase();
     if (u === 'HIGH' || u === 'MEDIUM' || u === 'URGENT') {
       const key = u.toLowerCase();
-      return `<span class="sheet-priority sheet-priority--${key}">${escapeHtml(v)}</span>`;
+      return `<span class="sheet-priority sheet-priority--${key}">${escapeHtml(displayText)}</span>`;
     }
-    return escapeHtml(v);
+    return escapeHtml(displayText);
   }
 
   if (requested === 'status') {
-    const lower = v.toLowerCase();
+    const lower = canonical.toLowerCase();
     if (lower === 'in progress') {
-      return `<span class="sheet-status sheet-status--in-progress">${escapeHtml(v)}</span>`;
+      return `<span class="sheet-status sheet-status--in-progress">${escapeHtml(displayText)}</span>`;
     }
     if (lower === 'not started') {
-      return `<span class="sheet-status sheet-status--not-started">${escapeHtml(v)}</span>`;
+      return `<span class="sheet-status sheet-status--not-started">${escapeHtml(displayText)}</span>`;
     }
     if (lower === 'completed') {
-      return `<span class="sheet-status sheet-status--completed">${escapeHtml(v)}</span>`;
+      return `<span class="sheet-status sheet-status--completed">${escapeHtml(displayText)}</span>`;
     }
-    return escapeHtml(v);
+    return escapeHtml(displayText);
   }
 
   if (requested === 'assignee') {
-    return `<span class="sheet-assignee"><span class="sheet-assignee-avatar" aria-hidden="true"></span>${escapeHtml(v)}</span>`;
+    return `<span class="sheet-assignee"><span class="sheet-assignee-avatar" aria-hidden="true"></span>${escapeHtml(displayText)}</span>`;
   }
 
-  return escapeHtml(v);
+  return escapeHtml(displayText);
 }
