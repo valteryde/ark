@@ -352,6 +352,132 @@ export function mountSpreadsheet(
     }
   }
 
+  function escapeTsvField(value: string): string {
+    if (/[\t\n\r"]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }
+
+  function parsePastedCellField(raw: string): string {
+    if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+      return raw.slice(1, -1).replace(/""/g, '"');
+    }
+    return raw;
+  }
+
+  function parseClipboardRows(text: string): string[][] {
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = normalized.split('\n');
+    while (lines.length > 0 && lines[lines.length - 1] === '') {
+      lines.pop();
+    }
+    return lines.map((line) => line.split('\t').map(parsePastedCellField));
+  }
+
+  function getPasteAnchor(): { row: number; col: number } {
+    if (selectArea.active) {
+      return {
+        row: Math.min(selectArea.row, selectArea.rowEnd),
+        col: Math.min(selectArea.col, selectArea.colEnd),
+      };
+    }
+    return { row: active.row, col: active.col };
+  }
+
+  function buildCopyPlainText(): string {
+    persistActiveInput();
+    if (selectArea.active) {
+      const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+      const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+      const minCol = Math.min(selectArea.col, selectArea.colEnd);
+      const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+      const lines: string[] = [];
+      for (let r = minRow; r <= maxRow; r++) {
+        const parts: string[] = [];
+        for (let c = minCol; c <= maxCol; c++) {
+          const v = data.get(r, c);
+          const s = v === undefined ? '' : String(v);
+          parts.push(escapeTsvField(s));
+        }
+        lines.push(parts.join('\t'));
+      }
+      return lines.join('\n');
+    }
+    const v = data.get(active.row, active.col);
+    return v === undefined ? '' : String(v);
+  }
+
+  function shouldLetInputHandleCopy(evTarget: EventTarget | null): boolean {
+    if (!(evTarget instanceof HTMLInputElement)) return false;
+    if (!evTarget.classList.contains('sheet-cell-input')) return false;
+    if (selectArea.active) return false;
+    const a = evTarget.selectionStart ?? 0;
+    const b = evTarget.selectionEnd ?? 0;
+    return a !== b;
+  }
+
+  function shouldLetInputHandlePaste(evTarget: EventTarget | null, plain: string): boolean {
+    if (!(evTarget instanceof HTMLInputElement)) return false;
+    if (!evTarget.classList.contains('sheet-cell-input')) return false;
+    if (selectArea.active) return false;
+    const gridLike = plain.includes('\t') || plain.includes('\n');
+    return !gridLike;
+  }
+
+  function collectPasteTargetKeys(
+    anchorRow: number,
+    anchorCol: number,
+    grid: string[][],
+  ): string[] {
+    const keys: string[] = [];
+    for (let dr = 0; dr < grid.length; dr++) {
+      const row = grid[dr]!;
+      for (let dc = 0; dc < row.length; dc++) {
+        const r = anchorRow + dr;
+        const c = anchorCol + dc;
+        if (r < 1 || r > rowCountTotal || c < 1 || c > columnCountTotal) continue;
+        if (isReadOnlyCol(c)) continue;
+        keys.push(cellKey(r, c));
+      }
+    }
+    return keys;
+  }
+
+  function applyPastedGrid(plain: string): void {
+    const grid = parseClipboardRows(plain);
+    if (grid.length === 0) return;
+
+    hideSuggestions();
+    persistActiveInput();
+
+    const anchor = getPasteAnchor();
+    const keys = collectPasteTargetKeys(anchor.row, anchor.col, grid);
+    const before = history && keys.length > 0 ? captureSnapshot(keys) : null;
+
+    for (let dr = 0; dr < grid.length; dr++) {
+      const row = grid[dr]!;
+      for (let dc = 0; dc < row.length; dc++) {
+        const r = anchor.row + dr;
+        const c = anchor.col + dc;
+        if (r < 1 || r > rowCountTotal || c < 1 || c > columnCountTotal) continue;
+        if (isReadOnlyCol(c)) continue;
+        const raw = row[dc] ?? '';
+        const colDef = columnAt(c);
+        const parsed = parseCommittedCellValue(colDef, raw);
+        if (!parsed.ok) continue;
+        data.set(r, c, parsed.value);
+        hydrateCellFromStore(r, c);
+      }
+    }
+
+    if (history && before) {
+      const after = captureSnapshot(keys);
+      pushHistoryIfChanged(before, after);
+    }
+    notifySelectionChange();
+  }
+
   const root = document.createElement('div');
   root.className = 'sheet-root';
   root.id = 'sheet-container';
@@ -359,6 +485,24 @@ export function mountSpreadsheet(
   const viewport = document.createElement('div');
   viewport.className = 'sheet-viewport';
   viewport.tabIndex = 0;
+
+  function onCopyCapture(e: ClipboardEvent): void {
+    if (!viewport.contains(e.target as Node)) return;
+    if (shouldLetInputHandleCopy(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.clipboardData?.setData('text/plain', buildCopyPlainText());
+  }
+
+  function onPasteCapture(e: ClipboardEvent): void {
+    if (!viewport.contains(e.target as Node)) return;
+    const plain = e.clipboardData?.getData('text/plain') ?? '';
+    if (shouldLetInputHandlePaste(e.target, plain)) return;
+    if (plain === '') return;
+    e.preventDefault();
+    e.stopPropagation();
+    applyPastedGrid(plain);
+  }
 
   const gridInner = document.createElement('div');
   gridInner.className = 'sheet-grid-inner';
@@ -634,6 +778,9 @@ export function mountSpreadsheet(
   viewport.append(gridInner);
   root.append(viewport, suggestPopover);
   container.appendChild(root);
+
+  viewport.addEventListener('copy', onCopyCapture, true);
+  viewport.addEventListener('paste', onPasteCapture, true);
 
   viewport.addEventListener('scroll', () => {
     if (!suggestPopover.hidden) positionSuggestPopover();
