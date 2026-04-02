@@ -5,6 +5,7 @@ const roadmapInitial: Record<string, InMemoryDataInitValue> = {
   '1:1': {
     value: 'Launch Q1 marketing campaign',
     style: { 'background-color': 'red' },
+    comment: 'Kickoff sync with sales next week.',
   },
   '1:2': 'HIGH',
   '1:3': 'In Progress',
@@ -95,6 +96,7 @@ const roadmapColumnsAndChrome = (): Omit<SpreadsheetConfig, 'data'> => ({
     'merge',
     'align',
     'link',
+    'comment',
     'filter',
     'functions',
   ],

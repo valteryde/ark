@@ -624,6 +624,48 @@ body {
   box-shadow: inset 0 0 0 1px var(--sheet-accent);
 }
 
+/* Cell comment marker (::before — ::after is reserved for range-selection tint) */
+.sheet-cell--has-comment::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 7px 7px 0;
+  border-color: transparent #f59e0b transparent transparent;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.92;
+}
+
+/* Interactive target over comment marker (hover = preview, click = edit when enabled) */
+.sheet-cell-comment-hit {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 4;
+  box-sizing: border-box;
+  width: 18px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0 0 0 3px;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.sheet-cell-comment-hit:hover,
+.sheet-cell-comment-hit:focus-visible {
+  background: rgb(245 158 11 / 22%);
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgb(245 158 11 / 45%);
+}
+
 .sheet-cell-select-area::after {
   content: '';
   position: absolute;
@@ -748,6 +790,121 @@ body {
 
 .sheet-suggest-popover[hidden] {
   display: none !important;
+}
+
+/* Read-only comment preview (full text, multiline; not `title`) */
+.sheet-comment-preview {
+  position: fixed;
+  z-index: 54;
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: min(280px, calc(100vh - 16px));
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--sheet-surface);
+  border: 1px solid var(--sheet-border);
+  border-radius: 6px;
+  box-shadow:
+    0 8px 24px rgb(0 0 0 / 12%),
+    0 0 0 1px rgb(0 0 0 / 5%);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--sheet-cell-text);
+}
+
+.sheet-comment-preview[hidden] {
+  display: none !important;
+}
+
+/* Cell comment editor */
+.sheet-comment-popover {
+  position: fixed;
+  z-index: 55;
+  margin: 0;
+  padding: 0;
+  max-width: min(320px, 100vw - 16px);
+  background: var(--sheet-surface);
+  border: 1px solid var(--sheet-border);
+  border-radius: 6px;
+  box-shadow:
+    0 8px 24px rgb(0 0 0 / 12%),
+    0 0 0 1px rgb(0 0 0 / 5%);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  color: var(--sheet-cell-text);
+}
+
+.sheet-comment-popover[hidden] {
+  display: none !important;
+}
+
+.sheet-comment-popover__head {
+  padding: 0.5rem 0.65rem 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sheet-header-text);
+  border-bottom: 1px solid rgb(0 0 0 / 6%);
+}
+
+.sheet-comment-popover__input {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border: none;
+  border-radius: 0;
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: inherit;
+  background: transparent;
+  resize: vertical;
+  min-height: 4.5rem;
+  outline: none;
+}
+
+.sheet-comment-popover__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+  padding: 0.45rem 0.5rem 0.5rem;
+  border-top: 1px solid rgb(0 0 0 / 6%);
+}
+
+.sheet-comment-popover__btn {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sheet-comment-popover__btn--muted {
+  background: rgb(0 0 0 / 4%);
+  color: var(--sheet-cell-text);
+  border-color: rgb(0 0 0 / 8%);
+}
+
+.sheet-comment-popover__btn--muted:hover {
+  background: rgb(0 0 0 / 7%);
+}
+
+.sheet-comment-popover__btn--primary {
+  background: var(--sheet-accent);
+  color: #fff;
+  border-color: rgb(0 0 0 / 8%);
+}
+
+.sheet-comment-popover__btn--primary:hover {
+  filter: brightness(1.05);
 }
 
 .sheet-suggest-scroll {

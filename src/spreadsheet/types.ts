@@ -19,6 +19,7 @@ export type UiToolbarCapability =
   | 'merge'
   | 'align'
   | 'link'
+  | 'comment'
   | 'filter'
   | 'functions';
 
@@ -64,6 +65,8 @@ export type SpreadsheetCellStyleDeclarations = Record<string, string>;
 export interface SpreadsheetCellInit {
   value: string | number;
   style?: SpreadsheetCellStyleDeclarations;
+  /** Plain-text note attached to the cell (not shown in-cell; surfaced via comment UI). */
+  comment?: string;
 }
 
 /**
@@ -113,6 +116,7 @@ export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
   'merge',
   'align',
   'link',
+  'comment',
   'filter',
   'functions',
 ];
@@ -163,4 +167,8 @@ export interface SpreadsheetMountHandle {
   /** Start a coalesced undo group; pair with `endHistoryBatch` (e.g. native color UI). */
   beginHistoryBatch(): void;
   endHistoryBatch(): void;
+  /** True when the config enables comments and the store supports `getStoredCell` / `replaceCell`. */
+  readonly commentsEnabled: boolean;
+  /** Focused cell is the paste anchor (top-left of range when a multi-cell selection is active). */
+  openCommentEditor(): void;
 }

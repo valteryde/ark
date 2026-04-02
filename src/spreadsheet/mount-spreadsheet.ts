@@ -13,10 +13,11 @@ import type {
   CellDisplayStyle,
   SpreadsheetColumn,
   SpreadsheetConfig,
+  SpreadsheetCellInit,
   SpreadsheetMountHandle,
   SpreadsheetSelectOption,
 } from './types.ts';
-import { resolveEnabledCellStyles } from './types.ts';
+import { resolveEnabledCellStyles, resolveEnabledUiCapabilities } from './types.ts';
 
 function getCellEditor(cell: HTMLElement): HTMLInputElement | null {
   return cell.querySelector<HTMLInputElement>('.sheet-cell-input');
@@ -96,6 +97,11 @@ export function mountSpreadsheet(
     typeof data.getStoredCell === 'function';
 
   const history = historyEnabled ? createSpreadsheetHistory() : null;
+
+  const commentsUiEnabled = resolveEnabledUiCapabilities(config.enabledUiCapabilities).has(
+    'comment',
+  );
+  const commentsEnabled = commentsUiEnabled && historyEnabled;
 
   function keyToRowCol(k: string): { row: number; col: number } {
     const [rs, cs] = k.split(':');
@@ -264,10 +270,120 @@ export function mountSpreadsheet(
     return true;
   }
 
+  function updateCommentIndicator(row: number, col: number): void {
+    const el = cells.get(cellKey(row, col));
+    if (!el) return;
+    const k = cellKey(row, col);
+    const note = data.getStoredCell?.(row, col)?.comment?.trim();
+    el.classList.toggle('sheet-cell--has-comment', Boolean(note));
+    if (!note) {
+      if (commentPreviewKey === k) hideCommentPreview();
+      el.querySelector('.sheet-cell-comment-hit')?.remove();
+      return;
+    }
+    let hit = el.querySelector<HTMLButtonElement>('.sheet-cell-comment-hit');
+    if (!hit) {
+      hit = document.createElement('button');
+      hit.type = 'button';
+      hit.className = 'sheet-cell-comment-hit';
+      hit.setAttribute('aria-label', 'Show comment');
+      hit.setAttribute('aria-expanded', 'false');
+      hit.setAttribute('aria-controls', 'sheet-comment-preview');
+      el.appendChild(hit);
+    }
+    hit.dataset.row = String(row);
+    hit.dataset.col = String(col);
+  }
+
   function syncCellChrome(row: number, col: number): void {
     const el = cells.get(cellKey(row, col));
     if (!el) return;
     applyCellInlineStyleRecord(el, data.getCellStyle?.(row, col));
+    updateCommentIndicator(row, col);
+  }
+
+  let commentEditorAnchor: { row: number; col: number } | null = null;
+
+  function cellInitIsVacuous(cell: { value: string | number; style?: object; comment?: string }): boolean {
+    const v = cell.value;
+    const hasValue =
+      typeof v === 'number'
+        ? Number.isFinite(v)
+        : String(v).trim().length > 0;
+    const hasStyle = Boolean(cell.style && Object.keys(cell.style).length > 0);
+    const hasComment = Boolean(cell.comment && cell.comment.trim());
+    return !hasValue && !hasStyle && !hasComment;
+  }
+
+  function commitCommentAt(row: number, col: number, text: string | undefined): void {
+    if (!data.replaceCell || !data.getStoredCell) return;
+    const key = cellKey(row, col);
+    const before = history ? captureSnapshot([key]) : null;
+    const prev = data.getStoredCell(row, col);
+    const raw = data.get(row, col);
+    const value = prev !== undefined ? prev.value : (raw !== undefined ? raw : '');
+    const style = prev?.style;
+    const trimmed = (text ?? '').trim();
+    const comment = trimmed === '' ? undefined : trimmed;
+    const next: SpreadsheetCellInit = { value };
+    if (style !== undefined && Object.keys(style).length > 0) next.style = { ...style };
+    if (comment !== undefined) next.comment = comment;
+    data.replaceCell(row, col, cellInitIsVacuous(next) ? null : next);
+    hydrateCellFromStore(row, col);
+    if (history && before) {
+      const after = captureSnapshot([key]);
+      pushHistoryIfChanged(before, after);
+    }
+  }
+
+  let commentPopover: HTMLDivElement | null = null;
+  let commentTextarea: HTMLTextAreaElement | null = null;
+
+  function positionCommentPopover(row: number, col: number): void {
+    if (!commentPopover) return;
+    const cell = cells.get(cellKey(row, col));
+    if (!cell) return;
+    const cr = cell.getBoundingClientRect();
+    const margin = 8;
+    const w = Math.min(320, window.innerWidth - margin * 2);
+    let left = cr.left;
+    if (left + w > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - margin - w);
+    }
+    commentPopover.style.width = `${w}px`;
+    commentPopover.style.left = `${left}px`;
+    commentPopover.style.top = `${Math.min(cr.bottom + 4, window.innerHeight - margin - 160)}px`;
+  }
+
+  function closeCommentEditor(apply: boolean): void {
+    hideCommentPreview();
+    if (!commentPopover || !commentTextarea || !commentEditorAnchor) {
+      commentEditorAnchor = null;
+      if (commentPopover) commentPopover.hidden = true;
+      return;
+    }
+    const { row, col } = commentEditorAnchor;
+    if (apply) {
+      commitCommentAt(row, col, commentTextarea.value);
+    }
+    commentTextarea.value = '';
+    commentPopover.hidden = true;
+    commentEditorAnchor = null;
+    viewport.focus();
+  }
+
+  function openCommentEditor(): void {
+    if (!commentsEnabled || !commentPopover || !commentTextarea) return;
+    hideCommentPreview();
+    persistActiveInput();
+    hideSuggestions();
+    const anchor = getPasteAnchor();
+    commentEditorAnchor = { row: anchor.row, col: anchor.col };
+    const existing = data.getStoredCell?.(anchor.row, anchor.col)?.comment ?? '';
+    commentTextarea.value = existing;
+    commentPopover.hidden = false;
+    positionCommentPopover(anchor.row, anchor.col);
+    commentTextarea.focus();
   }
 
   function getFormattingTargets(): { row: number; col: number }[] {
@@ -486,6 +602,87 @@ export function mountSpreadsheet(
   viewport.className = 'sheet-viewport';
   viewport.tabIndex = 0;
 
+  const commentPreviewPop = document.createElement('div');
+  commentPreviewPop.className = 'sheet-comment-preview';
+  commentPreviewPop.id = 'sheet-comment-preview';
+  commentPreviewPop.hidden = true;
+  commentPreviewPop.setAttribute('role', 'tooltip');
+
+  let commentPreviewHideTimer: ReturnType<typeof setTimeout> | null = null;
+  let commentPreviewKey: string | null = null;
+  let commentPreviewSourceHit: HTMLButtonElement | null = null;
+
+  function hideCommentPreview(): void {
+    if (commentPreviewHideTimer !== null) {
+      clearTimeout(commentPreviewHideTimer);
+      commentPreviewHideTimer = null;
+    }
+    commentPreviewPop.hidden = true;
+    commentPreviewKey = null;
+    commentPreviewPop.textContent = '';
+    if (commentPreviewSourceHit) {
+      commentPreviewSourceHit.setAttribute('aria-expanded', 'false');
+      commentPreviewSourceHit = null;
+    }
+  }
+
+  function positionCommentPreview(anchor: HTMLElement): void {
+    const ar = anchor.getBoundingClientRect();
+    const margin = 8;
+    const maxW = Math.min(360, window.innerWidth - margin * 2);
+    const maxH = Math.min(280, window.innerHeight - margin * 2);
+    commentPreviewPop.style.maxWidth = `${maxW}px`;
+    commentPreviewPop.style.maxHeight = `${maxH}px`;
+    commentPreviewPop.style.left = '0px';
+    commentPreviewPop.style.top = '0px';
+    void commentPreviewPop.offsetWidth;
+    const ph = commentPreviewPop.getBoundingClientRect().height;
+    const pw = Math.min(maxW, commentPreviewPop.getBoundingClientRect().width);
+    let top = ar.bottom + 4;
+    let left = ar.left;
+    if (top + ph > window.innerHeight - margin) {
+      top = Math.max(margin, ar.top - ph - 4);
+    }
+    if (left + pw > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - margin - pw);
+    }
+    commentPreviewPop.style.left = `${left}px`;
+    commentPreviewPop.style.top = `${top}px`;
+  }
+
+  function scheduleHideCommentPreview(): void {
+    if (commentPreviewHideTimer !== null) clearTimeout(commentPreviewHideTimer);
+    commentPreviewHideTimer = setTimeout(() => {
+      commentPreviewHideTimer = null;
+      hideCommentPreview();
+    }, 200);
+  }
+
+  function showCommentPreviewFromHit(hit: HTMLButtonElement): void {
+    if (commentPopover && !commentPopover.hidden) return;
+    const row = clampRow(Number(hit.dataset.row));
+    const col = clampCol(Number(hit.dataset.col));
+    const note = data.getStoredCell?.(row, col)?.comment?.trim();
+    if (!note) {
+      hideCommentPreview();
+      return;
+    }
+    if (commentPreviewHideTimer !== null) {
+      clearTimeout(commentPreviewHideTimer);
+      commentPreviewHideTimer = null;
+    }
+    commentPreviewPop.textContent = note;
+    commentPreviewPop.hidden = false;
+    commentPreviewKey = cellKey(row, col);
+    if (commentPreviewSourceHit && commentPreviewSourceHit !== hit) {
+      commentPreviewSourceHit.setAttribute('aria-expanded', 'false');
+    }
+    commentPreviewSourceHit = hit;
+    hit.setAttribute('aria-expanded', 'true');
+    positionCommentPreview(hit);
+    requestAnimationFrame(() => positionCommentPreview(hit));
+  }
+
   function onCopyCapture(e: ClipboardEvent): void {
     if (!viewport.contains(e.target as Node)) return;
     if (shouldLetInputHandleCopy(e.target)) return;
@@ -591,6 +788,7 @@ export function mountSpreadsheet(
 
       cell.append(content, input);
       cells.set(key, cell);
+      updateCommentIndicator(row, col);
       rowCells.appendChild(cell);
     }
     rowEl.append(rowGutter, rowCells);
@@ -774,16 +972,145 @@ export function mountSpreadsheet(
     return false;
   }
 
+  commentPopover = document.createElement('div');
+  commentPopover.className = 'sheet-comment-popover';
+  commentPopover.hidden = true;
+  commentPopover.setAttribute('role', 'dialog');
+  commentPopover.setAttribute('aria-label', 'Cell comment');
+
+  const commentHead = document.createElement('div');
+  commentHead.className = 'sheet-comment-popover__head';
+  commentHead.textContent = 'Comment';
+
+  commentTextarea = document.createElement('textarea');
+  commentTextarea.className = 'sheet-comment-popover__input';
+  commentTextarea.rows = 4;
+  commentTextarea.setAttribute('aria-multiline', 'true');
+
+  const commentActions = document.createElement('div');
+  commentActions.className = 'sheet-comment-popover__actions';
+
+  const btnCommentRemove = document.createElement('button');
+  btnCommentRemove.type = 'button';
+  btnCommentRemove.className = 'sheet-comment-popover__btn sheet-comment-popover__btn--muted';
+  btnCommentRemove.textContent = 'Remove';
+
+  const btnCommentCancel = document.createElement('button');
+  btnCommentCancel.type = 'button';
+  btnCommentCancel.className = 'sheet-comment-popover__btn sheet-comment-popover__btn--muted';
+  btnCommentCancel.textContent = 'Cancel';
+
+  const btnCommentSave = document.createElement('button');
+  btnCommentSave.type = 'button';
+  btnCommentSave.className = 'sheet-comment-popover__btn sheet-comment-popover__btn--primary';
+  btnCommentSave.textContent = 'Save';
+
+  btnCommentRemove.addEventListener('click', () => {
+    const anchor = commentEditorAnchor;
+    if (!anchor) return;
+    commitCommentAt(anchor.row, anchor.col, '');
+    if (commentTextarea) commentTextarea.value = '';
+    if (commentPopover) commentPopover.hidden = true;
+    commentEditorAnchor = null;
+    viewport.focus();
+  });
+
+  btnCommentCancel.addEventListener('click', () => closeCommentEditor(false));
+  btnCommentSave.addEventListener('click', () => closeCommentEditor(true));
+
+  commentTextarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeCommentEditor(false);
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeCommentEditor(true);
+    }
+  });
+
+  commentActions.append(btnCommentRemove, btnCommentCancel, btnCommentSave);
+  commentPopover.append(commentHead, commentTextarea, commentActions);
+  commentPopover.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeCommentEditor(false);
+    }
+  });
+
   gridInner.append(headerRow, gridBody);
   viewport.append(gridInner);
-  root.append(viewport, suggestPopover);
+  root.append(viewport, suggestPopover, commentPopover, commentPreviewPop);
   container.appendChild(root);
+
+  commentPreviewPop.addEventListener('pointerenter', () => {
+    if (commentPreviewHideTimer !== null) {
+      clearTimeout(commentPreviewHideTimer);
+      commentPreviewHideTimer = null;
+    }
+  });
+  commentPreviewPop.addEventListener('pointerleave', (e) => {
+    const rel = e.relatedTarget as Node | null;
+    if (rel && commentPreviewSourceHit && (rel === commentPreviewSourceHit || commentPreviewSourceHit.contains(rel))) {
+      return;
+    }
+    scheduleHideCommentPreview();
+  });
+
+  viewport.addEventListener(
+    'pointerover',
+    (e) => {
+      const hit = (e.target as HTMLElement).closest?.('.sheet-cell-comment-hit');
+      if (!hit || !viewport.contains(hit)) return;
+      showCommentPreviewFromHit(hit as HTMLButtonElement);
+    },
+    true,
+  );
+
+  viewport.addEventListener(
+    'pointerout',
+    (e) => {
+      const hit = (e.target as HTMLElement).closest?.('.sheet-cell-comment-hit');
+      if (!hit || !viewport.contains(hit)) return;
+      const rel = e.relatedTarget as Node | null;
+      if (rel && (hit.contains(rel) || commentPreviewPop.contains(rel))) return;
+      scheduleHideCommentPreview();
+    },
+    true,
+  );
+
+  viewport.addEventListener(
+    'click',
+    (e) => {
+      const hit = (e.target as HTMLElement).closest?.('.sheet-cell-comment-hit') as
+        | HTMLButtonElement
+        | null;
+      if (!hit || !viewport.contains(hit)) return;
+      if (!commentsEnabled) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const row = clampRow(Number(hit.dataset.row));
+      const col = clampCol(Number(hit.dataset.col));
+      hideCommentPreview();
+      setActive(row, col);
+      openCommentEditor();
+    },
+    true,
+  );
 
   viewport.addEventListener('copy', onCopyCapture, true);
   viewport.addEventListener('paste', onPasteCapture, true);
 
   viewport.addEventListener('scroll', () => {
     if (!suggestPopover.hidden) positionSuggestPopover();
+    if (commentPopover && !commentPopover.hidden && commentEditorAnchor) {
+      positionCommentPopover(commentEditorAnchor.row, commentEditorAnchor.col);
+    }
+    if (!commentPreviewPop.hidden && commentPreviewSourceHit) {
+      positionCommentPreview(commentPreviewSourceHit);
+    }
   });
 
   viewport.addEventListener('input', (e) => {
@@ -814,6 +1141,8 @@ export function mountSpreadsheet(
     if (!(t instanceof HTMLInputElement) || t.dataset.sheetValueType !== 'select') return;
     const rt = e.relatedTarget as Node | null;
     if (rt && suggestPopover.contains(rt)) return;
+    if (rt && commentPopover?.contains(rt)) return;
+    if (rt && commentPreviewPop.contains(rt)) return;
     blurHideTimer = setTimeout(() => hideSuggestions(), 120);
   });
 
@@ -1163,6 +1492,21 @@ export function mountSpreadsheet(
 
     if (suggestionKeysConsumed(e)) return;
 
+    if (!commentPreviewPop.hidden && e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      hideCommentPreview();
+      return;
+    }
+
+    const sheetModEarly = e.metaKey || e.ctrlKey;
+    if (commentsEnabled && e.key === 'F2' && e.shiftKey && !sheetModEarly && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      openCommentEditor();
+      return;
+    }
+
     const hit = target.closest('.sheet-cell');
     const focusRowCol = hit
       ? {
@@ -1370,6 +1714,8 @@ export function mountSpreadsheet(
 
   const handle: SpreadsheetMountHandle = {
     historyEnabled,
+    commentsEnabled,
+    openCommentEditor,
     mergeCellStyleOnSelection,
     mergeCellStyleOnEachTarget,
     everyTargetCellStyle,

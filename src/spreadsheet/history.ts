@@ -20,6 +20,9 @@ function cloneCellMap(m: HistoryCellMap): HistoryCellMap {
     out.set(k, {
       value: v.value,
       ...(v.style !== undefined ? { style: { ...v.style } } : {}),
+      ...(v.comment !== undefined && v.comment.trim() !== ''
+        ? { comment: v.comment }
+        : {}),
     });
   }
   return out;
@@ -54,6 +57,9 @@ export function cellStatesEqual(
   for (const key of ka) {
     if (sa[key] !== sb[key]) return false;
   }
+  const ca = (a.comment ?? '').trim();
+  const cb = (b.comment ?? '').trim();
+  if (ca !== cb) return false;
   return true;
 }
 

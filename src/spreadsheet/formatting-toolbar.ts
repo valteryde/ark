@@ -13,6 +13,7 @@ const CAP_ICONS: Record<UiToolbarCapability, string> = {
   merge: 'ph-columns',
   align: 'ph-text-align-left',
   link: 'ph-link',
+  comment: 'ph-chat-circle-text',
   filter: 'ph-funnel',
   functions: 'ph-sigma',
 };
@@ -23,7 +24,7 @@ const TOOLBAR_GROUPS: UiToolbarCapability[][] = [
   ['format-bold', 'format-italic', 'format-strikethrough'],
   ['fill', 'borders', 'merge'],
   ['align'],
-  ['link'],
+  ['link', 'comment'],
   ['filter', 'functions'],
 ];
 
@@ -244,6 +245,16 @@ export function mountFormattingToolbar(
         const b = iconButton(CAP_ICONS[cap], 'Merge cells');
         b.addEventListener('click', () => {
           window.alert('Merge cells is not supported in this grid yet.');
+        });
+        host.appendChild(b);
+        continue;
+      }
+
+      if (cap === 'comment') {
+        if (!sheet.commentsEnabled) continue;
+        const b = iconButton(CAP_ICONS[cap], 'Comment (Shift+F2)');
+        b.addEventListener('click', () => {
+          sheet.openCommentEditor();
         });
         host.appendChild(b);
         continue;
