@@ -1,8 +1,11 @@
-import { createInMemoryDataStore } from '../data-store.ts';
+import { createInMemoryDataStore, type InMemoryDataInitValue } from '../data-store.ts';
 import type { SpreadsheetConfig } from '../types.ts';
 
-const roadmapInitial: Record<string, string | number> = {
-  '1:1': 'Launch Q1 marketing campaign',
+const roadmapInitial: Record<string, InMemoryDataInitValue> = {
+  '1:1': {
+    value: 'Launch Q1 marketing campaign',
+    style: { 'background-color': 'red' },
+  },
   '1:2': 'HIGH',
   '1:3': 'In Progress',
   '1:4': 'Alex Morgan',

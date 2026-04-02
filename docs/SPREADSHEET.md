@@ -9,7 +9,7 @@ This document is the contract that both sides should align on.
 ## Architecture
 
 1. **`SpreadsheetConfig`** — Declares columns (id, header, width, optional `displayStyle`, optional `readOnly` for system/computed columns shown darker and non-editable), row count, default row height, which **cell renderers** are allowed, and which **UI capabilities** the backend says are available (toolbar, future actions).
-2. **`SpreadsheetDataStore`** — Synchronous get/set per `(row, col)`. **This is the seam for REST**: implement it by wrapping `fetch` (load page of rows into a cache, PATCH/PUT on commit, etc.). The default `createInMemoryDataStore()` is for demos and tests.
+2. **`SpreadsheetDataStore`** — Synchronous `get` / `set` per `(row, col)` plus optional **`getCellStyle(row, col)`** returning inline CSS as kebab-case keys (e.g. `{ "background-color": "#f5f5f5" }`) applied to the cell shell. **This is the seam for REST**: implement with `fetch`, cache, PATCH/PUT on commit, etc. The default **`createInMemoryDataStore(initial)`** accepts either a plain `string | number` or `{ value, style? }` per `"row:col"` key for demos and tests.
 3. **Cell display styles** — Named renderers (`priority`, `status`, `assignee`, `plain`). The backend sends **`enabledCellStyles`**: if `priority` is not enabled, priority columns render as escaped plain text even if the column asks for `displayStyle: 'priority'`. That keeps presentation policy on the server.
 4. **`enabledUiCapabilities`** — Optional set of toolbar/feature flags (undo, bold, filter, …). The shell can hide or disable controls based on this once wired; today it is the **documented contract** for future chrome.
 

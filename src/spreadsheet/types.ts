@@ -36,11 +36,24 @@ export interface SpreadsheetColumn {
 }
 
 /**
+ * Inline CSS from JSON/API; keys are CSS property names (e.g. `"background-color"`, `"color"`).
+ */
+export type SpreadsheetCellStyleDeclarations = Record<string, string>;
+
+/** One cell in a payload / `createInMemoryDataStore` initial map. */
+export interface SpreadsheetCellInit {
+  value: string | number;
+  style?: SpreadsheetCellStyleDeclarations;
+}
+
+/**
  * Backing store for cell values. Implement with REST: load into cache, persist on set.
  */
 export interface SpreadsheetDataStore {
   get(row: number, col: number): string | number | undefined;
   set(row: number, col: number, value: string | number): void;
+  /** Optional inline styles for the cell shell (kebab-case keys). */
+  getCellStyle?(row: number, col: number): SpreadsheetCellStyleDeclarations | undefined;
 }
 
 export interface SpreadsheetConfig {

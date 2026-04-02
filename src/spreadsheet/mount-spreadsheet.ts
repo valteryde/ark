@@ -14,6 +14,35 @@ function applyCellDisplay(
   content.innerHTML = formatCellHtml(column, value, enabledStyles);
 }
 
+const SHEET_STYLE_PROPS_ATTR = 'data-sheet-style-props';
+
+/** Apply kebab-case CSS declarations; clears previously applied keys tracked on the element. */
+function applyCellInlineStyleRecord(
+  el: HTMLDivElement,
+  style: Record<string, string> | undefined,
+): void {
+  const prev = el.getAttribute(SHEET_STYLE_PROPS_ATTR)?.split(',').filter(Boolean) ?? [];
+  for (const prop of prev) {
+    el.style.removeProperty(prop);
+  }
+  if (!style || Object.keys(style).length === 0) {
+    el.removeAttribute(SHEET_STYLE_PROPS_ATTR);
+    return;
+  }
+  const keys: string[] = [];
+  for (const [k, v] of Object.entries(style)) {
+    const name = k.trim();
+    if (!name || v === undefined || v === '') continue;
+    el.style.setProperty(name, v);
+    keys.push(name);
+  }
+  if (keys.length === 0) {
+    el.removeAttribute(SHEET_STYLE_PROPS_ATTR);
+    return;
+  }
+  el.setAttribute(SHEET_STYLE_PROPS_ATTR, keys.join(','));
+}
+
 /** Mount a configurable spreadsheet. Tear down by removing `container` children if remounting. */
 export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConfig): void {
   const columns = config.columns;
@@ -88,6 +117,13 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
     if (!input || !content) return;
     data.set(active.row, active.col, input.value);
     applyCellDisplay(content, columnAt(active.col), input.value, enabledCellStyles);
+    syncCellChrome(active.row, active.col);
+  }
+
+  function syncCellChrome(row: number, col: number): void {
+    const el = cells.get(cellKey(row, col));
+    if (!el) return;
+    applyCellInlineStyleRecord(el, data.getCellStyle?.(row, col));
   }
 
   function doOnEverySelectedCell(callback: (cell: HTMLDivElement) => void): void {
@@ -166,6 +202,8 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
         input.tabIndex = -1;
         input.setAttribute('aria-readonly', 'true');
       }
+
+      applyCellInlineStyleRecord(cell, data.getCellStyle?.(row, col));
 
       if (row === active.row && col === active.col) {
         cell.classList.add('sheet-cell-active');
@@ -558,6 +596,7 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
         const contentEl = cell.querySelector<HTMLDivElement>('.sheet-cell-content')!;
         applyCellDisplay(contentEl, columnAt(c), '', enabledCellStyles);
         cell.querySelector<HTMLInputElement>('.sheet-cell-input')!.value = '';
+        syncCellChrome(r, c);
       });
       exitRangeSelectionUi();
       syncSelectionHighlight();

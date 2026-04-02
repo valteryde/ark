@@ -1,5 +1,7 @@
 export type {
   CellDisplayStyle,
+  SpreadsheetCellInit,
+  SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
   SpreadsheetConfig,
   SpreadsheetDataStore,
@@ -11,6 +13,7 @@ export {
   resolveEnabledCellStyles,
 } from './types.ts';
 export { cellKey, createInMemoryDataStore } from './data-store.ts';
+export type { InMemoryDataInitValue } from './data-store.ts';
 export { formatCellHtml } from './cell-display.ts';
 export { mountSpreadsheet } from './mount-spreadsheet.ts';
 export { createRoadmapPreset } from './presets/roadmap.ts';
