@@ -25,7 +25,8 @@ Rich cell HTML is built only from **known templates** + escaped user text. Do no
 
 ## API entrypoints (TypeScript)
 
-- `mountSpreadsheet(container, config)` — Build the grid once.
+- `mountSpreadsheet(container, config)` — Build the grid once; returns a **`SpreadsheetMountHandle`** (merge styles on selection, subscribe to selection changes) for `mountFormattingToolbar(toolbarEl, handle, resolveEnabledUiCapabilities(config.enabledUiCapabilities))`.
+- `mountFormattingToolbar` — Renders toolbar controls from **`enabledUiCapabilities`**; styling actions call `mergeCellStyle` on the store (in-memory preset implements it).
 - `createInMemoryDataStore(initial?)` — In-memory `row:col` map for prototyping.
 - Presets (e.g. `createRoadmapPreset()`) — Example configs only; production should build config from JSON your API returns.
 

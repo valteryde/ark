@@ -46,5 +46,25 @@ export function createInMemoryDataStore(
       const prev = map.get(k);
       map.set(k, { value, style: prev?.style });
     },
+    mergeCellStyle(row: number, col: number, patch: Record<string, string | undefined>) {
+      const k = cellKey(row, col);
+      const prev = map.get(k);
+      const value = prev !== undefined ? prev.value : '';
+      const style: SpreadsheetCellStyleDeclarations = { ...prev?.style };
+      for (const [p, val] of Object.entries(patch)) {
+        const name = p.trim();
+        if (!name) continue;
+        if (val === undefined || val === '') {
+          delete style[name];
+        } else {
+          style[name] = val;
+        }
+      }
+      const nextStyle = Object.keys(style).length > 0 ? style : undefined;
+      if (prev === undefined && value === '' && nextStyle === undefined) {
+        return;
+      }
+      map.set(k, { value, style: nextStyle });
+    },
   };
 }

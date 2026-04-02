@@ -54,6 +54,8 @@ export interface SpreadsheetDataStore {
   set(row: number, col: number, value: string | number): void;
   /** Optional inline styles for the cell shell (kebab-case keys). */
   getCellStyle?(row: number, col: number): SpreadsheetCellStyleDeclarations | undefined;
+  /** Merge CSS keys onto the cell; `undefined` or empty string removes that property. */
+  mergeCellStyle?(row: number, col: number, patch: Record<string, string | undefined>): void;
 }
 
 export interface SpreadsheetConfig {
@@ -97,4 +99,30 @@ export function resolveEnabledCellStyles(
   }
   const list = enabled instanceof Set ? [...enabled] : [...enabled];
   return new Set(list);
+}
+
+export function resolveEnabledUiCapabilities(
+  enabled?: ReadonlySet<UiToolbarCapability> | UiToolbarCapability[],
+): Set<UiToolbarCapability> {
+  if (enabled === undefined) {
+    return new Set(ALL_UI_CAPABILITIES);
+  }
+  const list = enabled instanceof Set ? [...enabled] : [...enabled];
+  return new Set(list);
+}
+
+/** Returned by `mountSpreadsheet` for wiring the formatting toolbar and extensions. */
+export interface SpreadsheetMountHandle {
+  mergeCellStyleOnSelection(patch: Record<string, string | undefined>): void;
+  /** Per-cell merge when values differ (e.g. mixed strikethrough). */
+  mergeCellStyleOnEachTarget(
+    patchForCell: (row: number, col: number) => Record<string, string | undefined>,
+  ): void;
+  /** True when every writable target cell’s style property satisfies the predicate. */
+  everyTargetCellStyle(
+    cssProperty: string,
+    predicate: (value: string | undefined) => boolean,
+  ): boolean;
+  getCellStyleAt(row: number, col: number): SpreadsheetCellStyleDeclarations | undefined;
+  subscribeSelectionChange(cb: () => void): () => void;
 }

@@ -76,5 +76,19 @@ export function createRoadmapPreset(): SpreadsheetConfig {
     defaultRowHeightPx: 28,
     data: createInMemoryDataStore(roadmapInitial),
     enabledCellStyles: ['priority', 'status', 'assignee'],
+    enabledUiCapabilities: [
+      'undo',
+      'redo',
+      'format-bold',
+      'format-italic',
+      'format-strikethrough',
+      'fill',
+      'borders',
+      'merge',
+      'align',
+      'link',
+      'filter',
+      'functions',
+    ],
   };
 }

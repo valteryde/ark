@@ -163,6 +163,59 @@ body {
   padding: 0.35rem 1.25rem 0.5rem;
   gap: 0.25rem;
   border-top: 1px solid rgb(232 232 232 / 0.7);
+  align-items: center;
+}
+
+#formatting-toolbar-mount,
+.app-toolbar__dynamic {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.app-toolbar__align-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.app-toolbar__icon--active {
+  background: rgb(37 99 235 / 12%);
+  color: #2563eb;
+}
+
+.app-toolbar__icon:disabled,
+.app-toolbar__fx:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.app-toolbar__icon:disabled:hover,
+.app-toolbar__fx:disabled:hover {
+  background: transparent;
+  color: var(--app-text-muted);
+}
+
+.app-toolbar__fx:disabled:hover {
+  background: transparent;
+}
+
+.app-toolbar__color-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .app-toolbar__zoom {

@@ -2,7 +2,12 @@ import '../sheet.css';
 
 import { formatCellHtml } from './cell-display.ts';
 import { cellKey } from './data-store.ts';
-import type { CellDisplayStyle, SpreadsheetColumn, SpreadsheetConfig } from './types.ts';
+import type {
+  CellDisplayStyle,
+  SpreadsheetColumn,
+  SpreadsheetConfig,
+  SpreadsheetMountHandle,
+} from './types.ts';
 import { resolveEnabledCellStyles } from './types.ts';
 
 function applyCellDisplay(
@@ -44,7 +49,10 @@ function applyCellInlineStyleRecord(
 }
 
 /** Mount a configurable spreadsheet. Tear down by removing `container` children if remounting. */
-export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConfig): void {
+export function mountSpreadsheet(
+  container: HTMLElement,
+  config: SpreadsheetConfig,
+): SpreadsheetMountHandle {
   const columns = config.columns;
   const columnCountTotal = columns.length;
   const rowCountTotal = config.rowCount;
@@ -85,6 +93,14 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
   const cells = new Map<string, HTMLDivElement>();
   let active = { row: 1, col: 1 };
 
+  const selectionChangeListeners = new Set<() => void>();
+
+  function notifySelectionChange(): void {
+    for (const fn of selectionChangeListeners) {
+      fn();
+    }
+  }
+
   let dragPointerId: number | null = null;
   let dragging = false;
   let dragAnchor = { row: 1, col: 1 };
@@ -124,6 +140,62 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
     const el = cells.get(cellKey(row, col));
     if (!el) return;
     applyCellInlineStyleRecord(el, data.getCellStyle?.(row, col));
+  }
+
+  function getFormattingTargets(): { row: number; col: number }[] {
+    const out: { row: number; col: number }[] = [];
+    if (selectArea.active) {
+      const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+      const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+      const minCol = Math.min(selectArea.col, selectArea.colEnd);
+      const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+      for (let row = minRow; row <= maxRow; row++) {
+        for (let col = minCol; col <= maxCol; col++) {
+          if (!isReadOnlyCol(col)) out.push({ row, col });
+        }
+      }
+      return out;
+    }
+    if (!isReadOnlyCol(active.col)) out.push({ row: active.row, col: active.col });
+    return out;
+  }
+
+  function mergeCellStyleOnSelection(patch: Record<string, string | undefined>): void {
+    if (!data.mergeCellStyle) return;
+    persistActiveInput();
+    const targets = getFormattingTargets();
+    if (targets.length === 0) return;
+    for (const { row, col } of targets) {
+      data.mergeCellStyle(row, col, patch);
+      syncCellChrome(row, col);
+    }
+    notifySelectionChange();
+  }
+
+  function mergeCellStyleOnEachTarget(
+    patchForCell: (row: number, col: number) => Record<string, string | undefined>,
+  ): void {
+    if (!data.mergeCellStyle) return;
+    persistActiveInput();
+    const targets = getFormattingTargets();
+    if (targets.length === 0) return;
+    for (const { row, col } of targets) {
+      data.mergeCellStyle(row, col, patchForCell(row, col));
+      syncCellChrome(row, col);
+    }
+    notifySelectionChange();
+  }
+
+  function everyTargetCellStyle(
+    cssProperty: string,
+    predicate: (value: string | undefined) => boolean,
+  ): boolean {
+    const targets = getFormattingTargets();
+    if (targets.length === 0) return false;
+    return targets.every(({ row, col }) => {
+      const v = data.getCellStyle?.(row, col)?.[cssProperty];
+      return predicate(v);
+    });
   }
 
   function doOnEverySelectedCell(callback: (cell: HTMLDivElement) => void): void {
@@ -293,6 +365,7 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
       }
     }
     lastSelectKeys = nextKeys;
+    notifySelectionChange();
   }
 
   function flushDragPaint(): void {
@@ -735,4 +808,19 @@ export function mountSpreadsheet(container: HTMLElement, config: SpreadsheetConf
   }
 
   viewport.addEventListener('keydown', handleSheetKeydown, true);
+
+  const handle: SpreadsheetMountHandle = {
+    mergeCellStyleOnSelection,
+    mergeCellStyleOnEachTarget,
+    everyTargetCellStyle,
+    getCellStyleAt(row, col) {
+      return data.getCellStyle?.(row, col);
+    },
+    subscribeSelectionChange(cb) {
+      selectionChangeListeners.add(cb);
+      return () => selectionChangeListeners.delete(cb);
+    },
+  };
+
+  return handle;
 }
