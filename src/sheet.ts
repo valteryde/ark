@@ -40,6 +40,20 @@ for (let i = 1; i < columnCountTotal; i++) {
 const sheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
 const sheetTotalHeight = rowHeights.reduce((a, b) => a + b, 0);
 
+const selectArea: {
+  active: boolean;
+  row: number;
+  col: number;
+  rowEnd: number;
+  colEnd: number;
+} = {
+  active: true,
+  row: 2,
+  col: 2,
+  rowEnd: 10,
+  colEnd: 10,
+};
+
 function cellKey(row: number, col: number): string {
   return `${row}:${col}`;
 }
@@ -57,6 +71,31 @@ function persistActiveInput(
   mockRows[key] = { value: input.value };
   content.textContent = input.value;
 }
+
+
+function renderSelectArea(cells: Map<string, HTMLDivElement>): void {
+  // Clear all select area cells
+  document.querySelectorAll('.sheet-cell-select-area').forEach(cell => {
+    cell.classList.remove('sheet-cell-select-area');
+  });
+
+  if (!selectArea.active) return;
+
+  // Render the new select area
+  const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+  const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+  const minCol = Math.min(selectArea.col, selectArea.colEnd);
+  const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
+      const cell = cells.get(cellKey(row, col));
+      if (!cell) continue;
+      cell.classList.add('sheet-cell-select-area');
+    }
+  }
+}
+
 
 /** Build grid once; delegated clicks; imperative active cell + focus. */
 export function mountSheet(container: HTMLElement): void {
@@ -135,6 +174,14 @@ export function mountSheet(container: HTMLElement): void {
       return;
     }
 
+    selectArea.active = false;
+    selectArea.row = row;
+    selectArea.col = col;
+    selectArea.rowEnd = row;
+    selectArea.colEnd = col;
+    
+    renderSelectArea(cells);
+
     persistActiveInput(cells, active);
 
     const prev = cells.get(cellKey(active.row, active.col));
@@ -165,27 +212,39 @@ export function mountSheet(container: HTMLElement): void {
   viewport.addEventListener('keydown', (e) => {
     const target = e.target as HTMLElement | null;
     const cell = target?.closest('.sheet-cell');
+    if (!cell || !viewport.contains(cell)) return;
     const row = Number(cell?.dataset.row);
     const col = Number(cell?.dataset.col);
 
+    
     if (e.key === 'Escape') {
-      if (!cell || !viewport.contains(cell)) return;
       setActive(-1, -1);
     } else if (e.key === 'Enter') {
-      if (!cell || !viewport.contains(cell)) return;
       setActive(row + 1, col);
-    } else if (e.key === 'ArrowUp') {
-      if (!cell || !viewport.contains(cell)) return;
-      setActive(row - 1, col);
-    } else if (e.key === 'ArrowDown') {
-      if (!cell || !viewport.contains(cell)) return;
-      setActive(row + 1, col);
-    } else if (e.key === 'ArrowLeft') {
-      if (!cell || !viewport.contains(cell)) return;
-      setActive(row, col - 1);
-    } else if (e.key === 'ArrowRight') {
-      if (!cell || !viewport.contains(cell)) return;
-      setActive(row, col + 1);
+    }
+    
+    if (e.shiftKey) {
+      selectArea.active = true;
+      if (e.key === 'ArrowUp') {
+        selectArea.rowEnd -= 1;
+      } else if (e.key === 'ArrowDown') {
+        selectArea.rowEnd += 1;
+      } else if (e.key === 'ArrowLeft') {
+        selectArea.colEnd -= 1;
+      } else if (e.key === 'ArrowRight') {
+        selectArea.colEnd += 1;
+      }
+      renderSelectArea(cells);
+    } else {
+      if (e.key === 'ArrowUp') {
+        setActive(row - 1, col);
+      } else if (e.key === 'ArrowDown') {
+        setActive(row + 1, col);
+      } else if (e.key === 'ArrowLeft') {
+        setActive(row, col - 1);
+      } else if (e.key === 'ArrowRight') {
+        setActive(row, col + 1);
+      }
     }
   });
 
