@@ -1,0 +1,30 @@
+# Ark UI + BFF + tiny SQLite partner API (persistent volume for the DB file).
+#
+# From this directory:
+#   docker compose up --build
+# Open http://localhost:8000/clients or /records — edit cells; tunnel writes hit SQLite.
+#
+services:
+  partner:
+    build: ./partner
+    environment:
+      PARTNER_DB: /data/partner.db
+    volumes:
+      - partner_sqlite:/data
+    expose:
+      - "9000"
+
+  ark:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      ARK_BACKEND_URL: http://partner:9000
+      ARK_UI_ROUTES: clients,records
+    depends_on:
+      - partner
+
+volumes:
+  partner_sqlite:

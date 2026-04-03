@@ -168,4 +168,14 @@ export interface SpreadsheetMountHandle {
   readonly commentsEnabled: boolean;
   /** Focused cell is the paste anchor (top-left of range when a multi-cell selection is active). */
   openCommentEditor(): void;
+  /**
+   * Apply a value from outside local editing (e.g. WebSocket collab). Does not create undo history.
+   * Returns false if row/col is out of range or the cell is not mounted.
+   */
+  applyExternalValue(
+    row: number,
+    col: number,
+    value: string | number,
+    options?: { remoteMarkerHue?: number },
+  ): boolean;
 }

@@ -21,7 +21,7 @@
       href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css"
     />
 
-    <title>Product Roadmap 2026 — Ark</title>
+    <title>Ark</title>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
@@ -29,75 +29,26 @@
       <header class="app-chrome">
         <div class="app-chrome__row app-chrome__row--top">
           <i class="ph ph-squares-four" style="font-size: 1.25rem; color: #6b6b6b;" aria-hidden="true"></i>
-          <h1 class="app-chrome__title">Product Roadmap 2026</h1>
+          <h1 class="app-chrome__title" id="app-chrome-title">Ark</h1>
           <div style="margin-left: auto;"></div>
-          <!--
-          <div class="app-search" role="search">
-            <i class="ph ph-magnifying-glass app-search__icon" aria-hidden="true"></i>
-            <input type="search" class="app-search__input" placeholder="Search" aria-label="Search" />
-          </div>
-          -->
         </div>
         <div class="app-chrome__row app-chrome__row--toolbar" aria-label="Formatting toolbar">
           <div id="formatting-toolbar-mount"></div>
         </div>
       </header>
 
-        <div
-          class="app-sheet-wrap"
-          id="sheet-panel"
-          role="tabpanel"
-          aria-labelledby="sheet-tab-quarterly"
-        >
-          <div id="sheet-mount" class="app-sheet-mount"></div>
-        </div>
+      <div id="partner-error" class="app-partner-error" hidden></div>
 
-      <nav class="app-sheet-tabs" aria-label="Sheet views" role="tablist">
-        <button
-          type="button"
-          class="app-sheet-tabs__tab app-sheet-tabs__tab--active"
-          id="sheet-tab-quarterly"
-          role="tab"
-          aria-selected="true"
-          aria-controls="sheet-panel"
-          tabindex="0"
-          data-sheet-view="quarterly"
-        >
-          Quarterly plan
-        </button>
-        <button
-          type="button"
-          class="app-sheet-tabs__tab"
-          id="sheet-tab-backlog"
-          role="tab"
-          aria-selected="false"
-          aria-controls="sheet-panel"
-          tabindex="-1"
-          data-sheet-view="backlog"
-        >
-          Backlog
-        </button>
-        <button
-          type="button"
-          class="app-sheet-tabs__tab"
-          id="sheet-tab-archive"
-          role="tab"
-          aria-selected="false"
-          aria-controls="sheet-panel"
-          tabindex="-1"
-          data-sheet-view="archive"
-        >
-          Archive
-        </button>
-        <button
-          type="button"
-          class="app-sheet-tabs__tab app-sheet-tabs__tab--add app-sheet-tabs__tab--with-icon"
-          title="Coming soon"
-        >
-          <i class="ph ph-plus" aria-hidden="true"></i>
-          Add new
-        </button>
-      </nav>
+      <div
+        class="app-sheet-wrap"
+        id="sheet-panel"
+        role="tabpanel"
+        aria-labelledby="sheet-tab-placeholder"
+      >
+        <div id="sheet-mount" class="app-sheet-mount"></div>
+      </div>
+
+      <nav class="app-sheet-tabs" id="sheet-tabs" aria-label="Sheet views" role="tablist"></nav>
     </div>
 
     <script src="/src/main.ts" type="module"></script>

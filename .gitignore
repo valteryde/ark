@@ -29,3 +29,6 @@ Thumbs.db
 
 deno.lock
 pnpm-lock.yaml
+
+*.pyc
+.venv/

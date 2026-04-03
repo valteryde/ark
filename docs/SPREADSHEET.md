@@ -87,6 +87,8 @@ Your backend can return JSON that maps almost 1:1 to `SpreadsheetConfig` (minus 
 
 Load row values with `GET`, fill a `SpreadsheetDataStore` implementation, then `mountSpreadsheet(el, { ...schemaFromApi, data: myStore })`.
 
+The bundled Ark app uses the HTTP + WebSocket contract in **[PARTNER_API.md](PARTNER_API.md)** (one sheet per URL, payloads with `rows`, collab events).
+
 ## Evolution
 
 - Async data store (`Promise` get/set) and partial virtualization.

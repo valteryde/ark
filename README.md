@@ -1,29 +1,39 @@
 # Ark
 
-Configurable spreadsheet UI for **API-driven** row/column data: a demo “Product Roadmap” shell plus an embeddable grid you mount with `mountSpreadsheet`. Vite builds static assets; **your backend owns routes, auth, and persistence**—see [docs/SPREADSHEET.md](docs/SPREADSHEET.md) for the config contract and TypeScript entrypoints (`src/spreadsheet/index.ts`).
+Configurable spreadsheet UI for **API-driven** row/column data. **Default behavior:** each URL path (e.g. **`/clients`**) loads **one** sheet via **`GET /api/ark/routing/{segment}`** (proxied to your partner). There is **no bootstrap** and **no in-app sheet tabs** in partner mode—only the offline **`?demo=1`** presets use tabs. The UI uses **`WebSocket /ws/ark`** for collab + tunnel persistence. The UI is bundled with **esbuild** into `dist/`; a **FastAPI** app in [`server/`](server/) serves `dist/`, **`/api/*`**, and **`/ws/ark`** when **`ARK_BACKEND_URL`** is set.
 
-**New here?** Follow **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for step-by-step setup (Node, first run, build, Docker, and connecting your API).
+Partner contract: **[docs/PARTNER_API.md](docs/PARTNER_API.md)**. Sample backend: [`example_api.py`](example_api.py).
+
+**New here?** Follow **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for Node, Python, first run, build, Docker, and backend wiring.
 
 ## Requirements
 
-- Node.js 20+ (for `npm` / local dev and Docker build stages)
+- **Node.js 20+** — `npm install`, `npm run build`, Docker frontend stage
+- **Python 3.12+** — optional locally; included in the Docker image for `uvicorn`
 
 ## Local development
+
+Two terminals from the repo root (directory with `package.json`):
 
 ```bash
 npm install
 npm run dev
 ```
 
-Opens the Vite dev server at [http://localhost:3000](http://localhost:3000).
+```bash
+pip install -r server/requirements.txt
+uvicorn app.main:app --reload --app-dir server --port 8000
+```
+
+Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/clients) when **`ARK_BACKEND_URL`** points at your partner and **`ARK_UI_ROUTES`** includes that segment. The site root **`/`** shows an error until you use a configured path. Use **`?demo=1`** for offline presets.
+
+`npm run dev` runs **esbuild in watch mode** and refreshes `dist/`; reload the browser after edits under `src/`.
+
+Optional: copy [`.env.example`](.env.example) to `.env` and set **`ARK_BACKEND_URL`** (no trailing slash).
 
 ### Deno task aliases
 
-If you use Deno, `deno task dev` / `deno task build` forward to the same npm scripts ([deno.json](deno.json)).
-
-### Proxying your API in dev
-
-Vite does not implement your HTTP API. Point the dev server at your backend with `server.proxy` in [vite.config.ts](vite.config.ts) (commented example for `/api` and `/ws`).
+If you use Deno, `deno task dev` / `deno task build` forward to the same npm scripts ([`deno.json`](deno.json)).
 
 ## Production build
 
@@ -31,67 +41,50 @@ Vite does not implement your HTTP API. Point the dev server at your backend with
 npm run build
 ```
 
-Output: `dist/`. Preview locally with `npm run serve`.
+Output: **`dist/`** (HTML, `assets/main.js`, `assets/main.css`, favicon). Serve with the FastAPI app or any static host.
 
-## Embedding and “your own router”
+## Embedding and backends
 
-- **Static hosting**: Deploy `dist/` behind nginx, Caddy, Kubernetes ingress, or any app server. Your service handles `/api/*` (and optional WebSockets) on the same host or another origin (configure CORS if split).
-- **Vite dev**: UI on port 3000; backend on its own port; use `server.proxy` so the browser talks same-origin.
-- **Node gateway** (Docker-friendly): One process serves `dist/` and reverse-proxies `/api` and `/ws` to `BACKEND_URL`—see [gateway/server.mjs](gateway/server.mjs). Useful when the browser should only see one origin and a future collab service lives on an internal network.
+- **Same-origin BFF**: Run `uvicorn` (or Docker). The browser uses **`GET /api/ark/routing/{path}`** (proxied to `{ARK_BACKEND_URL}/ark/routing/{path}`) and can use **`WebSocket /ws/ark`** for collaboration; the server **`POST`s** mapped events to **`{ARK_BACKEND_URL}/ark/tunnel`**.
+- **Static only**: Deploy `dist/` behind any reverse proxy if you do not need this repo’s Python routes.
 
-After `npm run build`, run `npm run gateway` (default **8080**). Use `PORT=4174 npm run gateway` if that port is busy.
+Embedders can still use **`mountSpreadsheet`** from TypeScript in their own apps; this repo’s default page is partner-first.
 
 ## Docker
 
-**Static image** (nginx + `dist/`):
+Single image (esbuild build + FastAPI):
 
 ```bash
-docker build -t ark:web .
-docker run --rm -p 8080:80 ark:web
+docker build -t ark:app .
+docker run --rm -p 8000:8000 -e ARK_BACKEND_URL= ark:app
 ```
 
-**Gateway image** (static UI + proxy to your API):
-
-```bash
-docker build -f Dockerfile.gateway -t ark:gateway .
-docker run --rm -p 4174:8080 -e BACKEND_URL=http://host.docker.internal:3000 ark:gateway
-```
-
-On Linux, `host.docker.internal` may require `extra_hosts`; prefer a Compose service name (e.g. `http://api:3000`) on a shared network.
-
-**Compose** (default: static on 8080):
+**Compose** (default port **8000**):
 
 ```bash
 docker compose up --build
 ```
 
-Optional gateway profile:
+**Full mini stack** (Ark + SQLite partner API in Compose): [examples/partner-sqlite-demo](examples/partner-sqlite-demo/README.md). Partner routes **`clients`** / **`records`** match **`/clients`** and **`/records`** (see **`ARK_UI_ROUTES`** in [`.env.example`](.env.example)).
 
-```bash
-docker compose --profile gateway up --build
-```
+### CI: GitHub Container Registry
 
-### CI: GitHub's registry (no Docker Hub)
-
-Images are pushed to **GitHub Container Registry** ([`ghcr.io`](https://docs.github.com/packages/working-with-a-github-packages-registry/working-with-the-container-registry)) — GitHub's built-in Docker/OCI store (GitHub Packages). The workflow uses only `GITHUB_TOKEN`; you do not need a separate registry account.
+Images are pushed to **GitHub Container Registry** ([`ghcr.io`](https://docs.github.com/packages/working-with-a-github-packages-registry/working-with-the-container-registry)). The workflow uses only `GITHUB_TOKEN`.
 
 On every push to **`main`**, [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) publishes:
 
 | Tag | Image |
 |-----|--------|
-| `latest` | Static nginx (`Dockerfile`) |
+| `latest` | Monolith (`Dockerfile`) |
 | `sha-<short>` | Same commit digest |
-| `gateway` | Node gateway (`Dockerfile.gateway`) |
-| `gateway-sha-<short>` | Gateway at that commit |
 
-Pull examples (replace `OWNER/REPO` with your GitHub `owner/repo`, lowercase):
+Pull example (replace `OWNER/REPO` with your GitHub `owner/repo`, lowercase):
 
 ```bash
 docker pull ghcr.io/OWNER/REPO:latest
-docker pull ghcr.io/OWNER/REPO:gateway
 ```
 
-The workflow uses `GITHUB_TOKEN`; ensure the repository **Actions** permissions allow **read and write** for packages (Settings → Actions → General → Workflow permissions), and set the published package visibility under **Packages** if needed.
+Ensure the repository **Actions** workflow permissions allow **read and write** for packages if publishing fails.
 
 ## Public API (TypeScript)
 
@@ -103,9 +96,8 @@ Import from `./spreadsheet` or paths under `src/spreadsheet/`:
 
 ## Manual smoke check
 
-- Switch sheet tabs (Quarterly / Backlog / Archive).
-- Edit a cell, undo/redo (keyboard or toolbar).
-- Formatting toolbar: bold, fill, borders, alignment, link (prompt).
+- **Partner mode**: Run [`example_api.py`](example_api.py) on port 9000, set `ARK_BACKEND_URL=http://127.0.0.1:9000`, open **`/clients`** or **`/records`**, edit cells, confirm tunnel hits (see server logs).
+- **Demo mode** (`?demo=1`): Quarterly / Backlog / Archive tabs, undo/redo, formatting toolbar (bold, fill, borders, alignment, link prompt).
 
 ## License
 

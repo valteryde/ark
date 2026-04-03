@@ -8,7 +8,7 @@
     "moduleResolution": "bundler",
     "noEmit": true,
     "strict": true,
-    "types": ["vite/client"]
+    "types": []
   },
   "include": ["src/**/*.ts"]
 }

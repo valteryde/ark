@@ -142,6 +142,34 @@ export function mountSpreadsheet(
     if (inp) inp.value = raw !== undefined ? String(raw) : '';
   }
 
+  function flashRemoteMarker(row: number, col: number, hue: number): void {
+    const el = cells.get(cellKey(row, col));
+    if (!el) return;
+    const h = ((hue % 360) + 360) % 360;
+    el.style.setProperty('--collab-flash-hue', String(h));
+    el.classList.add('sheet-cell--collab-remote-flash');
+    window.setTimeout(() => {
+      el.classList.remove('sheet-cell--collab-remote-flash');
+      el.style.removeProperty('--collab-flash-hue');
+    }, 800);
+  }
+
+  function applyExternalValue(
+    row: number,
+    col: number,
+    value: string | number,
+    options?: { remoteMarkerHue?: number },
+  ): boolean {
+    if (row < 1 || row > rowCountTotal || col < 1 || col > columnCountTotal) return false;
+    if (!cells.has(cellKey(row, col))) return false;
+    data.set(row, col, value);
+    hydrateCellFromStore(row, col);
+    if (options?.remoteMarkerHue !== undefined) {
+      flashRemoteMarker(row, col, options.remoteMarkerHue);
+    }
+    return true;
+  }
+
   function hydrateFromHistoryRecord(before: HistoryCellMap, after: HistoryCellMap): void {
     const keys = new Set<string>([...before.keys(), ...after.keys()]);
     for (const k of keys) {
@@ -1744,6 +1772,7 @@ export function mountSpreadsheet(
     endHistoryBatch() {
       history?.endBatch();
     },
+    applyExternalValue,
   };
 
   return handle;

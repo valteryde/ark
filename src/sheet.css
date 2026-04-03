@@ -324,6 +324,12 @@ body {
   cursor: pointer;
 }
 
+a.app-sheet-tabs__tab {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
 .app-sheet-tabs__tab:hover {
   color: var(--app-text);
 }
@@ -557,6 +563,30 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   background: var(--sheet-surface);
+}
+
+/* Remote collab: very light tint wash (hue 0–360 from peer), fades out quickly */
+.sheet-cell--collab-remote-flash {
+  z-index: 4;
+}
+
+.sheet-cell--collab-remote-flash::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background: hsl(var(--collab-flash-hue, 210) 42% 52% / 0.14);
+  animation: sheet-collab-remote-tint 0.75s ease-out forwards;
+}
+
+@keyframes sheet-collab-remote-tint {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 /* Above range-selection tint (::after) */
@@ -928,4 +958,31 @@ body {
 .sheet-suggest-row--active {
   background: var(--sheet-accent-bg);
   outline: none;
+}
+
+/* Partner sheet load error */
+.app-partner-error {
+  margin: 0 1.25rem 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: #fff8f0;
+  color: var(--app-text);
+}
+
+.app-partner-error__text {
+  margin: 0 0 0.5rem;
+  font-weight: 500;
+}
+
+.app-partner-error__hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.8125rem;
+  color: var(--app-text-muted);
+  line-height: 1.45;
+}
+
+.app-partner-error__demo-link {
+  font-size: 0.875rem;
+  color: var(--app-text);
 }

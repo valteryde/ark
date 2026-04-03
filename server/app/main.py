@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+import httpx
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+
+from .tunnel_map import map_to_tunnel
+
+logger = logging.getLogger("ark")
+
+BACKEND = os.environ.get("ARK_BACKEND_URL", "").rstrip("/")
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_DIST = _REPO_ROOT / "dist"
+STATIC_DIR = Path(os.environ.get("STATIC_ROOT", str(_DEFAULT_DIST))).resolve()
+
+app = FastAPI(title="Ark", description="UI + BFF for Ark spreadsheet")
+
+
+class CollabHub:
+    def __init__(self) -> None:
+        self._clients: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        self._clients.append(ws)
+
+    def disconnect(self, ws: WebSocket) -> None:
+        if ws in self._clients:
+            self._clients.remove(ws)
+
+    async def broadcast(self, message: dict[str, Any]) -> None:
+        dead: list[WebSocket] = []
+        for c in self._clients:
+            try:
+                await c.send_json(message)
+            except Exception:
+                dead.append(c)
+        for c in dead:
+            self.disconnect(c)
+
+
+hub = CollabHub()
+
+
+async def post_tunnel_async(body: dict[str, Any]) -> None:
+    if not BACKEND:
+        return
+    payload = map_to_tunnel(body)
+    url = f"{BACKEND}/ark/tunnel"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(url, json=payload)
+            r.raise_for_status()
+    except Exception as e:
+        logger.warning("ark tunnel POST failed: %s", e)
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.api_route("/api/ark/routing/{path:path}", methods=["GET", "HEAD"])
+async def proxy_routing(path: str, request: Request) -> Response:
+    if not BACKEND:
+        return JSONResponse(
+            {"detail": "ARK_BACKEND_URL is not set"},
+            status_code=503,
+        )
+    url = f"{BACKEND}/ark/routing/{path}"
+    headers: dict[str, str] = {}
+    for h in ("authorization", "cookie", "accept", "accept-language"):
+        v = request.headers.get(h)
+        if v:
+            headers[h] = v
+    params = list(request.query_params.multi_items())
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        r = await client.request(request.method, url, headers=headers, params=params)
+    ct = r.headers.get("content-type")
+    out_headers: dict[str, str] = {}
+    if ct:
+        out_headers["content-type"] = ct
+    return Response(content=r.content, status_code=r.status_code, headers=out_headers)
+
+
+@app.websocket("/ws/ark")
+async def collab_ws(websocket: WebSocket) -> None:
+    await hub.connect(websocket)
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_json({"error": "invalid_json"})
+                continue
+            if not isinstance(data, dict):
+                await websocket.send_json({"error": "expected_object"})
+                continue
+            await hub.broadcast(data)
+            asyncio.create_task(post_tunnel_async(data))
+    except WebSocketDisconnect:
+        hub.disconnect(websocket)
+
+
+_UI_SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$", re.IGNORECASE)
+
+
+def _ui_route_segments() -> list[str]:
+    raw = os.environ.get("ARK_UI_ROUTES", "clients,records")
+    out: list[str] = []
+    for s in raw.split(","):
+        seg = s.strip()
+        if seg and _UI_SEGMENT_RE.fullmatch(seg):
+            out.append(seg)
+    return out
+
+
+if STATIC_DIR.is_dir():
+    _index_html = STATIC_DIR / "index.html"
+
+    def _spa_shell() -> FileResponse:
+        return FileResponse(_index_html)
+
+    for _seg in _ui_route_segments():
+        app.add_api_route(
+            f"/{_seg}",
+            _spa_shell,
+            methods=["GET"],
+            include_in_schema=False,
+        )
+
+    app.mount(
+        "/",
+        StaticFiles(directory=str(STATIC_DIR), html=True),
+        name="static",
+    )
+else:
+
+    @app.get("/")
+    def missing_dist() -> JSONResponse:
+        return JSONResponse(
+            {
+                "detail": "Static UI not built. From repo root run: npm install && npm run build",
+            },
+            status_code=503,
+        )

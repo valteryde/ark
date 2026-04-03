@@ -1,20 +1,8 @@
-# Production: static UI on port 8080.
 services:
   ark:
     build: .
     ports:
-      - '8080:80'
-
-  # Optional: UI + API/WS proxy. Example BACKEND_URL for Compose-internal API:
-  #   BACKEND_URL: http://api:3000
-  #   depends_on: [api]
-  ark-gateway:
-    profiles: ['gateway']
-    build:
-      context: .
-      dockerfile: Dockerfile.gateway
-    ports:
-      - '4174:8080'
+      - '8000:8000'
     environment:
-      BACKEND_URL: http://host.docker.internal:3000
-      PORT: '8080'
+      # Optional: your partner API base (no trailing slash)
+      ARK_BACKEND_URL: ''
