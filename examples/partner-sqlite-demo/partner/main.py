@@ -10,9 +10,18 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 
 DB_PATH = Path(os.environ.get("PARTNER_DB", "/data/partner.db"))
+
+
+def _optional_example_partner_token(request: Request) -> None:
+    expected = os.environ.get("EXAMPLE_PARTNER_TOKEN", "").strip()
+    if not expected:
+        return
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="invalid or missing partner token")
 
 
 @contextmanager
@@ -111,7 +120,8 @@ def records_sheet() -> dict:
 
 
 @app.get("/ark/routing/{path:path}")
-async def ark_routing(path: str):
+async def ark_routing(path: str, request: Request):
+    _optional_example_partner_token(request)
     if path == "clients":
         return clients_sheet()
     if path == "records":
@@ -171,6 +181,7 @@ def apply_tunnel_update(data: dict) -> None:
 
 @app.post("/ark/tunnel")
 async def ark_tunnel(request: Request):
+    _optional_example_partner_token(request)
     data = await request.json()
     try:
         apply_tunnel_update(data)

@@ -1,5 +1,6 @@
 import { getCollabClientIdentity } from './partner/collab-session.ts';
 import { PartnerFetchError, fetchRoutingJson } from './partner/fetch-routing.ts';
+import { initPartnerTokenFromLocation } from './partner/partner-token.ts';
 import { normalizePartnerSheetPayload, rowsToInitialMap, sheetPayloadToConfig } from './partner/map-sheet-payload.ts';
 import { openCollabWs } from './partner/collab-ws.ts';
 import {
@@ -183,6 +184,7 @@ function pathSegmentFromLocation(): string {
 }
 
 function initPartnerMode(): void {
+  initPartnerTokenFromLocation();
   hidePartnerError();
   sheetTabList.hidden = true;
   sheetTabList.replaceChildren();

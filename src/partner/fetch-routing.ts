@@ -1,3 +1,5 @@
+import { partnerAuthHeaders } from './partner-token.ts';
+
 /** Encode each path segment for use in /api/ark/routing/{path}. */
 function encodeRoutingPath(path: string): string {
   return path
@@ -21,8 +23,12 @@ export class PartnerFetchError extends Error {
 export async function fetchRoutingJson<T>(path: string): Promise<T> {
   const url = `/api/ark/routing/${encodeRoutingPath(path)}`;
   let res: Response;
+  const auth = partnerAuthHeaders();
   try {
-    res = await fetch(url, { credentials: 'same-origin' });
+    res = await fetch(url, {
+      credentials: 'same-origin',
+      ...(Object.keys(auth).length > 0 ? { headers: auth } : {}),
+    });
   } catch (e) {
     throw new PartnerFetchError(
       `Network error fetching ${url}: ${e instanceof Error ? e.message : String(e)}`,

@@ -54,7 +54,6 @@ Other **`type`** values and the exact mapping from WebSocket messages are docume
 
 - Treat tunnel posts as **best-effort notifications** unless you define stronger guarantees; the sample partner overwrites storage from each event.
 - Order is generally **sequential per deploy**; design idempotency if you retry or scale out.
-- The BFF’s tunnel **`POST` does not forward the user’s `Cookie` / `Authorization`** today—only the routing proxy does. If tunnel calls must be user-scoped, use an internal secret, network policy, or extend Ark to forward credentials (see issue/discussion in the repo if you need that).
 
 ## URLs and routing
 
@@ -66,12 +65,20 @@ Details: **[PARTNER_API.md](PARTNER_API.md)** (browser URLs section).
 
 ## Authentication and credentials
 
-For **`GET /ark/routing/{path}`**, the BFF forwards:
+### Partner token (recommended for user-scoped access)
 
-- **`Authorization`**
-- **`Cookie`**
+When your app **redirects** the user into Ark, add **`ark_token`** to the URL (query or hash). The SPA stores it in **`sessionStorage`**, sends **`Authorization: Bearer <token>`** on **`GET /api/ark/routing/{path}`**, and passes the same token on the **WebSocket** query string so the BFF can attach **`Authorization`** to **`POST /ark/tunnel`**.
 
-Validate sessions or JWTs on the partner as you would for your main app. Return **`401`** when the user is not authenticated; the UI should treat that as “not allowed to load this sheet.”
+- **Query:** `https://ark.example.com/clients?ark_token=…` — simple; the token may appear in server access logs for the initial HTML request.
+- **Hash:** `https://ark.example.com/clients#ark_token=…` — the token is not sent to Ark on the first navigation; the SPA reads it from the hash, persists it, and strips it from the address bar.
+
+Ark does **not** validate the token; your **`GET /ark/routing/*`** and **`POST /ark/tunnel`** handlers should require a valid **`Authorization`** header and return **`401`** when it is missing or invalid.
+
+Full contract: **[PARTNER_API.md](PARTNER_API.md)** (partner token section).
+
+### Cookies and other headers
+
+For **`GET /ark/routing/{path}`**, the BFF also forwards **`Cookie`** and standard accept headers from the browser. You can combine cookies with a partner token if your deployment sets same-origin cookies on the Ark host.
 
 ## Examples in this repository
 

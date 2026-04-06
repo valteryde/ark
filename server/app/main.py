@@ -54,15 +54,29 @@ hub = CollabHub()
 # Ephemeral WebSocket-only messages; do not POST to partner tunnel.
 _TUNNEL_SKIP_TYPES = frozenset({"cell.presence", "cell.presence_clear"})
 
+# Browser WebSocket passes the partner token as a query param (same name as the SPA).
+_PARTNER_TOKEN_QUERY = "ark_token"
 
-async def post_tunnel_async(body: dict[str, Any]) -> None:
+
+def _tunnel_headers_from_ws(websocket: WebSocket) -> dict[str, str]:
+    token = websocket.query_params.get(_PARTNER_TOKEN_QUERY)
+    if token:
+        return {"authorization": f"Bearer {token}"}
+    return {}
+
+
+async def post_tunnel_async(
+    body: dict[str, Any],
+    partner_headers: dict[str, str] | None = None,
+) -> None:
     if not BACKEND:
         return
     payload = map_to_tunnel(body)
     url = f"{BACKEND}/ark/tunnel"
+    headers = dict(partner_headers) if partner_headers else {}
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(url, json=payload)
+            r = await client.post(url, json=payload, headers=headers)
             r.raise_for_status()
     except Exception as e:
         logger.warning("ark tunnel POST failed: %s", e)
@@ -98,6 +112,7 @@ async def proxy_routing(path: str, request: Request) -> Response:
 
 @app.websocket("/ws/ark")
 async def collab_ws(websocket: WebSocket) -> None:
+    tunnel_headers = _tunnel_headers_from_ws(websocket)
     await hub.connect(websocket)
     try:
         while True:
@@ -112,7 +127,9 @@ async def collab_ws(websocket: WebSocket) -> None:
                 continue
             await hub.broadcast(data)
             if data.get("type") not in _TUNNEL_SKIP_TYPES:
-                asyncio.create_task(post_tunnel_async(data))
+                asyncio.create_task(
+                    post_tunnel_async(data, tunnel_headers if tunnel_headers else None),
+                )
     except WebSocketDisconnect:
         hub.disconnect(websocket)
 

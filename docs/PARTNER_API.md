@@ -6,6 +6,16 @@ Ark’s browser app talks **same-origin** to the Ark BFF (`server/app/main.py`).
 
 Ark is **one spreadsheet per browser URL**. There is **no bootstrap** and **no in-app tab navigation** between sheets: opening **`/clients`** loads that sheet only; **`/records`** is a separate page with its own grid. Link between them with normal HTML links if you want.
 
+## Partner token (`ark_token`)
+
+Partners can redirect users to Ark with a **token** the partner will recognize on its own API:
+
+1. Add **`ark_token`** to the landing URL (**query** `?ark_token=…` or **hash** `#ark_token=…`).
+2. The browser app saves it in **`sessionStorage`**, removes it from the visible URL, and on each routing request sends **`Authorization: Bearer <token>`** to the BFF (which forwards it to **`GET {ARK_BACKEND_URL}/ark/routing/{path}`**).
+3. The collab **WebSocket** is opened as **`/ws/ark?ark_token=…`** (browsers cannot set custom WebSocket headers). The BFF reads the token at connect time and sends **`Authorization: Bearer <token>`** on each **`POST {ARK_BACKEND_URL}/ark/tunnel`** for messages from that connection.
+
+Use **HTTPS** and **short-lived** tokens in production. Prefer **hash** over **query** if you want to avoid the token in the initial document request and some referrer chains. Ark does not interpret the token—only forwards it.
+
 ## Routes you implement
 
 ### `GET /ark/routing/{path}` (sheet payload)
@@ -145,6 +155,8 @@ Each row is a **plain JSON object**. Keys should match column **`id`** strings. 
 
 The BFF forwards mapped events when users edit the grid or when collab messages are processed. Implement persistence here.
 
+When the browser connected to **`/ws/ark`** with **`?ark_token=…`**, the BFF includes **`Authorization: Bearer <token>`** on tunnel **`POST`s** from that WebSocket. With no token, the tunnel request has no extra auth headers (same as before).
+
 **Shapes Ark sends** (after BFF mapping from WebSocket events):
 
 - `{ "type": "update_cell", "row", "col", "columnId", "value", "meta" }` — cell value committed.
@@ -177,5 +189,6 @@ You may use a longer routing suffix (e.g. `api/clients`) if the URL path is stil
 - Authoritative REST `PATCH` per row/cell (tunnel-only persistence is enough for the sample).
 - Formatting-only tunnel events (`mergeCellStyle`) — value commits only in v1.
 - Authoritative **locking** or merge conflict resolution (presence outlines are indicative only).
+- Ark-side **validation** of partner tokens (only pass-through; partners validate **`Authorization`**).
 
 See [SPREADSHEET.md](SPREADSHEET.md) for grid behavior, undo, and column types.

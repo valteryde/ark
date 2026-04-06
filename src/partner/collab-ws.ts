@@ -1,8 +1,13 @@
 import type { CellPresenceClearEvent, CellPresenceEvent, CellValueCommittedEvent } from './types.ts';
+import { PARTNER_TOKEN_PARAM, getPartnerToken } from './partner-token.ts';
 
 export function collabWsUrl(): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}/ws/ark`;
+  const base = `${proto}//${window.location.host}/ws/ark`;
+  const token = getPartnerToken();
+  if (!token) return base;
+  const q = new URLSearchParams({ [PARTNER_TOKEN_PARAM]: token });
+  return `${base}?${q}`;
 }
 
 function parseCommitted(

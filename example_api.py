@@ -4,12 +4,25 @@ Run: uvicorn example_api:app --port 9000
 Set ARK_BACKEND_URL=http://127.0.0.1:9000 on the Ark server.
 Set ARK_UI_ROUTES=clients,records so /clients and /records serve the SPA.
 
+Optional: set EXAMPLE_PARTNER_TOKEN to require Authorization: Bearer <token> on routing and tunnel.
+
 See docs/PARTNER_API.md for the full contract.
 """
 
-from fastapi import FastAPI, Request
+import os
+
+from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
+
+
+def _optional_example_partner_token(request: Request) -> None:
+    expected = os.environ.get("EXAMPLE_PARTNER_TOKEN", "").strip()
+    if not expected:
+        return
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="invalid or missing partner token")
 
 
 def clients_sheet() -> dict:
@@ -56,7 +69,8 @@ def records_sheet() -> dict:
 
 
 @app.get("/ark/routing/{path:path}")
-async def ark_routing(path: str):
+async def ark_routing(path: str, request: Request):
+    _optional_example_partner_token(request)
     if path == "clients":
         return clients_sheet()
     if path == "records":
@@ -66,6 +80,7 @@ async def ark_routing(path: str):
 
 @app.post("/ark/tunnel")
 async def ark_tunnel(request: Request):
+    _optional_example_partner_token(request)
     data = await request.json()
     if data.get("type") == "new_cell":
         return {"status": "success"}
