@@ -8,9 +8,9 @@ This document is the contract that both sides should align on.
 
 ## Architecture
 
-1. **`SpreadsheetConfig`** — Declares columns (id, header, width, optional `displayStyle`, optional `readOnly` for system/computed columns shown darker and non-editable), optional **value typing** (`valueType`, `selectOptions`, `allowEmpty`), row count, default row height, which **cell renderers** are allowed, and which **UI capabilities** the backend says are available (toolbar, future actions).
+1. **`SpreadsheetConfig`** — Declares columns (id, header, width, optional `readOnly` for system/computed columns shown darker and non-editable), optional **value typing** (`valueType`, `selectOptions`, `allowEmpty`), row count, default row height, and which **UI capabilities** the backend says are available (toolbar, future actions).
 2. **`SpreadsheetDataStore`** — Synchronous `get` / `set` per `(row, col)` plus optional **`getCellStyle(row, col)`** returning inline CSS as kebab-case keys (e.g. `{ "background-color": "#f5f5f5" }`) applied to the cell shell. **This is the seam for REST**: implement with `fetch`, cache, PATCH/PUT on commit, etc. The default **`createInMemoryDataStore(initial)`** accepts either a plain `string | number` or `{ value, style? }` per `"row:col"` key for demos and tests. For **undo/redo**, the in-memory store also implements **`hasCell`**, **`getStoredCell`**, and **`replaceCell(row, col, cell | null)`** (`null` removes the key). Custom adapters that omit these methods get **`historyEnabled: false`** on the mount handle; undo/redo shortcuts and toolbar actions stay inert.
-3. **Cell display styles** — Named renderers (`priority`, `status`, `assignee`, `plain`). The backend sends **`enabledCellStyles`**: if `priority` is not enabled, priority columns render as escaped plain text even if the column asks for `displayStyle: 'priority'`. That keeps presentation policy on the server.
+3. **Select column chips** — For `valueType: 'select'`, each **`selectOptions`** entry can include optional **`color`**, **`backgroundColor`**, and **`icon`** (Phosphor icon name). The UI renders a small chip when any of these are present; see **[PARTNER_API.md](PARTNER_API.md)**.
 4. **`enabledUiCapabilities`** — Optional set of toolbar/feature flags (undo, bold, fill, …). The shell hides or disables controls based on this; it is the **documented contract** for API payloads.
 
 ### Naming: `mergeCellStyle` vs toolbar
@@ -29,9 +29,9 @@ The demo app shell (tabs, header) is **not** part of the spreadsheet package; on
 
 - **`text`** (default) — Free text; commit stores the string as entered (no extra validation in v1).
 - **`number`** — Commit accepts a trimmed string that parses to a finite number; empty string is allowed; invalid input is rejected and the editor reverts to the last stored value.
-- **`select`** — Constrained to **`selectOptions`**: each entry is `{ "value": string, "label"?: string }`. The store always holds the canonical **`value`**. The cell editor is still a text field; a **suggestion list** filters options as the user types (prefix then substring, case-insensitive). **Alt+ArrowDown** opens the full list. With the list open, **ArrowUp/ArrowDown** move the highlight, **Enter** applies the highlight (or commits the typed value if none), **Tab** applies the highlight or the first match, **Escape** closes the list. A value that does not match any option on commit is rejected and the editor reverts. If **`allowEmpty`** is `false`, an empty cell commits as the first option’s value (default `allowEmpty` is true).
+- **`select`** — Constrained to **`selectOptions`**: each entry is `{ "value": string, "label"?: string, "color"?: string, "backgroundColor"?: string, "icon"?: string }` (see PARTNER_API for chip fields). The store always holds the canonical **`value`**. The cell editor is still a text field; a **suggestion list** filters options as the user types (prefix then substring, case-insensitive). **Alt+ArrowDown** opens the full list. With the list open, **ArrowUp/ArrowDown** move the highlight, **Enter** applies the highlight (or commits the typed value if none), **Tab** applies the highlight or the first match, **Escape** closes the list. A value that does not match any option on commit is rejected and the editor reverts. If **`allowEmpty`** is `false`, an empty cell commits as the first option’s value (default `allowEmpty` is true).
 
-Display styles (e.g. `status` pills) still use the canonical **`value`** for styling; **`label`** is only for showing a different string in the suggestion list and in the cell when provided.
+Chip styling uses the canonical **`value`** to find the option; **`label`** is for display text when set.
 
 ## Data flow (REST mental model)
 
@@ -41,7 +41,7 @@ Display styles (e.g. `status` pills) still use the canonical **`value`** for sty
 
 ## Security note
 
-Rich cell HTML is built only from **known templates** + escaped user text. Do not pipe arbitrary server HTML into cells without a separate, explicit escape hatch and sanitization policy.
+Rich cell HTML for select chips is built from **sanitized** `color` / `backgroundColor` strings, a restricted **`icon`** name, and **escaped** labels. Do not pipe arbitrary server HTML into cells without a separate, explicit escape hatch and sanitization policy.
 
 ## Undo / redo
 
@@ -64,19 +64,35 @@ Your backend can return JSON that maps almost 1:1 to `SpreadsheetConfig` (minus 
 {
   "rowCount": 100,
   "defaultRowHeightPx": 28,
-  "enabledCellStyles": ["priority", "status", "assignee"],
   "enabledUiCapabilities": ["undo", "redo", "functions"],
   "columns": [
-    { "id": "title", "header": "TASK NAME", "widthPx": 240, "displayStyle": "plain" },
-    { "id": "priority", "header": "PRIORITY", "widthPx": 108, "displayStyle": "priority" },
+    { "id": "title", "header": "TASK NAME", "widthPx": 240 },
+    {
+      "id": "priority",
+      "header": "PRIORITY",
+      "widthPx": 108,
+      "valueType": "select",
+      "selectOptions": [
+        {
+          "value": "HIGH",
+          "backgroundColor": "#d8f3dc",
+          "color": "#1b4332",
+          "icon": "arrow-up"
+        }
+      ]
+    },
     {
       "id": "status",
       "header": "STATUS",
       "widthPx": 128,
-      "displayStyle": "status",
       "valueType": "select",
       "selectOptions": [
-        { "value": "In Progress" },
+        {
+          "value": "In Progress",
+          "backgroundColor": "#dbeafe",
+          "color": "#1d4ed8",
+          "icon": "circle-notch"
+        },
         { "value": "Not Started" },
         { "value": "Completed" }
       ]
@@ -92,5 +108,5 @@ The bundled Ark app uses the HTTP + WebSocket contract in **[PARTNER_API.md](PAR
 ## Evolution
 
 - Async data store (`Promise` get/set) and partial virtualization.
-- Server-sent `enabledCellStyles` / `enabledUiCapabilities` as JSON alongside column definitions.
+- Server-sent `enabledUiCapabilities` as JSON alongside column definitions.
 - Row identities (`rowId`) in config for stable CRUD keys.

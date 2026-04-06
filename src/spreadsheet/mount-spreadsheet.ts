@@ -1,6 +1,6 @@
 import '../sheet.css';
 
-import { formatCellHtml } from './cell-display.ts';
+import { formatCellHtml, formatSelectOptionMarkup } from './cell-display.ts';
 import {
   columnValueType,
   filterSelectOptions,
@@ -10,14 +10,13 @@ import {
 import { cellKey } from './data-store.ts';
 import { cellMapsEqual, createSpreadsheetHistory, type HistoryCellMap } from './history.ts';
 import type {
-  CellDisplayStyle,
   SpreadsheetColumn,
   SpreadsheetConfig,
   SpreadsheetCellInit,
   SpreadsheetMountHandle,
   SpreadsheetSelectOption,
 } from './types.ts';
-import { resolveEnabledCellStyles, resolveEnabledUiCapabilities } from './types.ts';
+import { resolveEnabledUiCapabilities } from './types.ts';
 
 function getCellEditor(cell: HTMLElement): HTMLInputElement | null {
   return cell.querySelector<HTMLInputElement>('.sheet-cell-input');
@@ -27,9 +26,8 @@ function applyCellDisplay(
   content: HTMLDivElement,
   column: SpreadsheetColumn | undefined,
   value: string,
-  enabledStyles: ReadonlySet<CellDisplayStyle>,
 ): void {
-  content.innerHTML = formatCellHtml(column, value, enabledStyles);
+  content.innerHTML = formatCellHtml(column, value);
 }
 
 const SHEET_STYLE_PROPS_ATTR = 'data-sheet-style-props';
@@ -72,7 +70,6 @@ export function mountSpreadsheet(
   const defaultRowHeight = config.defaultRowHeightPx ?? 28;
   const rowHeights = Array.from({ length: rowCountTotal }, () => defaultRowHeight);
   const columnWidths = columns.map((c) => c.widthPx);
-  const enabledCellStyles = resolveEnabledCellStyles(config.enabledCellStyles);
 
   const cumulativeRowHeights: number[] = Array.from({ length: rowCountTotal }, () => 0);
   for (let i = 1; i < rowCountTotal; i++) {
@@ -136,7 +133,7 @@ export function mountSpreadsheet(
     const raw = data.get(row, col);
     const display = raw !== undefined ? String(raw) : '';
     const content = el.querySelector<HTMLDivElement>('.sheet-cell-content');
-    if (content) applyCellDisplay(content, colDef, display, enabledCellStyles);
+    if (content) applyCellDisplay(content, colDef, display);
     syncCellChrome(row, col);
     const inp = getCellEditor(el);
     if (inp) inp.value = raw !== undefined ? String(raw) : '';
@@ -259,7 +256,7 @@ export function mountSpreadsheet(
     const recordHistory = history !== null && !persistActiveInputSkipHistory;
     const before = recordHistory ? captureSnapshot([k]) : null;
     data.set(active.row, active.col, parsed.value);
-    applyCellDisplay(content, col, String(parsed.value), enabledCellStyles);
+    applyCellDisplay(content, col, String(parsed.value));
     syncCellChrome(active.row, active.col);
     if (recordHistory && before) {
       const after = captureSnapshot([k]);
@@ -787,7 +784,7 @@ export function mountSpreadsheet(
 
       const content = document.createElement('div');
       content.className = 'sheet-cell-content';
-      applyCellDisplay(content, columnAt(col), display, enabledCellStyles);
+      applyCellDisplay(content, columnAt(col), display);
 
       const input = document.createElement('input');
       input.className = 'sheet-cell-input';
@@ -875,7 +872,7 @@ export function mountSpreadsheet(
       row.setAttribute('role', 'option');
       row.dataset.index = String(i);
       const opt = matches[i]!;
-      row.textContent = opt.label ?? opt.value;
+      row.innerHTML = formatSelectOptionMarkup(opt, opt.label ?? opt.value);
       row.addEventListener('pointerdown', (ev) => {
         ev.preventDefault();
         if (blurHideTimer !== null) {
@@ -1590,7 +1587,7 @@ export function mountSpreadsheet(
         if (isReadOnlyCol(c)) return;
         data.set(r, c, '');
         const contentEl = cell.querySelector<HTMLDivElement>('.sheet-cell-content')!;
-        applyCellDisplay(contentEl, columnAt(c), '', enabledCellStyles);
+        applyCellDisplay(contentEl, columnAt(c), '');
         getCellEditor(cell)!.value = '';
         syncCellChrome(r, c);
       });

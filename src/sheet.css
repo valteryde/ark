@@ -640,9 +640,7 @@ a.app-sheet-tabs__tab {
   display: block !important;
 }
 
-.sheet-cell-readonly .sheet-priority,
-.sheet-cell-readonly .sheet-status,
-.sheet-cell-readonly .sheet-assignee {
+.sheet-cell-readonly .sheet-select-pill {
   opacity: 0.92;
 }
 
@@ -713,88 +711,34 @@ a.app-sheet-tabs__tab {
   background: transparent;
 }
 
-/* Priority pills */
-.sheet-priority {
-  display: inline-block;
-  padding: 0.2rem 0.5rem;
-  font-size: 0.6875rem;
+/* Select column chips (partner-defined colors + Phosphor icons) */
+.sheet-select-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
   border-radius: 5px;
-  line-height: 1.2;
-}
-
-.sheet-priority--high {
-  background: #d8f3dc;
-  color: #1b4332;
-}
-
-.sheet-priority--medium {
-  background: #fde8d4;
-  color: #9a3412;
-}
-
-.sheet-priority--urgent {
-  background: #ffd6e0;
-  color: #9d174d;
-}
-
-/* Status with dot */
-.sheet-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.8125rem;
-}
-
-.sheet-status::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.sheet-status--in-progress {
-  color: #2563eb;
-}
-
-.sheet-status--in-progress::before {
-  background: #2563eb;
-}
-
-.sheet-status--not-started {
-  color: #8a8a8a;
-}
-
-.sheet-status--not-started::before {
-  background: #c4c4c4;
-}
-
-.sheet-status--completed {
-  color: #1a1a1a;
-}
-
-.sheet-status--completed::before {
-  background: #1a1a1a;
-}
-
-/* Assignee row */
-.sheet-assignee {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
+  line-height: 1.25;
+  box-sizing: border-box;
+  border: 1px solid rgb(0 0 0 / 6%);
   min-width: 0;
 }
 
-.sheet-assignee-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+.sheet-select-pill .ph {
   flex-shrink: 0;
-  background: linear-gradient(135deg, #c7d2fe 0%, #a5b4fc 100%);
-  border: 1px solid rgb(0 0 0 / 6%);
+  font-size: 0.95em;
+  opacity: 0.95;
+}
+
+.sheet-select-pill__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Suggestion popover (select / enum columns) */

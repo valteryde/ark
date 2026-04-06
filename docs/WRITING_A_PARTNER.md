@@ -27,6 +27,8 @@ The UI turns your JSON into a grid configuration aligned with TypeScript types i
 
 **Minimum concept:** an array of **columns** (id, header, width, optional read-only / value types) and an array of **rows** (plain objects whose keys match column **`id`** values). You can also use a **nested** shape with **`sheets`**; Ark normalizes using the first sheet.
 
+For **dropdown columns** with colored chips and icons, use **`valueType: "select"`** and put **`color`**, **`backgroundColor`**, and **`icon`** on each **`selectOptions`** entry (see **[PARTNER_API.md](PARTNER_API.md)**).
+
 **Full field list, nested shapes, and UI flags** — see **[PARTNER_API.md](PARTNER_API.md)** (routing section).
 
 ## Persistence: `POST /ark/tunnel`

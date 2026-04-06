@@ -1,10 +1,4 @@
 /**
- * Declarative cell renderers. The backend enables a subset via
- * `SpreadsheetConfig.enabledCellStyles`; disabled styles never run (cells render as plain text).
- */
-export type CellDisplayStyle = 'plain' | 'priority' | 'status' | 'assignee';
-
-/**
  * Toolbar / chrome features the backend may expose. The app shell can hide controls when
  * a capability is missing (wiring TBD); the contract is defined here for API payloads.
  */
@@ -25,6 +19,15 @@ export type UiToolbarCapability =
 export interface SpreadsheetSelectOption {
   value: string;
   label?: string;
+  /**
+   * Phosphor icon name (lowercase, hyphens), e.g. `check-circle` → classes `ph ph-check-circle`.
+   * Must match /^[a-z0-9-]+$/ after trim. Invalid values are ignored at render time.
+   */
+  icon?: string;
+  /** CSS color for pill text (hex or safe rgb/rgba only; validated at render time). */
+  color?: string;
+  /** CSS background for the pill (hex or safe rgb/rgba only). */
+  backgroundColor?: string;
 }
 
 export type SpreadsheetColumnValueType = 'text' | 'number' | 'select';
@@ -34,8 +37,6 @@ export interface SpreadsheetColumn {
   id: string;
   header: string;
   widthPx: number;
-  /** Visual renderer; respects `enabledCellStyles`. */
-  displayStyle?: CellDisplayStyle;
   /**
    * When true, cells are display-only (darker styling, no edit). Backend-driven computed / system fields.
    */
@@ -91,17 +92,10 @@ export interface SpreadsheetConfig {
   defaultRowHeightPx?: number;
   data: SpreadsheetDataStore;
   /**
-   * Cell renderers the backend allows. If omitted, all non-plain styles are enabled.
-   * If empty, only plain text rendering is used.
-   */
-  enabledCellStyles?: ReadonlySet<CellDisplayStyle> | CellDisplayStyle[];
-  /**
    * Toolbar features the backend exposes (for chrome binding).
    */
   enabledUiCapabilities?: ReadonlySet<UiToolbarCapability> | UiToolbarCapability[];
 }
-
-export const CELL_STYLES_WITH_RENDERERS: CellDisplayStyle[] = ['priority', 'status', 'assignee'];
 
 export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
   'undo',
@@ -116,16 +110,6 @@ export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
   'comment',
   'functions',
 ];
-
-export function resolveEnabledCellStyles(
-  enabled?: ReadonlySet<CellDisplayStyle> | CellDisplayStyle[],
-): Set<CellDisplayStyle> {
-  if (enabled === undefined) {
-    return new Set(CELL_STYLES_WITH_RENDERERS);
-  }
-  const list = enabled instanceof Set ? [...enabled] : [...enabled];
-  return new Set(list);
-}
 
 export function resolveEnabledUiCapabilities(
   enabled?: ReadonlySet<UiToolbarCapability> | UiToolbarCapability[],

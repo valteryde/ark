@@ -27,15 +27,119 @@ Returns a **SheetPayload** used to build [`SpreadsheetConfig`](https://github.co
 | `sheets` | no | If present, first element supplies `columns` / `rows` / `rowCount` when top-level fields are omitted |
 | `rowCount` | no | Default: at least `rows.length`, minimum 1 |
 | `defaultRowHeightPx` | no | Passed through to config |
-| `enabledCellStyles` | no | Subset of `plain` \| `priority` \| `status` \| `assignee` |
 | `enabledUiCapabilities` | no | Toolbar flags (see SPREADSHEET.md) |
 
-**Column object** (aligned with `SpreadsheetColumn`):
+**Column object** (aligned with [`SpreadsheetColumn`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/types.ts)):
 
-- `id` (string), `header` (string), `widthPx` (number)
-- Optional: `displayStyle`, `readOnly`, `valueType`, `selectOptions`, `allowEmpty`
+| Field | Required | Description |
+| ----- | -------- | ----------- |
+| `id` | yes | Stable key for the column and for row objects (e.g. API field name). |
+| `header` | yes | Column label in the grid header. |
+| `widthPx` | yes | Width in CSS pixels. |
+| `readOnly` | no | If `true`, the cell cannot be edited (computed / system fields). |
+| `valueType` | no | **`text`** (default), **`number`**, or **`select`**. Affects validation and editors. |
+| `selectOptions` | no | When `valueType` is **`select`**, list of option objects (see below). |
+| `allowEmpty` | no | On **`select`** columns: if `false`, committing empty uses the first option’s value. Default **`true`**. |
 
-**Rows:** Each row is a plain object, e.g. `{ "id": 1, "name": "Acme" }`. Values are coerced to strings/numbers for cells. Missing keys become empty cells.
+#### Select options and chips
+
+For **`valueType: "select"`**, each entry in **`selectOptions`** is an object:
+
+| Field | Required | Description |
+| ----- | -------- | ----------- |
+| `value` | yes | Stored cell value; commits must match exactly. |
+| `label` | no | Shown in the grid and picker when set; otherwise `value` is shown. |
+| `color` | no | Text color for the option chip (hex `#rgb` / `#rrggbb` / `#rrggbbaa`, or `rgb()` / `rgba()` with numeric components only). Invalid strings are ignored. |
+| `backgroundColor` | no | Chip background; same validation as `color`. |
+| `icon` | no | [Phosphor](https://phosphoricons.com/) **regular** icon name, lowercase with hyphens (e.g. `check-circle` → CSS classes `ph ph-check-circle`). Invalid names are ignored. |
+
+If an option has **at least one** of `color`, `backgroundColor`, or a valid `icon`, the cell (and suggestion list) renders a **chip** with those styles. Options with **none** of these render as **plain escaped text** (label or value).
+
+**Text and number columns** are always plain text (no per-column display style enum).
+
+#### Rows
+
+Each row is a **plain JSON object**. Keys should match column **`id`** strings. Values are turned into cell values (strings/numbers). If a row omits a column id, that cell is empty.
+
+**Example — minimal sheet**
+
+```json
+{
+  "title": "Clients",
+  "columns": [
+    { "id": "name", "header": "Name", "widthPx": 200 },
+    { "id": "revenue", "header": "Revenue", "widthPx": 120, "valueType": "number" }
+  ],
+  "rows": [
+    { "name": "Acme Corp", "revenue": 120000 },
+    { "name": "Beta LLC", "revenue": 45000 }
+  ]
+}
+```
+
+**Example — select columns with custom chips**
+
+```json
+{
+  "title": "Tasks",
+  "columns": [
+    { "id": "title", "header": "Task", "widthPx": 240 },
+    {
+      "id": "priority",
+      "header": "Priority",
+      "widthPx": 100,
+      "valueType": "select",
+      "selectOptions": [
+        {
+          "value": "HIGH",
+          "backgroundColor": "#d8f3dc",
+          "color": "#1b4332",
+          "icon": "arrow-up"
+        },
+        {
+          "value": "MEDIUM",
+          "backgroundColor": "#fde8d4",
+          "color": "#9a3412",
+          "icon": "equals"
+        }
+      ]
+    },
+    {
+      "id": "status",
+      "header": "Status",
+      "widthPx": 130,
+      "valueType": "select",
+      "selectOptions": [
+        {
+          "value": "open",
+          "label": "Open",
+          "backgroundColor": "#dbeafe",
+          "color": "#1d4ed8",
+          "icon": "circle-dashed"
+        },
+        {
+          "value": "done",
+          "label": "Done",
+          "backgroundColor": "#d1fae5",
+          "color": "#047857",
+          "icon": "check-circle"
+        }
+      ]
+    },
+    { "id": "owner", "header": "Owner", "widthPx": 160 },
+    { "id": "updatedAt", "header": "Updated", "widthPx": 140, "readOnly": true }
+  ],
+  "rows": [
+    {
+      "title": "Ship v1",
+      "priority": "HIGH",
+      "status": "open",
+      "owner": "Alex",
+      "updatedAt": "2026-04-01"
+    }
+  ]
+}
+```
 
 ### `POST /ark/tunnel`
 

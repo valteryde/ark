@@ -1,6 +1,5 @@
 import { cellKey, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
 import type {
-  CellDisplayStyle,
   SpreadsheetColumn,
   SpreadsheetConfig,
   SpreadsheetSelectOption,
@@ -8,7 +7,17 @@ import type {
 } from '../spreadsheet/types.ts';
 import type { PartnerSheetPayload } from './types.ts';
 
-const CELL_STYLES = new Set(['plain', 'priority', 'status', 'assignee']);
+function normalizeSelectOption(x: unknown): SpreadsheetSelectOption | null {
+  if (!x || typeof x !== 'object') return null;
+  const o = x as Record<string, unknown>;
+  if (typeof o.value !== 'string') return null;
+  const out: SpreadsheetSelectOption = { value: o.value };
+  if (typeof o.label === 'string') out.label = o.label;
+  if (typeof o.icon === 'string') out.icon = o.icon;
+  if (typeof o.color === 'string') out.color = o.color;
+  if (typeof o.backgroundColor === 'string') out.backgroundColor = o.backgroundColor;
+  return out;
+}
 
 function normalizeColumn(c: unknown): SpreadsheetColumn | null {
   if (!c || typeof c !== 'object') return null;
@@ -17,19 +26,14 @@ function normalizeColumn(c: unknown): SpreadsheetColumn | null {
   const widthPx = typeof o.widthPx === 'number' && Number.isFinite(o.widthPx) && o.widthPx > 0 ? o.widthPx : 120;
   const col: SpreadsheetColumn = { id: o.id, header: o.header, widthPx };
   if (typeof o.readOnly === 'boolean') col.readOnly = o.readOnly;
-  if (o.displayStyle === 'plain' || o.displayStyle === 'priority' || o.displayStyle === 'status' || o.displayStyle === 'assignee') {
-    col.displayStyle = o.displayStyle;
-  }
   if (o.valueType === 'text' || o.valueType === 'number' || o.valueType === 'select') {
     col.valueType = o.valueType;
   }
   if (Array.isArray(o.selectOptions)) {
     const opts: SpreadsheetSelectOption[] = [];
     for (const x of o.selectOptions) {
-      if (x && typeof x === 'object' && typeof (x as { value: unknown }).value === 'string') {
-        const so = x as { value: string; label?: string };
-        opts.push(so.label !== undefined ? { value: so.value, label: so.label } : { value: so.value });
-      }
+      const so = normalizeSelectOption(x);
+      if (so) opts.push(so);
     }
     if (opts.length) col.selectOptions = opts;
   }
@@ -73,7 +77,6 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
           : typeof o.defaultRowHeightPx === 'number' && o.defaultRowHeightPx > 0
             ? o.defaultRowHeightPx
             : undefined,
-      enabledCellStyles: i.enabledCellStyles ?? o.enabledCellStyles,
       enabledUiCapabilities: i.enabledUiCapabilities ?? o.enabledUiCapabilities,
     };
   }
@@ -92,9 +95,6 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
       typeof src.defaultRowHeightPx === 'number' && src.defaultRowHeightPx > 0
         ? src.defaultRowHeightPx
         : undefined,
-    enabledCellStyles: Array.isArray(src.enabledCellStyles)
-      ? src.enabledCellStyles.filter((s): s is CellDisplayStyle => typeof s === 'string' && CELL_STYLES.has(s))
-      : undefined,
     enabledUiCapabilities: Array.isArray(src.enabledUiCapabilities)
       ? (src.enabledUiCapabilities.filter((s): s is UiToolbarCapability => typeof s === 'string') as UiToolbarCapability[])
       : undefined,
@@ -135,8 +135,7 @@ export function sheetPayloadToConfig(
   payload: PartnerSheetPayload,
   data: SpreadsheetConfig['data'],
 ): SpreadsheetConfig {
-  const { columns, rows, rowCount, defaultRowHeightPx, enabledCellStyles, enabledUiCapabilities } =
-    payload;
+  const { columns, rows, rowCount, defaultRowHeightPx, enabledUiCapabilities } = payload;
   const minRows = Math.max(rows.length, 1);
   const rc = rowCount !== undefined && rowCount >= minRows ? rowCount : Math.max(minRows, 100);
 
@@ -145,7 +144,6 @@ export function sheetPayloadToConfig(
     rowCount: rc,
     defaultRowHeightPx,
     data,
-    enabledCellStyles,
     enabledUiCapabilities,
   };
 }

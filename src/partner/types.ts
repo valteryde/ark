@@ -1,4 +1,4 @@
-import type { CellDisplayStyle, SpreadsheetColumn, UiToolbarCapability } from '../spreadsheet/types.ts';
+import type { SpreadsheetColumn, UiToolbarCapability } from '../spreadsheet/types.ts';
 
 /** GET /ark/routing/{path} (and same-origin /api/ark/routing/{path}) for a grid. */
 export interface PartnerSheetPayload {
@@ -8,7 +8,6 @@ export interface PartnerSheetPayload {
   rows: ReadonlyArray<Record<string, unknown>>;
   rowCount?: number;
   defaultRowHeightPx?: number;
-  enabledCellStyles?: ReadonlyArray<CellDisplayStyle>;
   enabledUiCapabilities?: ReadonlyArray<UiToolbarCapability>;
 }
 
