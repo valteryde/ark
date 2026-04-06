@@ -658,6 +658,24 @@ a.app-sheet-tabs__tab {
   box-shadow: inset 0 0 0 1px var(--sheet-accent);
 }
 
+/* Partner tunnel persist failed: thin bottom accent + title tooltip */
+.sheet-cell--persist-error {
+  z-index: 5;
+  box-shadow: inset 0 -2px 0 0 rgb(180 55 55 / 0.72);
+}
+
+.sheet-cell-active.sheet-cell--persist-error {
+  box-shadow:
+    inset 0 0 0 1px var(--sheet-accent),
+    inset 0 -2px 0 0 rgb(180 55 55 / 0.72);
+}
+
+.sheet-cell-readonly.sheet-cell-active.sheet-cell--persist-error {
+  box-shadow:
+    inset 0 0 0 1px var(--sheet-accent),
+    inset 0 -2px 0 0 rgb(180 55 55 / 0.72);
+}
+
 /* Cell comment marker (::before — ::after is reserved for range-selection tint) */
 .sheet-cell--has-comment::before {
   content: '';

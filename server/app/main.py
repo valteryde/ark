@@ -65,12 +65,34 @@ def _tunnel_headers_from_ws(websocket: WebSocket) -> dict[str, str]:
     return {}
 
 
+def _tunnel_error_message(exc: BaseException, response: httpx.Response | None) -> str:
+    if response is not None:
+        try:
+            data = response.json()
+        except Exception:
+            return f"HTTP {response.status_code}"
+        if isinstance(data, dict):
+            detail = data.get("message")
+            if detail is None:
+                detail = data.get("detail")
+            if isinstance(detail, str) and detail.strip():
+                return detail.strip()[:240]
+            if isinstance(detail, list) and detail:
+                first = detail[0]
+                if isinstance(first, dict) and isinstance(first.get("msg"), str):
+                    return str(first["msg"]).strip()[:240]
+                return str(first)[:240]
+        return f"HTTP {response.status_code}"
+    return str(exc)[:240] if str(exc) else "Request failed"
+
+
 async def post_tunnel_async(
     body: dict[str, Any],
     partner_headers: dict[str, str] | None = None,
-) -> None:
+) -> tuple[bool, str | None]:
+    """POST mapped body to partner tunnel. Returns (success, user_message_on_failure)."""
     if not BACKEND:
-        return
+        return (True, None)
     payload = map_to_tunnel(body)
     url = f"{BACKEND}/ark/tunnel"
     headers = dict(partner_headers) if partner_headers else {}
@@ -78,8 +100,43 @@ async def post_tunnel_async(
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(url, json=payload, headers=headers)
             r.raise_for_status()
+        return (True, None)
+    except httpx.HTTPStatusError as e:
+        logger.warning("ark tunnel POST failed: %s", e)
+        return (False, _tunnel_error_message(e, e.response))
     except Exception as e:
         logger.warning("ark tunnel POST failed: %s", e)
+        return (False, _tunnel_error_message(e, None))
+
+
+async def _tunnel_task_notify_sender(
+    websocket: WebSocket,
+    data: dict[str, Any],
+    tunnel_headers: dict[str, str] | None,
+) -> None:
+    """Notify originating client when a cell commit fails to persist (tunnel)."""
+    ok, err = await post_tunnel_async(data, tunnel_headers)
+    if ok or not BACKEND:
+        return
+    if data.get("type") != "cell.value_committed":
+        return
+    row, col = data.get("row"), data.get("col")
+    if not isinstance(row, int) or not isinstance(col, int):
+        return
+    try:
+        await websocket.send_json(
+            {
+                "type": "cell.persist_status",
+                "ok": False,
+                "row": row,
+                "col": col,
+                "columnId": data.get("columnId"),
+                "sheetPath": data.get("sheetPath"),
+                "message": err,
+            }
+        )
+    except Exception:
+        pass
 
 
 @app.get("/api/health")
@@ -128,7 +185,11 @@ async def collab_ws(websocket: WebSocket) -> None:
             await hub.broadcast(data)
             if data.get("type") not in _TUNNEL_SKIP_TYPES:
                 asyncio.create_task(
-                    post_tunnel_async(data, tunnel_headers if tunnel_headers else None),
+                    _tunnel_task_notify_sender(
+                        websocket,
+                        data,
+                        tunnel_headers if tunnel_headers else None,
+                    ),
                 )
     except WebSocketDisconnect:
         hub.disconnect(websocket)

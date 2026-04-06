@@ -102,6 +102,30 @@ export type RemotePresenceUpdate =
 /**
  * WebSocket to BFF `/ws/ark`: broadcasts JSON; use for outbound edits and inbound collab.
  */
+export interface CellPersistFailedInfo {
+  row: number;
+  col: number;
+  sheetPath: string | null;
+  columnId?: string;
+  message: string | null;
+}
+
+function parsePersistFailed(
+  rec: Record<string, unknown>,
+): CellPersistFailedInfo | null {
+  if (rec.type !== 'cell.persist_status') return null;
+  if (rec.ok !== false) return null;
+  const row = rec.row;
+  const col = rec.col;
+  if (typeof row !== 'number' || typeof col !== 'number' || !Number.isFinite(row) || !Number.isFinite(col)) {
+    return null;
+  }
+  const sheetPath = typeof rec.sheetPath === 'string' ? rec.sheetPath : null;
+  const columnId = typeof rec.columnId === 'string' ? rec.columnId : undefined;
+  const message = typeof rec.message === 'string' ? rec.message : null;
+  return { row, col, sheetPath, columnId, message };
+}
+
 export function openCollabWs(opts: {
   getActiveSheetPath: () => string | null;
   localClientId: string;
@@ -112,6 +136,8 @@ export function openCollabWs(opts: {
     meta?: RemoteCommittedMeta,
   ) => void;
   onRemotePresence: (msg: RemotePresenceUpdate) => void;
+  /** BFF sends this when POST /ark/tunnel fails after a local `cell.value_committed`. */
+  onCellPersistFailed?: (info: CellPersistFailedInfo) => void;
 }): CollabConnection {
   const ws = new WebSocket(collabWsUrl());
   const pending: string[] = [];
@@ -132,6 +158,16 @@ export function openCollabWs(opts: {
     }
     if (!data || typeof data !== 'object') return;
     const rec = data as Record<string, unknown>;
+
+    const persistFailed = parsePersistFailed(rec);
+    if (persistFailed) {
+      const active = opts.getActiveSheetPath();
+      if (persistFailed.sheetPath !== null && active !== null && persistFailed.sheetPath !== active) {
+        return;
+      }
+      opts.onCellPersistFailed?.(persistFailed);
+      return;
+    }
 
     const cleared = parsePresenceClear(rec);
     if (cleared) {

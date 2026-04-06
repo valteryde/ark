@@ -272,6 +272,15 @@ function initPartnerMode(): void {
       }
       flushRemotePresenceToGrid();
     },
+    onCellPersistFailed(info) {
+      if (!liveHandle) return;
+      const path = activeSheetPath;
+      if (info.sheetPath !== null && path !== null && info.sheetPath !== path) {
+        return;
+      }
+      const detail = info.message?.trim() || undefined;
+      liveHandle.showCellPersistError(info.row, info.col, detail);
+    },
   });
 
   function scheduleLocalPresenceSend(): void {

@@ -185,4 +185,9 @@ export interface SpreadsheetMountHandle {
   getCollabPresencePayload(): CollabPresencePayload | null;
   /** Show other users’ cursors; pass `[]` to clear. */
   setRemoteCollabPresence(peers: readonly RemoteCollabPeer[]): void;
+  /**
+   * Subtle per-cell hint when persistence (partner tunnel) failed after a local commit.
+   * Clears when the user edits the cell or after a short timeout.
+   */
+  showCellPersistError(row: number, col: number, message?: string): void;
 }

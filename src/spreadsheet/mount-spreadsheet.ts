@@ -164,6 +164,7 @@ export function mountSpreadsheet(
     if (!cells.has(cellKey(row, col))) return false;
     data.set(row, col, value);
     hydrateCellFromStore(row, col);
+    clearCellPersistError(row, col);
     if (options?.remoteMarkerHue !== undefined) {
       flashRemoteMarker(row, col, options.remoteMarkerHue);
     }
@@ -200,6 +201,37 @@ export function mountSpreadsheet(
 
   const cells = new Map<string, HTMLDivElement>();
   let active = { row: 1, col: 1 };
+
+  const persistErrorClearTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function clearCellPersistError(row: number, col: number): void {
+    const k = cellKey(row, col);
+    const t = persistErrorClearTimers.get(k);
+    if (t !== undefined) {
+      clearTimeout(t);
+      persistErrorClearTimers.delete(k);
+    }
+    const el = cells.get(k);
+    if (el) {
+      el.classList.remove('sheet-cell--persist-error');
+      el.removeAttribute('title');
+    }
+  }
+
+  function showCellPersistError(row: number, col: number, message?: string): void {
+    if (row < 1 || row > rowCountTotal || col < 1 || col > columnCountTotal) return;
+    const k = cellKey(row, col);
+    const el = cells.get(k);
+    if (!el) return;
+    clearCellPersistError(row, col);
+    el.classList.add('sheet-cell--persist-error');
+    const hint = message?.trim()
+      ? message.trim()
+      : 'Could not save — check your connection or try again';
+    el.title = hint.length > 220 ? `${hint.slice(0, 217)}…` : hint;
+    const tid = window.setTimeout(() => clearCellPersistError(row, col), 8000);
+    persistErrorClearTimers.set(k, tid);
+  }
 
   let remotePresenceList: RemoteCollabPeer[] = [];
 
@@ -1785,6 +1817,21 @@ export function mountSpreadsheet(
 
   viewport.addEventListener('keydown', handleSheetKeydown, true);
 
+  viewport.addEventListener(
+    'input',
+    (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLInputElement) || !t.classList.contains('sheet-cell-input')) return;
+      const cell = t.closest('.sheet-cell');
+      if (!cell) return;
+      const row = Number((cell as HTMLElement).dataset.row);
+      const col = Number((cell as HTMLElement).dataset.col);
+      if (!Number.isFinite(row) || !Number.isFinite(col)) return;
+      clearCellPersistError(row, col);
+    },
+    true,
+  );
+
   if (history) {
     history.subscribe(notifyHistoryChange);
   }
@@ -1824,6 +1871,7 @@ export function mountSpreadsheet(
     applyExternalValue,
     getCollabPresencePayload,
     setRemoteCollabPresence,
+    showCellPersistError,
   };
 
   return handle;
