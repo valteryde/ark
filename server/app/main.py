@@ -51,6 +51,9 @@ class CollabHub:
 
 hub = CollabHub()
 
+# Ephemeral WebSocket-only messages; do not POST to partner tunnel.
+_TUNNEL_SKIP_TYPES = frozenset({"cell.presence", "cell.presence_clear"})
+
 
 async def post_tunnel_async(body: dict[str, Any]) -> None:
     if not BACKEND:
@@ -108,7 +111,8 @@ async def collab_ws(websocket: WebSocket) -> None:
                 await websocket.send_json({"error": "expected_object"})
                 continue
             await hub.broadcast(data)
-            asyncio.create_task(post_tunnel_async(data))
+            if data.get("type") not in _TUNNEL_SKIP_TYPES:
+                asyncio.create_task(post_tunnel_async(data))
     except WebSocketDisconnect:
         hub.disconnect(websocket)
 

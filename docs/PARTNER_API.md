@@ -154,8 +154,10 @@ The BFF forwards mapped events when users edit the grid or when collab messages 
 **Client → BFF WebSocket** (browser sends JSON on `ws://…/ws/ark`):
 
 - `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number }` — primary edit event. **`sheetPath`** is the same routing suffix as the current page (e.g. `clients`). **`clientId`** lets the sender ignore its own echo. **`markerHue`** (0–360) drives a **brief tint** on the updated cell for remote peers.
+- `{ "type": "cell.presence", "row", "col", "mode": "navigate" | "edit", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number }` — **ephemeral** cursor presence. **`navigate`** = selected cell without the editor focused (e.g. range selection or sheet has focus elsewhere); **`edit`** = the cell’s input is focused. Other clients draw a colored outline on that cell; **`edit`** uses a stronger outline. These messages are **not** forwarded to **`POST /ark/tunnel`**.
+- `{ "type": "cell.presence_clear", "sheetPath"?: string, "clientId"?: string }` — optional hint that a tab closed or left the sheet; peers remove that **`clientId`** from presence. Also **not** tunneled.
 
-The BFF **broadcasts** the same JSON to all connected clients and **`POST`s** the **mapped** body to `{ARK_BACKEND_URL}/ark/tunnel`.
+The BFF **broadcasts** the same JSON to all connected clients. It **`POST`s** the **mapped** body to `{ARK_BACKEND_URL}/ark/tunnel` only for messages that are not ephemeral presence (`cell.presence`, `cell.presence_clear`).
 
 ## Browser URLs (SPA)
 
@@ -174,6 +176,6 @@ You may use a longer routing suffix (e.g. `api/clients`) if the URL path is stil
 
 - Authoritative REST `PATCH` per row/cell (tunnel-only persistence is enough for the sample).
 - Formatting-only tunnel events (`mergeCellStyle`) — value commits only in v1.
-- Conflict resolution / presence on the WebSocket.
+- Authoritative **locking** or merge conflict resolution (presence outlines are indicative only).
 
 See [SPREADSHEET.md](SPREADSHEET.md) for grid behavior, undo, and column types.

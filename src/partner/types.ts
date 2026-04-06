@@ -25,6 +25,26 @@ export interface CellValueCommittedEvent {
   markerHue?: number;
 }
 
+/**
+ * Ephemeral cursor / edit presence (not persisted). Peers render an outline on the cell.
+ * `navigate` = selection only; `edit` = cell input is focused (another user is “in” the cell).
+ */
+export interface CellPresenceEvent {
+  type: 'cell.presence';
+  row: number;
+  col: number;
+  mode: 'navigate' | 'edit';
+  sheetPath?: string;
+  clientId?: string;
+  markerHue?: number;
+}
+
+export interface CellPresenceClearEvent {
+  type: 'cell.presence_clear';
+  sheetPath?: string;
+  clientId?: string;
+}
+
 export function isPartnerSheetPayload(x: unknown): x is PartnerSheetPayload {
   if (!x || typeof x !== 'object') return false;
   const o = x as Record<string, unknown>;

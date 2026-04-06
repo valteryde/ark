@@ -10,6 +10,9 @@ import {
 import { cellKey } from './data-store.ts';
 import { cellMapsEqual, createSpreadsheetHistory, type HistoryCellMap } from './history.ts';
 import type {
+  CollabPresenceMode,
+  CollabPresencePayload,
+  RemoteCollabPeer,
   SpreadsheetColumn,
   SpreadsheetConfig,
   SpreadsheetCellInit,
@@ -198,6 +201,88 @@ export function mountSpreadsheet(
   const cells = new Map<string, HTMLDivElement>();
   let active = { row: 1, col: 1 };
 
+  let remotePresenceList: RemoteCollabPeer[] = [];
+
+  function clearRemotePresenceDecor(): void {
+    for (const el of cells.values()) {
+      el.classList.remove('sheet-cell--remote-presence', 'sheet-cell--remote-presence-edit');
+      el.classList.remove('sheet-cell--collab-peer-editing-with-me');
+      el.removeAttribute('title');
+      el.style.removeProperty('--remote-collab-hue');
+      el.style.removeProperty('--remote-collab-hue-b');
+    }
+  }
+
+  function syncLocalCollabConflict(): void {
+    for (const el of cells.values()) {
+      el.classList.remove('sheet-cell--collab-peer-editing-with-me');
+    }
+    const mine = cells.get(cellKey(active.row, active.col));
+    if (!mine) return;
+    if (
+      remotePresenceList.some(
+        (p) => p.row === active.row && p.col === active.col && p.mode === 'edit',
+      )
+    ) {
+      mine.classList.add('sheet-cell--collab-peer-editing-with-me');
+    }
+  }
+
+  function paintRemotePresenceOverlays(): void {
+    clearRemotePresenceDecor();
+    const byKey = new Map<string, RemoteCollabPeer[]>();
+    for (const p of remotePresenceList) {
+      const k = cellKey(p.row, p.col);
+      const arr = byKey.get(k);
+      if (arr) arr.push(p);
+      else byKey.set(k, [p]);
+    }
+    for (const [k, plist] of byKey) {
+      const el = cells.get(k);
+      if (!el) continue;
+      el.classList.add('sheet-cell--remote-presence');
+      el.style.setProperty('--remote-collab-hue', String(plist[0]!.markerHue));
+      if (plist.length > 1) {
+        el.style.setProperty('--remote-collab-hue-b', String(plist[1]!.markerHue));
+      }
+      if (plist.some((x) => x.mode === 'edit')) {
+        el.classList.add('sheet-cell--remote-presence-edit');
+      }
+      const editing = plist.some((x) => x.mode === 'edit');
+      el.title = editing
+        ? plist.filter((x) => x.mode === 'edit').length > 1
+          ? 'Multiple collaborators are editing this cell'
+          : 'Another collaborator is editing this cell'
+        : plist.length > 1
+          ? 'Multiple collaborators selected this cell'
+          : 'Another collaborator selected this cell';
+    }
+    syncLocalCollabConflict();
+  }
+
+  function getCollabPresencePayload(): CollabPresencePayload | null {
+    if (rowCountTotal < 1 || columnCountTotal < 1) return null;
+    const row = active.row;
+    const col = active.col;
+    let mode: CollabPresenceMode = 'navigate';
+    if (!selectArea.active) {
+      const cell = cells.get(cellKey(row, col));
+      const inp = cell ? getCellEditor(cell) : null;
+      if (inp && document.activeElement === inp) {
+        mode = 'edit';
+      }
+    }
+    return { row, col, mode };
+  }
+
+  function setRemoteCollabPresence(peers: readonly RemoteCollabPeer[]): void {
+    remotePresenceList = peers.map((p) => ({
+      ...p,
+      markerHue: Number.isFinite(p.markerHue) ? (((p.markerHue % 360) + 360) % 360) : 210,
+    }));
+    paintRemotePresenceOverlays();
+  }
+
   const selectionChangeListeners = new Set<() => void>();
   const historyChangeListeners = new Set<() => void>();
 
@@ -205,6 +290,7 @@ export function mountSpreadsheet(
     for (const fn of selectionChangeListeners) {
       fn();
     }
+    syncLocalCollabConflict();
   }
 
   function notifyHistoryChange(): void {
@@ -1770,6 +1856,8 @@ export function mountSpreadsheet(
       history?.endBatch();
     },
     applyExternalValue,
+    getCollabPresencePayload,
+    setRemoteCollabPresence,
   };
 
   return handle;

@@ -121,6 +121,25 @@ export function resolveEnabledUiCapabilities(
   return new Set(list);
 }
 
+/** Local cursor for WebSocket presence (not stored in the sheet). */
+export type CollabPresenceMode = 'navigate' | 'edit';
+
+export interface CollabPresencePayload {
+  row: number;
+  col: number;
+  mode: CollabPresenceMode;
+}
+
+/** Remote peer cursor to render as an outline on the grid. */
+export interface RemoteCollabPeer {
+  clientId: string;
+  row: number;
+  col: number;
+  mode: CollabPresenceMode;
+  /** 0–360; defaults in the UI if omitted by older clients. */
+  markerHue: number;
+}
+
 /** Returned by `mountSpreadsheet` for wiring the formatting toolbar and extensions. */
 export interface SpreadsheetMountHandle {
   /** Apply CSS property patches to the current selection (via store `mergeCellStyle`). */
@@ -162,4 +181,8 @@ export interface SpreadsheetMountHandle {
     value: string | number,
     options?: { remoteMarkerHue?: number },
   ): boolean;
+  /** Current cell + whether the editor is focused (for collab presence). */
+  getCollabPresencePayload(): CollabPresencePayload | null;
+  /** Show other users’ cursors; pass `[]` to clear. */
+  setRemoteCollabPresence(peers: readonly RemoteCollabPeer[]): void;
 }

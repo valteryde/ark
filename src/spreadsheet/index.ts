@@ -1,4 +1,7 @@
 export type {
+  CollabPresenceMode,
+  CollabPresencePayload,
+  RemoteCollabPeer,
   SpreadsheetCellInit,
   SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,

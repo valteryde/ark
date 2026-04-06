@@ -204,6 +204,44 @@ function initPartnerMode(): void {
   let activeSheetPath: string | null = null;
   let loadedRoutingPath: string | null = null;
 
+  const remotePeers = new Map<
+    string,
+    { row: number; col: number; mode: 'navigate' | 'edit'; markerHue: number; ts: number }
+  >();
+
+  let presenceUnsub: (() => void) | null = null;
+  let presenceFocusHandler: (() => void) | null = null;
+  let presenceRaf: number | null = null;
+
+  function flushRemotePresenceToGrid(): void {
+    if (!liveHandle) return;
+    liveHandle.setRemoteCollabPresence(
+      [...remotePeers.entries()].map(([clientId, v]) => ({
+        clientId,
+        row: v.row,
+        col: v.col,
+        mode: v.mode,
+        markerHue: v.markerHue,
+      })),
+    );
+  }
+
+  function clearPresenceWiring(): void {
+    if (presenceUnsub) {
+      presenceUnsub();
+      presenceUnsub = null;
+    }
+    if (presenceFocusHandler) {
+      sheetHost.removeEventListener('focusin', presenceFocusHandler, true);
+      sheetHost.removeEventListener('focusout', presenceFocusHandler, true);
+      presenceFocusHandler = null;
+    }
+    if (presenceRaf !== null) {
+      cancelAnimationFrame(presenceRaf);
+      presenceRaf = null;
+    }
+  }
+
   const collab = openCollabWs({
     getActiveSheetPath: () => activeSheetPath,
     localClientId: collabIdentity.clientId,
@@ -218,6 +256,67 @@ function initPartnerMode(): void {
         );
       });
     },
+    onRemotePresence(msg) {
+      if (msg.kind === 'presence_clear') {
+        remotePeers.delete(msg.clientId);
+      } else {
+        remotePeers.set(msg.clientId, {
+          row: msg.row,
+          col: msg.col,
+          mode: msg.mode,
+          markerHue: msg.markerHue ?? 210,
+          ts: Date.now(),
+        });
+      }
+      flushRemotePresenceToGrid();
+    },
+  });
+
+  function scheduleLocalPresenceSend(): void {
+    if (presenceRaf !== null) return;
+    presenceRaf = requestAnimationFrame(() => {
+      presenceRaf = null;
+      if (activeSheetPath === null || liveHandle === null) return;
+      const p = liveHandle.getCollabPresencePayload();
+      if (!p) return;
+      collab.sendPresence({
+        type: 'cell.presence',
+        row: p.row,
+        col: p.col,
+        mode: p.mode,
+        sheetPath: activeSheetPath,
+        clientId: collabIdentity.clientId,
+        markerHue: collabIdentity.markerHue,
+      });
+    });
+  }
+
+  window.setInterval(() => {
+    const now = Date.now();
+    let changed = false;
+    for (const [id, v] of remotePeers) {
+      if (now - v.ts > 12000) {
+        remotePeers.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) flushRemotePresenceToGrid();
+  }, 3000);
+
+  /* Keep local cursor visible to peers while idle on a cell (presence TTL is 12s). */
+  window.setInterval(() => {
+    if (document.visibilityState !== 'visible' || activeSheetPath === null || liveHandle === null) return;
+    scheduleLocalPresenceSend();
+  }, 4000);
+
+  window.addEventListener('pagehide', () => {
+    const path = activeSheetPath;
+    if (path === null) return;
+    collab.sendPresenceClear({
+      type: 'cell.presence_clear',
+      sheetPath: path,
+      clientId: collabIdentity.clientId,
+    });
   });
 
   async function loadPartnerSheet(routingPath: string): Promise<void> {
@@ -237,6 +336,8 @@ function initPartnerMode(): void {
       }
       const initial = rowsToInitialMap(payload.columns, payload.rows);
       const pathForCollab = routingPath;
+      clearPresenceWiring();
+      remotePeers.clear();
       const store = createPartnerNotifyDataStore(payload.columns, initial, (ev) => {
         collab.sendCommitted({
           type: 'cell.value_committed',
@@ -261,6 +362,12 @@ function initPartnerMode(): void {
       );
       activeSheetPath = routingPath;
       loadedRoutingPath = routingPath;
+      presenceFocusHandler = () => scheduleLocalPresenceSend();
+      sheetHost.addEventListener('focusin', presenceFocusHandler, true);
+      sheetHost.addEventListener('focusout', presenceFocusHandler, true);
+      presenceUnsub = liveHandle.subscribeSelectionChange(scheduleLocalPresenceSend);
+      flushRemotePresenceToGrid();
+      scheduleLocalPresenceSend();
       if (chromeTitleEl) {
         chromeTitleEl.textContent = payload.title?.trim() ? payload.title : routingPath;
       }
