@@ -213,8 +213,7 @@ export function mountSpreadsheet(
     }
     const el = cells.get(k);
     if (el) {
-      el.classList.remove('sheet-cell--persist-error');
-      el.removeAttribute('title');
+      el.querySelector('.sheet-cell-persist-dot')?.remove();
     }
   }
 
@@ -224,11 +223,22 @@ export function mountSpreadsheet(
     const el = cells.get(k);
     if (!el) return;
     clearCellPersistError(row, col);
-    el.classList.add('sheet-cell--persist-error');
     const hint = message?.trim()
       ? message.trim()
       : 'Could not save — check your connection or try again';
-    el.title = hint.length > 220 ? `${hint.slice(0, 217)}…` : hint;
+    const hintForTitle = hint.length > 4000 ? `${hint.slice(0, 3997)}…` : hint;
+    const dot = document.createElement('button');
+    dot.type = 'button';
+    dot.className = 'sheet-cell-persist-dot';
+    dot.title = hintForTitle;
+    dot.tabIndex = -1;
+    dot.setAttribute('aria-label', `Save failed. ${hint.length > 180 ? `${hint.slice(0, 177)}…` : hint}`);
+    dot.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    dot.addEventListener('click', (e) => e.stopPropagation());
+    el.appendChild(dot);
     const tid = window.setTimeout(() => clearCellPersistError(row, col), 8000);
     persistErrorClearTimers.set(k, tid);
   }

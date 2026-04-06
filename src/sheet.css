@@ -658,22 +658,30 @@ a.app-sheet-tabs__tab {
   box-shadow: inset 0 0 0 1px var(--sheet-accent);
 }
 
-/* Partner tunnel persist failed: thin bottom accent + title tooltip */
-.sheet-cell--persist-error {
-  z-index: 5;
-  box-shadow: inset 0 -2px 0 0 rgb(180 55 55 / 0.72);
+/* Partner tunnel failed: corner dot; hover shows native tooltip (server message on button title) */
+.sheet-cell-persist-dot {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  z-index: 6;
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgb(220 38 38 / 0.9);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.85);
+  cursor: help;
+  pointer-events: auto;
 }
 
-.sheet-cell-active.sheet-cell--persist-error {
-  box-shadow:
-    inset 0 0 0 1px var(--sheet-accent),
-    inset 0 -2px 0 0 rgb(180 55 55 / 0.72);
-}
-
-.sheet-cell-readonly.sheet-cell-active.sheet-cell--persist-error {
-  box-shadow:
-    inset 0 0 0 1px var(--sheet-accent),
-    inset 0 -2px 0 0 rgb(180 55 55 / 0.72);
+.sheet-cell-persist-dot:hover,
+.sheet-cell-persist-dot:focus-visible {
+  background: rgb(185 28 28 / 0.98);
+  transform: scale(1.15);
+  outline: none;
 }
 
 /* Cell comment marker (::before — ::after is reserved for range-selection tint) */
