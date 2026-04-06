@@ -205,26 +205,8 @@ export function mountSpreadsheet(
 
   function clearRemotePresenceDecor(): void {
     for (const el of cells.values()) {
-      el.classList.remove('sheet-cell--remote-presence', 'sheet-cell--remote-presence-edit');
-      el.classList.remove('sheet-cell--collab-peer-editing-with-me');
-      el.removeAttribute('title');
+      el.classList.remove('sheet-cell--remote-presence');
       el.style.removeProperty('--remote-collab-hue');
-      el.style.removeProperty('--remote-collab-hue-b');
-    }
-  }
-
-  function syncLocalCollabConflict(): void {
-    for (const el of cells.values()) {
-      el.classList.remove('sheet-cell--collab-peer-editing-with-me');
-    }
-    const mine = cells.get(cellKey(active.row, active.col));
-    if (!mine) return;
-    if (
-      remotePresenceList.some(
-        (p) => p.row === active.row && p.col === active.col && p.mode === 'edit',
-      )
-    ) {
-      mine.classList.add('sheet-cell--collab-peer-editing-with-me');
     }
   }
 
@@ -242,22 +224,7 @@ export function mountSpreadsheet(
       if (!el) continue;
       el.classList.add('sheet-cell--remote-presence');
       el.style.setProperty('--remote-collab-hue', String(plist[0]!.markerHue));
-      if (plist.length > 1) {
-        el.style.setProperty('--remote-collab-hue-b', String(plist[1]!.markerHue));
-      }
-      if (plist.some((x) => x.mode === 'edit')) {
-        el.classList.add('sheet-cell--remote-presence-edit');
-      }
-      const editing = plist.some((x) => x.mode === 'edit');
-      el.title = editing
-        ? plist.filter((x) => x.mode === 'edit').length > 1
-          ? 'Multiple collaborators are editing this cell'
-          : 'Another collaborator is editing this cell'
-        : plist.length > 1
-          ? 'Multiple collaborators selected this cell'
-          : 'Another collaborator selected this cell';
     }
-    syncLocalCollabConflict();
   }
 
   function getCollabPresencePayload(): CollabPresencePayload | null {
@@ -290,7 +257,6 @@ export function mountSpreadsheet(
     for (const fn of selectionChangeListeners) {
       fn();
     }
-    syncLocalCollabConflict();
   }
 
   function notifyHistoryChange(): void {
