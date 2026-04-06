@@ -4,7 +4,7 @@ This guide assumes you are new to Ark and maybe new to Node or Docker. Follow th
 
 ## 1. What you are setting up
 
-Ark is a **web app** you run on your computer for development. **By default** it expects a **partner API** behind the Ark BFF: the **first URL path segment** selects the sheet (`GET /ark/routing/{segment}`), and the UI opens a **WebSocket** for collab/tunnel. There is **no bootstrap** and **no partner-mode tabs**—each URL is one spreadsheet. See **[PARTNER_API.md](PARTNER_API.md)**.
+Ark is a **web app** you run on your computer for development. **By default** it expects a **partner API** behind the Ark BFF: the **first URL path segment** selects the sheet (`GET /ark/routing/{segment}`), and the UI opens a **WebSocket** for collab/tunnel. There is **no bootstrap** and **no partner-mode tabs**—each URL is one spreadsheet. If you are building that API, start with **[WRITING_A_PARTNER.md](WRITING_A_PARTNER.md)**; the full contract is **[PARTNER_API.md](PARTNER_API.md)**.
 
 To try the UI **without** a partner, open the app with **`?demo=1`** (offline “Product Roadmap” presets and fake in-memory data).
 
@@ -27,7 +27,7 @@ You should see version numbers (Node **20** or newer is ideal). If the command i
 
 ### Python 3.12+ (for the bundled server in dev)
 
-The repo ships a small **FastAPI** app under [`server/`](../server/) that serves the built UI, proxies `GET /api/ark/routing/*` to your partner API, and exposes **`/ws/ark`** for collaboration. To run it locally:
+The repo ships a small **FastAPI** app under [`server/`](https://github.com/valteryde/ark/tree/main/server) that serves the built UI, proxies `GET /api/ark/routing/*` to your partner API, and exposes **`/ws/ark`** for collaboration. To run it locally:
 
 ```bash
 python3 -V
@@ -104,13 +104,13 @@ uvicorn app.main:app --reload --app-dir server --port 8000
 
 Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/clients) for **partner mode** (with **`ARK_UI_ROUTES`** and a matching partner route), or [http://127.0.0.1:8000/?demo=1](http://127.0.0.1:8000/?demo=1) for **demo presets**.
 
-- **Partner mode**: Set **`ARK_BACKEND_URL`** (e.g. `http://127.0.0.1:9000`) and run your partner service (try [`example_api.py`](../example_api.py) with `uvicorn example_api:app --port 9000`).
+- **Partner mode**: Set **`ARK_BACKEND_URL`** (e.g. `http://127.0.0.1:9000`) and run your partner service (try [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py) with `uvicorn example_api:app --port 9000`).
 - **Rebuild on save**: `npm run dev` keeps `dist/` up to date; refresh the page after edits under `src/`.
 - **Stop**: Press **Ctrl+C** in each terminal.
 
 **Port 8000 already in use**: Pass a different port to uvicorn, e.g. `--port 8001`.
 
-Optional: copy [`.env.example`](../.env.example) to `.env` and set **`ARK_BACKEND_URL`** so `GET /api/ark/routing/...` proxies to your partner API.
+Optional: copy [`.env.example`](https://github.com/valteryde/ark/blob/main/.env.example) to `.env` and set **`ARK_BACKEND_URL`** so `GET /api/ark/routing/...` proxies to your partner API.
 
 ## 6. What you should see
 
@@ -161,16 +161,17 @@ Open [http://localhost:8000](http://localhost:8000).
 
 ## 10. Hooking up your own backend (next step)
 
-1. Read **[PARTNER_API.md](PARTNER_API.md)** — URL → sheet route, sheet JSON, tunnel, and WebSocket events.
-2. Read **[SPREADSHEET.md](SPREADSHEET.md)** — column config, undo, value types, toolbar capabilities.
-3. **BFF**: **`GET /api/ark/routing/{path}`** → **`{ARK_BACKEND_URL}/ark/routing/{path}`**; **`WebSocket /ws/ark`** → broadcast + **`POST …/ark/tunnel`**. Sample: [`example_api.py`](../example_api.py).
-4. **Production**: Run the Docker image or `uvicorn` behind your reverse proxy; set **`ARK_BACKEND_URL`**.
+1. Read **[WRITING_A_PARTNER.md](WRITING_A_PARTNER.md)** — step-by-step partner implementation.
+2. Read **[PARTNER_API.md](PARTNER_API.md)** — URL → sheet route, sheet JSON, tunnel, and WebSocket events.
+3. Read **[SPREADSHEET.md](SPREADSHEET.md)** — column config, undo, value types, toolbar capabilities.
+4. **BFF**: **`GET /api/ark/routing/{path}`** → **`{ARK_BACKEND_URL}/ark/routing/{path}`**; **`WebSocket /ws/ark`** → broadcast + **`POST …/ark/tunnel`**. Sample: [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py).
+5. **Production**: Run the Docker image or `uvicorn` behind your reverse proxy; set **`ARK_BACKEND_URL`**.
 
-Entry points: partner wiring in [`src/main.ts`](../src/main.ts) and [`src/partner/`](../src/partner/); reusable grid API under **`src/spreadsheet/`** ([`src/spreadsheet/index.ts`](../src/spreadsheet/index.ts)).
+Entry points: partner wiring in [`src/main.ts`](https://github.com/valteryde/ark/blob/main/src/main.ts) and [`src/partner/`](https://github.com/valteryde/ark/tree/main/src/partner); reusable grid API under **`src/spreadsheet/`** ([`src/spreadsheet/index.ts`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/index.ts)).
 
 ## 11. Using Deno instead of typing `npm run …`
 
-If you use [Deno](https://deno.com), this repo includes [`deno.json`](../deno.json):
+If you use [Deno](https://deno.com), this repo includes [`deno.json`](https://github.com/valteryde/ark/blob/main/deno.json):
 
 ```bash
 deno task dev
@@ -194,7 +195,8 @@ You still need Node/npm installed because those tasks call through to npm script
 
 | Document | Purpose |
 |----------|---------|
-| [README.md](../README.md) | Overview, Docker details, CI, embedding |
+| [README.md](https://github.com/valteryde/ark/blob/main/README.md) | Overview, Docker details, CI, embedding |
+| [WRITING_A_PARTNER.md](WRITING_A_PARTNER.md) | How to implement the partner API |
 | [PARTNER_API.md](PARTNER_API.md) | Bootstrap, sheet payload, tunnel, WS |
 | [SPREADSHEET.md](SPREADSHEET.md) | Grid contract, types, undo, column value types |
 

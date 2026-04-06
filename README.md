@@ -2,7 +2,9 @@
 
 Configurable spreadsheet UI for **API-driven** row/column data. **Default behavior:** each URL path (e.g. **`/clients`**) loads **one** sheet via **`GET /api/ark/routing/{segment}`** (proxied to your partner). There is **no bootstrap** and **no in-app sheet tabs** in partner mode—only the offline **`?demo=1`** presets use tabs. The UI uses **`WebSocket /ws/ark`** for collab + tunnel persistence. The UI is bundled with **esbuild** into `dist/`; a **FastAPI** app in [`server/`](server/) serves `dist/`, **`/api/*`**, and **`/ws/ark`** when **`ARK_BACKEND_URL`** is set.
 
-Partner contract: **[docs/PARTNER_API.md](docs/PARTNER_API.md)**. Sample backend: [`example_api.py`](example_api.py).
+**Writing a partner API:** **[docs/WRITING_A_PARTNER.md](docs/WRITING_A_PARTNER.md)**. Full contract: **[docs/PARTNER_API.md](docs/PARTNER_API.md)**. Sample backend: [`example_api.py`](example_api.py).
+
+**Documentation site** (GitHub Pages): after you enable **Settings → Pages → GitHub Actions** in this repo, the built docs publish at **https://valteryde.github.io/ark/** (see [.github/workflows/pages.yml](.github/workflows/pages.yml)).
 
 **New here?** Follow **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for Node, Python, first run, build, Docker, and backend wiring.
 

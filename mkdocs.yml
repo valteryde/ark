@@ -1,0 +1,38 @@
+site_name: Ark
+site_description: Partner API and spreadsheet documentation
+site_url: https://valteryde.github.io/ark/
+
+repo_url: https://github.com/valteryde/ark
+repo_name: valteryde/ark
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Writing a partner: WRITING_A_PARTNER.md
+  - Partner API (reference): PARTNER_API.md
+  - Spreadsheet behavior: SPREADSHEET.md
+  - Getting started (Ark dev): GETTING_STARTED.md
+
+strict: true
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true

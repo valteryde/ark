@@ -1,5 +1,7 @@
 # Partner API contract
 
+New to partners? Read **[Writing a partner](WRITING_A_PARTNER.md)** first.
+
 Ark’s browser app talks **same-origin** to the Ark BFF (`server/app/main.py`). The BFF proxies read routes to your service when **`ARK_BACKEND_URL`** is set. You implement the partner HTTP API on that base URL.
 
 Ark is **one spreadsheet per browser URL**. There is **no bootstrap** and **no in-app tab navigation** between sheets: opening **`/clients`** loads that sheet only; **`/records`** is a separate page with its own grid. Link between them with normal HTML links if you want.
@@ -10,7 +12,7 @@ Ark is **one spreadsheet per browser URL**. There is **no bootstrap** and **no i
 
 The **first path segment** of the browser URL is `{path}` (e.g. **`/clients`** → `path` = `clients`). The UI calls **`GET /api/ark/routing/{path}`**, which proxies to **`GET {ARK_BACKEND_URL}/ark/routing/{path}`**.
 
-Returns a **SheetPayload** used to build [`SpreadsheetConfig`](../src/spreadsheet/types.ts) and initial cell data.
+Returns a **SheetPayload** used to build [`SpreadsheetConfig`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/types.ts) and initial cell data.
 
 **Flat shape** — `columns`, `rows`, etc. at the top level (see table).
 
