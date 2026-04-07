@@ -160,7 +160,7 @@ export function mountSpreadsheet(
   config: SpreadsheetConfig,
 ): SpreadsheetMountHandle {
   const columns = config.columns;
-  const columnCountTotal = columns.length;
+  const dataColumnCount = columns.length;
   const dataRowCount = config.rowCount;
   const ghostRowCount = Math.max(
     0,
@@ -180,18 +180,45 @@ export function mountSpreadsheet(
   const defaultRowHeight = config.defaultRowHeightPx ?? 28;
   const rowHeights = Array.from({ length: mountedRowCount }, () => defaultRowHeight);
   const columnWidths = columns.map((c) => c.widthPx);
+  const dataSheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
+
+  const ghostColumnsEnabled =
+    dataColumnCount > 0 &&
+    config.enableGhostColumns !== false &&
+    typeof ResizeObserver === 'function';
+  const ghostColumnWidthPx = Math.round(
+    Math.min(400, Math.max(24, config.ghostColumnWidthPx ?? 72)),
+  );
+  const maxGhostColumns = Math.min(
+    500,
+    Math.max(0, Math.floor(config.maxGhostColumns ?? 80)),
+  );
+
+  let ghostColumnCount = 0;
+  let cumulativeColumnWidths: number[] = [];
+  let mountedSheetCellsWidth = dataSheetTotalWidth;
+
+  function widthOfMountedCol1Based(i: number): number {
+    return i <= dataColumnCount ? columnWidths[i - 1]! : ghostColumnWidthPx;
+  }
+
+  function rebuildCumulativeColumnWidthsAndMountedWidth(): void {
+    const m = dataColumnCount + ghostColumnCount;
+    cumulativeColumnWidths = Array.from({ length: m }, () => 0);
+    for (let i = 1; i < m; i++) {
+      cumulativeColumnWidths[i] = cumulativeColumnWidths[i - 1]! + widthOfMountedCol1Based(i);
+    }
+    let t = 0;
+    for (let i = 1; i <= m; i++) t += widthOfMountedCol1Based(i);
+    mountedSheetCellsWidth = t;
+  }
+
+  rebuildCumulativeColumnWidthsAndMountedWidth();
 
   const cumulativeRowHeights: number[] = Array.from({ length: mountedRowCount }, () => 0);
   for (let i = 1; i < mountedRowCount; i++) {
     cumulativeRowHeights[i] = cumulativeRowHeights[i - 1]! + rowHeights[i - 1]!;
   }
-
-  const cumulativeColumnWidths: number[] = Array.from({ length: columnCountTotal }, () => 0);
-  for (let i = 1; i < columnCountTotal; i++) {
-    cumulativeColumnWidths[i] = cumulativeColumnWidths[i - 1]! + columnWidths[i - 1]!;
-  }
-
-  const sheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
   const sheetTotalHeight = rowHeights.reduce((a, b) => a + b, 0);
   /** Fixed gutter for row indices; added to horizontal extent and cell `left` offsets. */
   const rowHeaderWidthPx = 48;
@@ -276,7 +303,7 @@ export function mountSpreadsheet(
     value: string | number,
     options?: { remoteMarkerHue?: number },
   ): boolean {
-    if (row < 1 || row > dataRowCount || col < 1 || col > columnCountTotal) return false;
+    if (row < 1 || row > dataRowCount || col < 1 || col > dataColumnCount) return false;
     if (!cells.has(cellKey(row, col))) return false;
     data.set(row, col, value);
     hydrateCellFromStore(row, col);
@@ -336,7 +363,7 @@ export function mountSpreadsheet(
   }
 
   function showCellPersistError(row: number, col: number, message?: string): void {
-    if (row < 1 || row > dataRowCount || col < 1 || col > columnCountTotal) return;
+    if (row < 1 || row > dataRowCount || col < 1 || col > dataColumnCount) return;
     const k = cellKey(row, col);
     const el = cells.get(k);
     if (!el) return;
@@ -380,7 +407,7 @@ export function mountSpreadsheet(
     clearRemotePresenceDecor();
     const byKey = new Map<string, RemoteCollabPeer[]>();
     for (const p of remotePresenceList) {
-      if (p.row > dataRowCount) continue;
+      if (p.row > dataRowCount || p.col > dataColumnCount) continue;
       const k = cellKey(p.row, p.col);
       const arr = byKey.get(k);
       if (arr) arr.push(p);
@@ -395,7 +422,7 @@ export function mountSpreadsheet(
   }
 
   function getCollabPresencePayload(): CollabPresencePayload | null {
-    if (dataRowCount < 1 || columnCountTotal < 1) return null;
+    if (dataRowCount < 1 || dataColumnCount < 1) return null;
     const row = active.row;
     const col = active.col;
     let mode: CollabPresenceMode = 'navigate';
@@ -446,7 +473,7 @@ export function mountSpreadsheet(
   }
 
   function clampCol(col: number): number {
-    return Math.max(1, Math.min(columnCountTotal, col));
+    return Math.max(1, Math.min(dataColumnCount, col));
   }
 
   const initSel = config.initialSelection;
@@ -471,6 +498,7 @@ export function mountSpreadsheet(
   }
 
   function isReadOnlyCol(col: number): boolean {
+    if (col > dataColumnCount) return true;
     return columnAt(col)?.readOnly === true;
   }
 
@@ -789,7 +817,7 @@ export function mountSpreadsheet(
   function buildRowPlainText(targetRow: number): string {
     const r = clampRow(targetRow);
     const parts: string[] = [];
-    for (let c = 1; c <= columnCountTotal; c++) {
+    for (let c = 1; c <= dataColumnCount; c++) {
       const v = data.get(r, c);
       const s = v === undefined ? '' : String(v);
       parts.push(escapeTsvField(s));
@@ -801,7 +829,7 @@ export function mountSpreadsheet(
     if (!data.replaceCell) return;
     const row = clampRow(targetRow);
     const keys: string[] = [];
-    for (let col = 1; col <= columnCountTotal; col++) {
+    for (let col = 1; col <= dataColumnCount; col++) {
       if (!isReadOnlyCol(col)) keys.push(cellKey(row, col));
     }
     if (keys.length === 0) return;
@@ -824,7 +852,7 @@ export function mountSpreadsheet(
     const row = tr;
     persistActiveInput();
     let anyWritable = false;
-    for (let col = 1; col <= columnCountTotal; col++) {
+    for (let col = 1; col <= dataColumnCount; col++) {
       if (!isReadOnlyCol(col)) {
         anyWritable = true;
         break;
@@ -878,7 +906,7 @@ export function mountSpreadsheet(
       for (let dc = 0; dc < row.length; dc++) {
         const r = anchorRow + dr;
         const c = anchorCol + dc;
-        if (r < 1 || r > dataRowCount || c < 1 || c > columnCountTotal) continue;
+        if (r < 1 || r > dataRowCount || c < 1 || c > dataColumnCount) continue;
         if (isReadOnlyCol(c)) continue;
         keys.push(cellKey(r, c));
       }
@@ -908,7 +936,7 @@ export function mountSpreadsheet(
       for (let dc = 0; dc < row.length; dc++) {
         const r = anchor.row + dr;
         const c = anchor.col + dc;
-        if (r < 1 || r > dataRowCount || c < 1 || c > columnCountTotal) continue;
+        if (r < 1 || r > dataRowCount || c < 1 || c > dataColumnCount) continue;
         if (isReadOnlyCol(c)) continue;
         const raw = row[dc] ?? '';
         const colDef = columnAt(c);
@@ -1035,7 +1063,7 @@ export function mountSpreadsheet(
 
   const gridInner = document.createElement('div');
   gridInner.className = 'sheet-grid-inner';
-  gridInner.style.width = `${rowHeaderWidthPx + sheetTotalWidth}px`;
+  gridInner.style.width = `${rowHeaderWidthPx + mountedSheetCellsWidth}px`;
 
   const headerRow = document.createElement('div');
   headerRow.className = 'sheet-header-row';
@@ -1060,6 +1088,8 @@ export function mountSpreadsheet(
   gridBody.className = 'sheet-grid-body';
   gridBody.style.height = `${sheetTotalHeight}px`;
 
+  const rowCellsEls: HTMLDivElement[] = [];
+
   for (let row = 1; row <= mountedRowCount; row++) {
     const rowEl = document.createElement('div');
     rowEl.className = 'sheet-row';
@@ -1081,11 +1111,11 @@ export function mountSpreadsheet(
 
     const rowCells = document.createElement('div');
     rowCells.className = 'sheet-row-cells';
-    rowCells.style.width = `${sheetTotalWidth}px`;
+    rowCells.style.width = `${mountedSheetCellsWidth}px`;
 
     const ghost = isGhostRow(row);
 
-    for (let col = 1; col <= columnCountTotal; col++) {
+    for (let col = 1; col <= dataColumnCount; col++) {
       const cell = document.createElement('div');
       cell.className = 'sheet-cell';
       cell.dataset.row = String(row);
@@ -1132,8 +1162,99 @@ export function mountSpreadsheet(
       if (!ghost) updateCommentIndicator(row, col);
       rowCells.appendChild(cell);
     }
+    rowCellsEls.push(rowCells);
     rowEl.append(rowGutter, rowCells);
     gridBody.appendChild(rowEl);
+  }
+
+  const ghostColumnHeaderEls: HTMLDivElement[] = [];
+
+  function createGhostColumnHeader(col: number): HTMLDivElement {
+    const h = document.createElement('div');
+    h.className = 'sheet-column-header sheet-column-header--ghost';
+    h.style.width = `${widthOfMountedCol1Based(col)}px`;
+    h.setAttribute('aria-hidden', 'true');
+    return h;
+  }
+
+  function createGhostColumnCell(row: number, col: number): HTMLDivElement {
+    const cell = document.createElement('div');
+    cell.className = 'sheet-cell sheet-cell--ghost-column';
+    cell.dataset.row = String(row);
+    cell.dataset.col = String(col);
+    cell.style.width = `${widthOfMountedCol1Based(col)}px`;
+    cell.style.left = `${cumulativeColumnWidths[col - 1]}px`;
+    cell.style.pointerEvents = 'none';
+
+    const content = document.createElement('div');
+    content.className = 'sheet-cell-content';
+    content.textContent = '';
+
+    const input = document.createElement('input');
+    input.className = 'sheet-cell-input';
+    input.type = 'text';
+    input.readOnly = true;
+    input.tabIndex = -1;
+    input.value = '';
+    input.setAttribute('aria-hidden', 'true');
+
+    const gr = isGhostRow(row);
+    cell.classList.add('sheet-cell-readonly');
+    if (gr) cell.classList.add('sheet-cell--ghost');
+
+    cell.append(content, input);
+    return cell;
+  }
+
+  function setGhostColumnCount(next: number): void {
+    if (!ghostColumnsEnabled) return;
+    const capped = Math.max(0, Math.min(maxGhostColumns, next));
+    if (capped === ghostColumnCount) return;
+    const prev = ghostColumnCount;
+    ghostColumnCount = capped;
+    rebuildCumulativeColumnWidthsAndMountedWidth();
+
+    gridInner.style.width = `${rowHeaderWidthPx + mountedSheetCellsWidth}px`;
+
+    if (capped > prev) {
+      for (let g = prev + 1; g <= capped; g++) {
+        const col = dataColumnCount + g;
+        const h = createGhostColumnHeader(col);
+        headerRow.appendChild(h);
+        ghostColumnHeaderEls.push(h);
+      }
+      for (let row = 1; row <= mountedRowCount; row++) {
+        const rowCells = rowCellsEls[row - 1]!;
+        rowCells.style.width = `${mountedSheetCellsWidth}px`;
+        for (let g = prev + 1; g <= capped; g++) {
+          const col = dataColumnCount + g;
+          const cell = createGhostColumnCell(row, col);
+          rowCells.appendChild(cell);
+          cells.set(cellKey(row, col), cell);
+        }
+      }
+    } else {
+      for (let g = prev; g > capped; g--) {
+        ghostColumnHeaderEls.pop()?.remove();
+      }
+      for (let row = 1; row <= mountedRowCount; row++) {
+        const rowCells = rowCellsEls[row - 1]!;
+        rowCells.style.width = `${mountedSheetCellsWidth}px`;
+        for (let g = prev; g > capped; g--) {
+          const col = dataColumnCount + g;
+          const k = cellKey(row, col);
+          cells.get(k)?.remove();
+          cells.delete(k);
+        }
+      }
+    }
+  }
+
+  function syncGhostColumnsToViewport(): void {
+    if (!ghostColumnsEnabled) return;
+    const vpW = viewport.clientWidth;
+    const need = Math.ceil((vpW - rowHeaderWidthPx - dataSheetTotalWidth) / ghostColumnWidthPx);
+    setGhostColumnCount(need);
   }
 
   const suggestPopover = document.createElement('div');
@@ -1385,6 +1506,16 @@ export function mountSpreadsheet(
   viewport.append(gridInner);
   root.append(viewport, suggestPopover, commentPopover, commentPreviewPop);
   container.appendChild(root);
+
+  let disconnectLayout: (() => void) | undefined;
+  if (ghostColumnsEnabled) {
+    const ro = new ResizeObserver(() => {
+      syncGhostColumnsToViewport();
+    });
+    ro.observe(viewport);
+    queueMicrotask(() => syncGhostColumnsToViewport());
+    disconnectLayout = () => ro.disconnect();
+  }
 
   commentPreviewPop.addEventListener('pointerenter', () => {
     if (commentPreviewHideTimer !== null) {
@@ -1666,8 +1797,8 @@ export function mountSpreadsheet(
     selectArea.row = row;
     selectArea.col = 1;
     selectArea.rowEnd = row;
-    selectArea.colEnd = columnCountTotal;
-    selectArea.active = columnCountTotal > 1;
+    selectArea.colEnd = dataColumnCount;
+    selectArea.active = dataColumnCount > 1;
     syncSelectionHighlight();
     if (selectArea.active) {
       enterRangeSelectionUi();
@@ -1895,7 +2026,7 @@ export function mountSpreadsheet(
     r = clampRow(r);
     c = clampCol(c);
     const step = directionRight ? 1 : -1;
-    const limit = directionRight ? columnCountTotal : 1;
+    const limit = directionRight ? dataColumnCount : 1;
 
     if (!isOccupied(r, c)) {
       let j = c + step;
@@ -2269,6 +2400,7 @@ export function mountSpreadsheet(
     showCellPersistError,
     replayClipboardPaste: applyPastedGrid,
     applyRemoteRowClear,
+    ...(disconnectLayout ? { disconnectLayout } : {}),
   };
 
   return handle;

@@ -95,6 +95,16 @@ export interface SpreadsheetConfig {
    * context menu row actions and paste targets; `rowCount` is unchanged for grow/paste and collab.
    */
   ghostRowCount?: number;
+  /**
+   * When true (default), extra columns pad the grid to the viewport width (ResizeObserver on the
+   * sheet viewport). Ghost columns are non-data, non-focusable, and excluded from selection bounds,
+   * copy/paste, and collab cell indices.
+   */
+  enableGhostColumns?: boolean;
+  /** Pixel width of each ghost column. Default 72. */
+  ghostColumnWidthPx?: number;
+  /** Maximum ghost columns to create. Default 80. */
+  maxGhostColumns?: number;
   defaultRowHeightPx?: number;
   data: SpreadsheetDataStore;
   /**
@@ -229,4 +239,9 @@ export interface SpreadsheetMountHandle {
    * Clear writable cells in a row when a peer deleted it (`row.deleted`). Does not call `onRowDeleted`.
    */
   applyRemoteRowClear(row: number): void;
+  /**
+   * Disconnects the viewport ResizeObserver used for ghost columns. Call before removing the mount
+   * container from the DOM (e.g. sheet remount).
+   */
+  disconnectLayout?: () => void;
 }

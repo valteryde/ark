@@ -50,6 +50,9 @@ const sheetHost: HTMLElement = sheetMountEl;
 const toolbarHost: HTMLElement = toolbarMountEl;
 const sheetPanel: HTMLElement = sheetPanelEl;
 
+/** Disconnect ghost-column ResizeObserver before clearing #sheet-mount. */
+let disconnectSheetLayout: (() => void) | null = null;
+
 const SHEET_VIEWS = [
   { id: 'quarterly', label: 'Quarterly plan', create: createRoadmapPreset },
   { id: 'backlog', label: 'Backlog', create: createRoadmapBacklogPreset },
@@ -89,6 +92,8 @@ function showPartnerError(err: unknown): void {
   a.textContent = 'Run demo mode (local presets, no partner)';
   partnerErrorEl.appendChild(a);
   partnerErrorEl.hidden = false;
+  disconnectSheetLayout?.();
+  disconnectSheetLayout = null;
   sheetHost.replaceChildren();
   toolbarHost.replaceChildren();
   if (chromeActionsEl) {
@@ -173,8 +178,11 @@ function initDemoMode(): void {
     const view = SHEET_VIEWS[viewIndex];
     if (!view) return;
     const config = view.create();
+    disconnectSheetLayout?.();
+    disconnectSheetLayout = null;
     sheetHost.replaceChildren();
     const sheet = mountSpreadsheet(sheetHost, config);
+    disconnectSheetLayout = sheet.disconnectLayout ?? null;
     toolbarHost.replaceChildren();
     mountFormattingToolbar(
       toolbarHost,
@@ -411,8 +419,11 @@ function initPartnerMode(): void {
         ...(recordId !== undefined ? { recordId } : {}),
       });
     };
+    disconnectSheetLayout?.();
+    disconnectSheetLayout = null;
     sheetHost.replaceChildren();
     liveHandle = mountSpreadsheet(sheetHost, config);
+    disconnectSheetLayout = liveHandle.disconnectLayout ?? null;
     liveStore = store;
     toolbarHost.replaceChildren();
     mountFormattingToolbar(
