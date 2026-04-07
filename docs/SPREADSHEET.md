@@ -8,7 +8,7 @@ This document is the contract that both sides should align on.
 
 ## Architecture
 
-1. **`SpreadsheetConfig`** — Declares columns (id, header, width, optional `readOnly` for system/computed columns shown darker and non-editable), optional **value typing** (`valueType`, `selectOptions`, `allowEmpty`), row count, default row height, and which **UI capabilities** the backend says are available (toolbar, future actions).
+1. **`SpreadsheetConfig`** — Declares columns (id, header, width, optional `readOnly` for system/computed columns shown darker and non-editable), optional **value typing** (`valueType`, `selectOptions`, `allowEmpty`), row count, default row height, which **UI capabilities** the backend says are available (toolbar, future actions), and optional **`growRowCountForPaste`** — when a paste would extend past the last row, the host can remount with a larger **`rowCount`** and replay the paste (partner shell uses this).
 2. **`SpreadsheetDataStore`** — Synchronous `get` / `set` per `(row, col)` plus optional **`getCellStyle(row, col)`** returning inline CSS as kebab-case keys (e.g. `{ "background-color": "#f5f5f5" }`) applied to the cell shell. **This is the seam for REST**: implement with `fetch`, cache, PATCH/PUT on commit, etc. The default **`createInMemoryDataStore(initial)`** accepts either a plain `string | number` or `{ value, style? }` per `"row:col"` key for demos and tests. For **undo/redo**, the in-memory store also implements **`hasCell`**, **`getStoredCell`**, and **`replaceCell(row, col, cell | null)`** (`null` removes the key). Custom adapters that omit these methods get **`historyEnabled: false`** on the mount handle; undo/redo shortcuts and toolbar actions stay inert.
 3. **Select column chips** — For `valueType: 'select'`, each **`selectOptions`** entry can include optional **`color`**, **`backgroundColor`**, and **`icon`** (Phosphor icon name). The UI renders a small chip when any of these are present; see **[PARTNER_API.md](PARTNER_API.md)**.
 4. **`enabledUiCapabilities`** — Optional set of toolbar/feature flags (undo, bold, fill, …). The shell hides or disables controls based on this; it is the **documented contract** for API payloads.
@@ -47,7 +47,7 @@ Rich cell HTML for select chips is built from **sanitized** `color` / `backgroun
 
 - **Gestures**: Each committed cell edit, range clear (**Backspace** with a multi-cell selection), and formatting change (toolbar applying CSS via `mergeCellStyle`) is one undo step. Fill color drags in the native picker are **batched** into one step per pick session.
 - **Keyboard**: **Cmd+Z** / **Ctrl+Z** undo; **Cmd+Shift+Z** / **Ctrl+Shift+Z** redo; **Ctrl+Y** redo (Windows-style).
-- **Handle**: `SpreadsheetMountHandle` exposes **`undo()`**, **`redo()`**, **`canUndo()`**, **`canRedo()`**, **`subscribeHistoryChange`**, **`runHistoryBatch`**, **`beginHistoryBatch`**, **`endHistoryBatch`**, and **`historyEnabled`**.
+- **Handle**: `SpreadsheetMountHandle` exposes **`undo()`**, **`redo()`**, **`canUndo()`**, **`canRedo()`**, **`subscribeHistoryChange`**, **`runHistoryBatch`**, **`beginHistoryBatch`**, **`endHistoryBatch`**, **`historyEnabled`**, **`applyExternalValue`** (collab), **`replayClipboardPaste`** (same paste pipeline as native paste, for host-driven replay after row growth), and collab/persist helpers documented in TypeScript.
 
 ## API entrypoints (TypeScript)
 

@@ -53,9 +53,14 @@ hub = CollabHub()
 
 # Ephemeral WebSocket-only messages; do not POST to partner tunnel.
 _TUNNEL_SKIP_TYPES = frozenset({"cell.presence", "cell.presence_clear"})
+# Partner-authoritative grid sync; only allowed via POST /api/ark/broadcast (not from browsers).
+_FORBIDDEN_WS_TYPES = frozenset({"sheet.truth"})
 
 # Browser WebSocket passes the partner token as a query param (same name as the SPA).
 _PARTNER_TOKEN_QUERY = "ark_token"
+
+# Server-to-server: partner calls BFF to fan out sheet snapshots. If unset, POST is disabled.
+_BROADCAST_TOKEN = os.environ.get("ARK_BROADCAST_TOKEN", "").strip()
 
 
 def _tunnel_headers_from_ws(websocket: WebSocket) -> dict[str, str]:
@@ -144,6 +149,40 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/ark/broadcast")
+async def partner_broadcast_sheet_truth(request: Request) -> JSONResponse:
+    """Partner pushes authoritative grid state; BFF broadcasts to all /ws/ark clients (no tunnel)."""
+    if not _BROADCAST_TOKEN:
+        return JSONResponse(
+            {"detail": "ARK_BROADCAST_TOKEN is not set on the Ark server"},
+            status_code=503,
+        )
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth != f"Bearer {_BROADCAST_TOKEN}":
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"detail": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"detail": "expected_object"}, status=400)
+    if body.get("type") != "sheet.truth":
+        return JSONResponse({"detail": "expected type sheet.truth"}, status=400)
+    sheet_path = body.get("sheetPath")
+    if not isinstance(sheet_path, str) or not sheet_path.strip():
+        return JSONResponse({"detail": "sheetPath must be a non-empty string"}, status=400)
+    if not isinstance(body.get("rows"), list):
+        return JSONResponse({"detail": "rows must be an array"}, status=400)
+    rc = body.get("rowCount")
+    if not isinstance(rc, int) or rc < 1:
+        return JSONResponse({"detail": "rowCount must be an integer >= 1"}, status=400)
+    cols = body.get("columns")
+    if cols is not None and not isinstance(cols, list):
+        return JSONResponse({"detail": "columns must be an array when present"}, status=400)
+    await hub.broadcast(body)
+    return JSONResponse({"status": "ok"})
+
+
 @app.api_route("/api/ark/routing/{path:path}", methods=["GET", "HEAD"])
 async def proxy_routing(path: str, request: Request) -> Response:
     if not BACKEND:
@@ -181,6 +220,9 @@ async def collab_ws(websocket: WebSocket) -> None:
                 continue
             if not isinstance(data, dict):
                 await websocket.send_json({"error": "expected_object"})
+                continue
+            if data.get("type") in _FORBIDDEN_WS_TYPES:
+                await websocket.send_json({"error": "forbidden_message_type"})
                 continue
             await hub.broadcast(data)
             if data.get("type") not in _TUNNEL_SKIP_TYPES:

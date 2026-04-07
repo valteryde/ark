@@ -4,10 +4,12 @@ This guide explains how to implement the **partner** service Ark talks to: the H
 
 ## What you build
 
-You implement **two** pieces on your base URL:
+You implement **two** core pieces on your base URL:
 
 1. **`GET /ark/routing/{path}`** — Return JSON that describes one spreadsheet (columns, rows, options).
 2. **`POST /ark/tunnel`** — Accept persisted “tunnel” events when users commit cell values (and related collab traffic).
+
+Optionally, when your data **order or row list** changes in a way that no longer matches what browsers have in memory, call the Ark BFF’s **`POST /api/ark/broadcast`** with a **`sheet.truth`** payload so open tabs resync (see **[PARTNER_API.md](PARTNER_API.md)** — broadcast section).
 
 The Ark **BFF** ([`server/app/main.py` on GitHub](https://github.com/valteryde/ark/blob/main/server/app/main.py)) proxies the browser’s same-origin **`GET /api/ark/routing/{path}`** to your **`GET /ark/routing/{path}`**, and forwards **`Authorization`**, **`Cookie`**, and standard accept headers. The browser never calls your partner origin directly, so you avoid CORS for those reads.
 
@@ -54,6 +56,8 @@ Other **`type`** values and the exact mapping from WebSocket messages are docume
 
 - Treat tunnel posts as **best-effort notifications** unless you define stronger guarantees; the sample partner overwrites storage from each event.
 - Order is generally **sequential per deploy**; design idempotency if you retry or scale out.
+- **`row`** is a **grid index** (aligned with your **`rows`** array order from routing / last truth push), not necessarily your SQL primary key. Mark your key column **`readOnly: true`** so Ark sends **`recordId`** on commits and you can **`UPDATE … WHERE id = ?`** without depending on index alone.
+- If you insert a row and your default **`ORDER BY`** moves it to another visual position, open tabs may disagree on indices until you **`POST /api/ark/broadcast`** a fresh **`sheet.truth`** (or the user reloads).
 
 ## URLs and routing
 

@@ -26,6 +26,10 @@ def _optional_example_partner_token(request: Request) -> None:
 
 
 def clients_sheet() -> dict:
+    rows = [
+        {"id": 1, "name": "Client 1"},
+        {"id": 2, "name": "Client 2"},
+    ]
     return {
         "title": "Client list for marketing team",
         "description": "Static sample data",
@@ -36,17 +40,18 @@ def clients_sheet() -> dict:
                     {"id": "id", "header": "ID", "widthPx": 72, "readOnly": True},
                     {"id": "name", "header": "Name", "widthPx": 240},
                 ],
-                "rows": [
-                    {"id": 1, "name": "Client 1"},
-                    {"id": 2, "name": "Client 2"},
-                ],
-                "rowCount": 20,
+                "rows": rows,
+                "rowCount": len(rows) + 1,
             }
         ],
     }
 
 
 def records_sheet() -> dict:
+    rows = [
+        {"id": 1, "name": "Record 1", "client_id": 1},
+        {"id": 2, "name": "Record 2", "client_id": 1},
+    ]
     return {
         "title": "Business records for customer support team",
         "description": "Static sample data",
@@ -58,11 +63,8 @@ def records_sheet() -> dict:
                     {"id": "name", "header": "Name", "widthPx": 220},
                     {"id": "client_id", "header": "Client", "widthPx": 100, "valueType": "number"},
                 ],
-                "rows": [
-                    {"id": 1, "name": "Record 1", "client_id": 1},
-                    {"id": 2, "name": "Record 2", "client_id": 1},
-                ],
-                "rowCount": 20,
+                "rows": rows,
+                "rowCount": len(rows) + 1,
             }
         ],
     }

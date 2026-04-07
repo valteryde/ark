@@ -47,7 +47,7 @@ Output: **`dist/`** (HTML, `assets/main.js`, `assets/main.css`, favicon). Serve 
 
 ## Embedding and backends
 
-- **Same-origin BFF**: Run `uvicorn` (or Docker). The browser uses **`GET /api/ark/routing/{path}`** (proxied to `{ARK_BACKEND_URL}/ark/routing/{path}`) and can use **`WebSocket /ws/ark`** for collaboration; the server **`POST`s** mapped events to **`{ARK_BACKEND_URL}/ark/tunnel`**.
+- **Same-origin BFF**: Run `uvicorn` (or Docker). The browser uses **`GET /api/ark/routing/{path}`** (proxied to `{ARK_BACKEND_URL}/ark/routing/{path}`) and can use **`WebSocket /ws/ark`** for collaboration; the server **`POST`s** mapped events to **`{ARK_BACKEND_URL}/ark/tunnel`**. Optional **`ARK_BROADCAST_TOKEN`**: when set, your partner can **`POST /api/ark/broadcast`** to the BFF with a **`sheet.truth`** payload so all connected browsers resync rows (see **[docs/PARTNER_API.md](docs/PARTNER_API.md)**).
 - **Static only**: Deploy `dist/` behind any reverse proxy if you do not need this repo’s Python routes.
 
 Embedders can still use **`mountSpreadsheet`** from TypeScript in their own apps; this repo’s default page is partner-first.

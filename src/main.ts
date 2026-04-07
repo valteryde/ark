@@ -1,7 +1,13 @@
 import { getCollabClientIdentity } from './partner/collab-session.ts';
 import { PartnerFetchError, fetchRoutingJson } from './partner/fetch-routing.ts';
 import { initPartnerTokenFromLocation } from './partner/partner-token.ts';
-import { normalizePartnerSheetPayload, rowsToInitialMap, sheetPayloadToConfig } from './partner/map-sheet-payload.ts';
+import {
+  normalizePartnerSheetPayload,
+  partnerEffectiveRowCount,
+  rowsToInitialMap,
+  sheetPayloadToConfig,
+} from './partner/map-sheet-payload.ts';
+import type { PartnerSheetPayload } from './partner/types.ts';
 import { openCollabWs } from './partner/collab-ws.ts';
 import {
   createPartnerNotifyDataStore,
@@ -205,6 +211,8 @@ function initPartnerMode(): void {
   let loadSeq = 0;
   let activeSheetPath: string | null = null;
   let loadedRoutingPath: string | null = null;
+  let lastPartnerPayload: PartnerSheetPayload | null = null;
+  let pendingPastePlain: string | null = null;
 
   const remotePeers = new Map<
     string,
@@ -244,8 +252,15 @@ function initPartnerMode(): void {
     }
   }
 
+  let remountPartnerSheetFromPayload: (
+    routingPath: string,
+    payload: PartnerSheetPayload,
+    resetPresence: boolean,
+  ) => void;
+
   const collab = openCollabWs({
     getActiveSheetPath: () => activeSheetPath,
+    getFallbackColumns: () => lastPartnerPayload?.columns ?? null,
     localClientId: collabIdentity.clientId,
     onRemoteCommitted(row, col, value, meta) {
       if (!liveHandle || !liveStore) return;
@@ -281,7 +296,81 @@ function initPartnerMode(): void {
       const detail = info.message?.trim() || undefined;
       liveHandle.showCellPersistError(info.row, info.col, detail);
     },
+    onSheetTruth(truth) {
+      const path = loadedRoutingPath;
+      if (path === null || truth.sheetPath !== path) return;
+      remountPartnerSheetFromPayload(path, truth.payload, true);
+    },
   });
+
+  remountPartnerSheetFromPayload = (
+    routingPath: string,
+    payload: PartnerSheetPayload,
+    resetPresence: boolean,
+  ): void => {
+    lastPartnerPayload = {
+      columns: payload.columns.map((c) => ({ ...c })),
+      rows: [...payload.rows],
+      title: payload.title,
+      description: payload.description,
+      rowCount: payload.rowCount,
+      defaultRowHeightPx: payload.defaultRowHeightPx,
+      enabledUiCapabilities: payload.enabledUiCapabilities,
+    };
+    const initial = rowsToInitialMap(payload.columns, payload.rows);
+    const pathForCollab = routingPath;
+    clearPresenceWiring();
+    if (resetPresence) {
+      remotePeers.clear();
+    }
+    const store = createPartnerNotifyDataStore(payload.columns, initial, (ev) => {
+      collab.sendCommitted({
+        type: 'cell.value_committed',
+        row: ev.row,
+        col: ev.col,
+        columnId: ev.columnId,
+        value: ev.value,
+        sheetPath: pathForCollab,
+        clientId: collabIdentity.clientId,
+        markerHue: collabIdentity.markerHue,
+        ...(ev.recordId !== undefined ? { recordId: ev.recordId } : {}),
+      });
+    }) as PartnerNotifyDataStore;
+    const config = sheetPayloadToConfig(payload, store);
+    config.growRowCountForPaste = ({ minRowCount, plain }) => {
+      if (!lastPartnerPayload) return;
+      pendingPastePlain = plain;
+      const nextCount = Math.max(partnerEffectiveRowCount(lastPartnerPayload), minRowCount);
+      lastPartnerPayload = { ...lastPartnerPayload, rowCount: nextCount };
+      remountPartnerSheetFromPayload(routingPath, lastPartnerPayload, false);
+    };
+    sheetHost.replaceChildren();
+    liveHandle = mountSpreadsheet(sheetHost, config);
+    liveStore = store;
+    toolbarHost.replaceChildren();
+    mountFormattingToolbar(
+      toolbarHost,
+      liveHandle,
+      resolveEnabledUiCapabilities(config.enabledUiCapabilities),
+    );
+    presenceFocusHandler = () => scheduleLocalPresenceSend();
+    sheetHost.addEventListener('focusin', presenceFocusHandler, true);
+    sheetHost.addEventListener('focusout', presenceFocusHandler, true);
+    presenceUnsub = liveHandle.subscribeSelectionChange(scheduleLocalPresenceSend);
+    flushRemotePresenceToGrid();
+    scheduleLocalPresenceSend();
+    if (chromeTitleEl) {
+      chromeTitleEl.textContent = payload.title?.trim() ? payload.title : routingPath;
+    }
+    document.title = payload.title?.trim() ? payload.title : routingPath;
+    const replay = pendingPastePlain;
+    if (replay && liveHandle) {
+      pendingPastePlain = null;
+      queueMicrotask(() => {
+        liveHandle?.replayClipboardPaste(replay);
+      });
+    }
+  };
 
   function scheduleLocalPresenceSend(): void {
     if (presenceRaf !== null) return;
@@ -345,47 +434,13 @@ function initPartnerMode(): void {
       if (!payload) {
         throw new Error(`Invalid sheet payload for "${routingPath}"`);
       }
-      const initial = rowsToInitialMap(payload.columns, payload.rows);
-      const pathForCollab = routingPath;
-      clearPresenceWiring();
-      remotePeers.clear();
-      const store = createPartnerNotifyDataStore(payload.columns, initial, (ev) => {
-        collab.sendCommitted({
-          type: 'cell.value_committed',
-          row: ev.row,
-          col: ev.col,
-          columnId: ev.columnId,
-          value: ev.value,
-          sheetPath: pathForCollab,
-          clientId: collabIdentity.clientId,
-          markerHue: collabIdentity.markerHue,
-        });
-      }) as PartnerNotifyDataStore;
-      const config = sheetPayloadToConfig(payload, store);
-      sheetHost.replaceChildren();
-      liveHandle = mountSpreadsheet(sheetHost, config);
-      liveStore = store;
-      toolbarHost.replaceChildren();
-      mountFormattingToolbar(
-        toolbarHost,
-        liveHandle,
-        resolveEnabledUiCapabilities(config.enabledUiCapabilities),
-      );
+      remountPartnerSheetFromPayload(routingPath, payload, true);
       activeSheetPath = routingPath;
       loadedRoutingPath = routingPath;
-      presenceFocusHandler = () => scheduleLocalPresenceSend();
-      sheetHost.addEventListener('focusin', presenceFocusHandler, true);
-      sheetHost.addEventListener('focusout', presenceFocusHandler, true);
-      presenceUnsub = liveHandle.subscribeSelectionChange(scheduleLocalPresenceSend);
-      flushRemotePresenceToGrid();
-      scheduleLocalPresenceSend();
-      if (chromeTitleEl) {
-        chromeTitleEl.textContent = payload.title?.trim() ? payload.title : routingPath;
-      }
-      document.title = payload.title?.trim() ? payload.title : routingPath;
     } catch (e) {
       if (seq !== loadSeq) return;
       loadedRoutingPath = null;
+      lastPartnerPayload = null;
       showPartnerError(e);
       collab.close();
     }

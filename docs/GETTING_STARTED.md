@@ -164,7 +164,7 @@ Open [http://localhost:8000](http://localhost:8000).
 1. Read **[WRITING_A_PARTNER.md](WRITING_A_PARTNER.md)** — step-by-step partner implementation.
 2. Read **[PARTNER_API.md](PARTNER_API.md)** — URL → sheet route, sheet JSON, tunnel, and WebSocket events.
 3. Read **[SPREADSHEET.md](SPREADSHEET.md)** — column config, undo, value types, toolbar capabilities.
-4. **BFF**: **`GET /api/ark/routing/{path}`** → **`{ARK_BACKEND_URL}/ark/routing/{path}`**; **`WebSocket /ws/ark`** → broadcast + **`POST …/ark/tunnel`**. Sample: [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py).
+4. **BFF**: **`GET /api/ark/routing/{path}`** → **`{ARK_BACKEND_URL}/ark/routing/{path}`**; **`WebSocket /ws/ark`** → broadcast + **`POST …/ark/tunnel`**; optional **`POST /api/ark/broadcast`** ( **`ARK_BROADCAST_TOKEN`** ) for partner-pushed **`sheet.truth`**. Sample: [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py).
 5. **Production**: Run the Docker image or `uvicorn` behind your reverse proxy; set **`ARK_BACKEND_URL`**.
 
 Entry points: partner wiring in [`src/main.ts`](https://github.com/valteryde/ark/blob/main/src/main.ts) and [`src/partner/`](https://github.com/valteryde/ark/tree/main/src/partner); reusable grid API under **`src/spreadsheet/`** ([`src/spreadsheet/index.ts`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/index.ts)).

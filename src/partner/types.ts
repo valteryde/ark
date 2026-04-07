@@ -23,6 +23,11 @@ export interface CellValueCommittedEvent {
   clientId?: string;
   /** 0–360; peers flash the cell with this hue when applying the remote value. */
   markerHue?: number;
+  /**
+   * First read-only column value for this row (e.g. primary key), when present.
+   * Lets the partner apply tunnel updates by id instead of row index alone.
+   */
+  recordId?: string | number;
 }
 
 /**

@@ -6,7 +6,13 @@ export type OnCellSetNotify = (args: {
   col: number;
   columnId: string;
   value: string | number;
+  recordId?: string | number;
 }) => void;
+
+function readOnlyIdColumnIndex(columns: readonly SpreadsheetColumn[]): number {
+  const i = columns.findIndex((c) => c.readOnly);
+  return i >= 0 ? i + 1 : 0;
+}
 
 /**
  * In-memory store that notifies on `set` for collab/tunnel (skips when applyingRemote).
@@ -31,7 +37,13 @@ export function createPartnerNotifyDataStore(
       if (applyingRemote) return;
       const colDef = columns[col - 1];
       if (!colDef) return;
-      onSet({ row, col, columnId: colDef.id, value });
+      const idCol = readOnlyIdColumnIndex(columns);
+      let recordId: string | number | undefined;
+      if (idCol > 0 && idCol !== col) {
+        const v = inner.get(row, idCol);
+        if (v !== undefined && v !== '') recordId = v;
+      }
+      onSet({ row, col, columnId: colDef.id, value, recordId });
     },
     /** Call around applyExternalValue / remote applies so outbound notify does not fire. */
     withRemoteApply<T>(fn: () => T): T {

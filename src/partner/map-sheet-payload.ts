@@ -136,8 +136,7 @@ export function sheetPayloadToConfig(
   data: SpreadsheetConfig['data'],
 ): SpreadsheetConfig {
   const { columns, rows, rowCount, defaultRowHeightPx, enabledUiCapabilities } = payload;
-  const minRows = Math.max(rows.length, 1);
-  const rc = rowCount !== undefined && rowCount >= minRows ? rowCount : Math.max(minRows, 100);
+  const rc = partnerEffectiveRowCount(payload);
 
   return {
     columns,
@@ -146,4 +145,54 @@ export function sheetPayloadToConfig(
     data,
     enabledUiCapabilities,
   };
+}
+
+/** Resolved grid height for a partner payload (same rule as `sheetPayloadToConfig`). */
+export function partnerEffectiveRowCount(payload: PartnerSheetPayload): number {
+  const minRows = Math.max(payload.rows.length, 1);
+  const { rowCount } = payload;
+  return rowCount !== undefined && rowCount >= minRows ? rowCount : Math.max(minRows, 100);
+}
+
+export type SheetTruthNormalized = { sheetPath: string; payload: PartnerSheetPayload };
+
+/**
+ * Validate a BFF-broadcast `sheet.truth` body (partner push).
+ * When `columns` is omitted, `fallbackColumns` from the last routing load must be supplied.
+ */
+export function normalizeSheetTruthPayload(
+  raw: unknown,
+  fallbackColumns: readonly SpreadsheetColumn[] | null,
+): SheetTruthNormalized | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (o.type !== 'sheet.truth') return null;
+  const sheetPath = typeof o.sheetPath === 'string' && o.sheetPath.trim() ? o.sheetPath.trim() : null;
+  if (!sheetPath) return null;
+  if (!Array.isArray(o.rows)) return null;
+  const rows = (o.rows as unknown[]).filter((r): r is Record<string, unknown> => r !== null && typeof r === 'object');
+  let columns: SpreadsheetColumn[];
+  if (Array.isArray(o.columns)) {
+    columns = (o.columns as unknown[]).map(normalizeColumn).filter((c): c is SpreadsheetColumn => c !== null);
+    if (columns.length === 0) return null;
+  } else if (fallbackColumns && fallbackColumns.length > 0) {
+    columns = [...fallbackColumns];
+  } else {
+    return null;
+  }
+  const rowCount = typeof o.rowCount === 'number' && o.rowCount >= 1 ? o.rowCount : undefined;
+  const enabledUiCapabilities = Array.isArray(o.enabledUiCapabilities)
+    ? (o.enabledUiCapabilities.filter((s): s is UiToolbarCapability => typeof s === 'string') as UiToolbarCapability[])
+    : undefined;
+  const payload: PartnerSheetPayload = {
+    title: typeof o.title === 'string' ? o.title : undefined,
+    description: typeof o.description === 'string' ? o.description : undefined,
+    columns,
+    rows,
+    rowCount,
+    defaultRowHeightPx:
+      typeof o.defaultRowHeightPx === 'number' && o.defaultRowHeightPx > 0 ? o.defaultRowHeightPx : undefined,
+    enabledUiCapabilities,
+  };
+  return { sheetPath, payload };
 }

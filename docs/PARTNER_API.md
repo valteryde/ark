@@ -35,7 +35,7 @@ Returns a **SheetPayload** used to build [`SpreadsheetConfig`](https://github.co
 | `columns` | yes* | Array of column objects (see below); *or supply via nested `sheets[0]` |
 | `rows` | yes* | Array of row objects; keys should match column `id` |
 | `sheets` | no | If present, first element supplies `columns` / `rows` / `rowCount` when top-level fields are omitted |
-| `rowCount` | no | Default: at least `rows.length`, minimum 1 |
+| `rowCount` | no | Visible grid height; default at least `rows.length`, otherwise often `max(rows.length, 100)` in Ark. For a single empty “staging” row, use **`rows.length + 1`**. |
 | `defaultRowHeightPx` | no | Passed through to config |
 | `enabledUiCapabilities` | no | Toolbar flags (see SPREADSHEET.md) |
 
@@ -159,17 +159,50 @@ When the browser connected to **`/ws/ark`** with **`?ark_token=…`**, the BFF i
 
 **Shapes Ark sends** (after BFF mapping from WebSocket events):
 
-- `{ "type": "update_cell", "row", "col", "columnId", "value", "meta" }` — cell value committed.
+- `{ "type": "update_cell", "row", "col", "columnId", "value", "meta" }` — cell value committed. When the grid has a **read-only** column (typically the primary key), Ark may also send top-level **`recordId`** (same value as in **`meta`**) so you can run **`UPDATE … WHERE id = ?`** without relying on row index alone.
 - `{ "type": "new_cell" | "delete_cell", "meta" }` — reserved for future events.
 - `{ "type": "spreadsheet_event", "payload" }` — fallback.
 
 **Client → BFF WebSocket** (browser sends JSON on `ws://…/ws/ark`):
 
-- `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number }` — primary edit event. **`sheetPath`** is the same routing suffix as the current page (e.g. `clients`). **`clientId`** lets the sender ignore its own echo. **`markerHue`** (0–360) drives a **brief tint** on the updated cell for remote peers.
+- `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number, "recordId"?: string | number }` — primary edit event. **`sheetPath`** is the same routing suffix as the current page (e.g. `clients`). **`clientId`** lets the sender ignore its own echo. **`markerHue`** (0–360) drives a **brief tint** on the updated cell for remote peers. **`recordId`** is the current value of the **first read-only** column for that row (when present), for id-based persistence.
 - `{ "type": "cell.presence", "row", "col", "mode": "navigate" | "edit", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number }` — **ephemeral** cursor presence. Other clients draw a **colored border** on that cell (hue from **`markerHue`**). **`mode`** distinguishes focus vs editor-focused for the sender; the grid uses the same border either way. These messages are **not** forwarded to **`POST /ark/tunnel`**.
 - `{ "type": "cell.presence_clear", "sheetPath"?: string, "clientId"?: string }` — optional hint that a tab closed or left the sheet; peers remove that **`clientId`** from presence. Also **not** tunneled.
 
 The BFF **broadcasts** the same JSON to all connected clients. It **`POST`s** the **mapped** body to `{ARK_BACKEND_URL}/ark/tunnel` only for messages that are not ephemeral presence (`cell.presence`, `cell.presence_clear`).
+
+Browsers **must not** send **`{ "type": "sheet.truth" }`** on the WebSocket; the BFF rejects it. That type is reserved for the broadcast endpoint below.
+
+### Row index vs. database identity
+
+**`row`** in tunnel payloads is the **1-based grid row** at commit time. It matches the position of that row in the **`rows`** array from the **last** routing response or **last** `sheet.truth` push for this sheet, not a durable database id. If your canonical `ORDER BY` differs from what users see after inserts or reorders, indices can drift until you resync (see broadcast). Prefer **`recordId`** (read-only key column) or an explicit **`display_order`** in your model when you need stable targeting.
+
+### `POST /api/ark/broadcast` (partner → BFF, optional)
+
+When **row order**, **row-to-record mapping**, or **grid shape** changes on the server (new row inserted and sorted elsewhere, delete, bulk import, `rowCount` change, etc.), you can **push** fresh sheet state to every open Ark tab **without** requiring a full page reload.
+
+1. Set **`ARK_BROADCAST_TOKEN`** on the Ark server to a long random secret (separate from user `ark_token`s).
+2. From your partner backend, **`POST`** same-origin to the Ark BFF (e.g. `http://ark-bff:8000/api/ark/broadcast`) with header **`Authorization: Bearer <ARK_BROADCAST_TOKEN>`** and JSON body:
+
+```json
+{
+  "type": "sheet.truth",
+  "sheetPath": "clients",
+  "columns": [ … ],
+  "rows": [ … ],
+  "rowCount": 42,
+  "title": "…",
+  "description": "…",
+  "defaultRowHeightPx": 28,
+  "enabledUiCapabilities": [ "undo", "format-bold" ]
+}
+```
+
+- **`sheetPath`** must match the routing suffix clients have open (same as **`sheetPath`** on cell events).
+- **`rows`** and **`rowCount`** are required. **`columns`** may be omitted if unchanged; Ark then reuses columns from the client’s last successful routing load for that tab.
+- The BFF **broadcasts** this object to all **`/ws/ark`** connections and does **not** call **`/ark/tunnel`** (no loop).
+
+**When to push:** use after structural or ordering changes where clients could disagree on which grid row maps to which record. **When not to push:** routine in-place updates to an existing row where **`recordId`** + collab **`cell.value_committed`** already keep tabs aligned.
 
 ## Browser URLs (SPA)
 

@@ -95,6 +95,11 @@ export interface SpreadsheetConfig {
    * Toolbar features the backend exposes (for chrome binding).
    */
   enabledUiCapabilities?: ReadonlySet<UiToolbarCapability> | UiToolbarCapability[];
+  /**
+   * When a paste needs more rows than `rowCount`, the host can remount with a larger `rowCount`
+   * and replay the paste. If set, called instead of clipping when the paste grid extends past the bottom.
+   */
+  growRowCountForPaste?: (args: { minRowCount: number; plain: string }) => void;
 }
 
 export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
@@ -190,4 +195,9 @@ export interface SpreadsheetMountHandle {
    * Clears when the user edits the cell or after a short timeout.
    */
   showCellPersistError(row: number, col: number, message?: string): void;
+  /**
+   * Re-apply clipboard TSV/CSV text as if the user pasted it (same validation as native paste).
+   * Used after the host expands `rowCount` following `growRowCountForPaste`.
+   */
+  replayClipboardPaste(plain: string): void;
 }

@@ -1,5 +1,7 @@
 import type { CellPresenceClearEvent, CellPresenceEvent, CellValueCommittedEvent } from './types.ts';
+import { normalizeSheetTruthPayload, type SheetTruthNormalized } from './map-sheet-payload.ts';
 import { PARTNER_TOKEN_PARAM, getPartnerToken } from './partner-token.ts';
+import type { SpreadsheetColumn } from '../spreadsheet/types.ts';
 
 export function collabWsUrl(): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -129,6 +131,8 @@ function parsePersistFailed(
 export function openCollabWs(opts: {
   getActiveSheetPath: () => string | null;
   localClientId: string;
+  /** Columns from the last successful routing load; used when `sheet.truth` omits `columns`. */
+  getFallbackColumns: () => readonly SpreadsheetColumn[] | null;
   onRemoteCommitted: (
     row: number,
     col: number,
@@ -138,6 +142,8 @@ export function openCollabWs(opts: {
   onRemotePresence: (msg: RemotePresenceUpdate) => void;
   /** BFF sends this when POST /ark/tunnel fails after a local `cell.value_committed`. */
   onCellPersistFailed?: (info: CellPersistFailedInfo) => void;
+  /** Partner pushed authoritative rows via `POST /api/ark/broadcast`. */
+  onSheetTruth?: (truth: SheetTruthNormalized) => void;
 }): CollabConnection {
   const ws = new WebSocket(collabWsUrl());
   const pending: string[] = [];
@@ -205,6 +211,16 @@ export function openCollabWs(opts: {
         markerHue: presence.markerHue,
         sheetPath: presence.sheetPath,
       });
+      return;
+    }
+
+    if (rec.type === 'sheet.truth') {
+      const parsed = normalizeSheetTruthPayload(rec, opts.getFallbackColumns());
+      if (!parsed) return;
+      const active = opts.getActiveSheetPath();
+      if (active === null) return;
+      if (parsed.sheetPath !== active) return;
+      opts.onSheetTruth?.(parsed);
       return;
     }
 

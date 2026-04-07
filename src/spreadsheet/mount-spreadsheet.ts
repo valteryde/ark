@@ -182,6 +182,7 @@ export function mountSpreadsheet(
   const rowHeaderWidthPx = 48;
 
   const data = config.data;
+  const { growRowCountForPaste } = config;
 
   const historyEnabled =
     typeof data.replaceCell === 'function' &&
@@ -787,6 +788,12 @@ export function mountSpreadsheet(
     persistActiveInput();
 
     const anchor = getPasteAnchor();
+    const maxR = anchor.row + grid.length - 1;
+    if (maxR > rowCountTotal && growRowCountForPaste) {
+      growRowCountForPaste({ minRowCount: maxR, plain });
+      return;
+    }
+
     const keys = collectPasteTargetKeys(anchor.row, anchor.col, grid);
     const before = history && keys.length > 0 ? captureSnapshot(keys) : null;
 
@@ -1982,6 +1989,7 @@ export function mountSpreadsheet(
     getCollabPresencePayload,
     setRemoteCollabPresence,
     showCellPersistError,
+    replayClipboardPaste: applyPastedGrid,
   };
 
   return handle;

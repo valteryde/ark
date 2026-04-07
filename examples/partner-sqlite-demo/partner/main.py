@@ -87,7 +87,7 @@ def clients_sheet() -> dict:
                     {"id": "name", "header": "Name", "widthPx": 260},
                 ],
                 "rows": rows,
-                "rowCount": max(len(rows), 20),
+                "rowCount": len(rows) + 1,
             }
         ],
     }
@@ -113,7 +113,7 @@ def records_sheet() -> dict:
                     {"id": "client_id", "header": "Client", "widthPx": 100, "valueType": "number"},
                 ],
                 "rows": rows,
-                "rowCount": max(len(rows), 20),
+                "rowCount": len(rows) + 1,
             }
         ],
     }
@@ -140,6 +140,19 @@ def _coerce_client_id(value) -> int:
     raise ValueError
 
 
+def _coerce_sqlite_id(record_id) -> int | None:
+    if record_id is None:
+        return None
+    if isinstance(record_id, bool):
+        return None
+    if isinstance(record_id, int):
+        return record_id
+    s = str(record_id).strip()
+    if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
+        return int(s)
+    return None
+
+
 def apply_tunnel_update(data: dict) -> None:
     if data.get("type") != "update_cell":
         return
@@ -153,22 +166,31 @@ def apply_tunnel_update(data: dict) -> None:
     if not isinstance(row, int) or row < 1:
         return
 
+    record_id = data.get("recordId")
+    if record_id is None and isinstance(meta, dict):
+        record_id = meta.get("recordId")
+    rid_by_key = _coerce_sqlite_id(record_id)
+
     with db() as conn:
         if sheet in ("clients", "api/clients"):
             if col_id != "name":
                 return
-            ids = [r[0] for r in conn.execute("SELECT id FROM clients ORDER BY id").fetchall()]
-            if row > len(ids):
-                return
-            rid = ids[row - 1]
+            rid = rid_by_key
+            if rid is None:
+                ids = [r[0] for r in conn.execute("SELECT id FROM clients ORDER BY id").fetchall()]
+                if row > len(ids):
+                    return
+                rid = ids[row - 1]
             conn.execute("UPDATE clients SET name = ? WHERE id = ?", (str(value), rid))
         elif sheet in ("records", "api/records"):
             if col_id not in ("name", "client_id"):
                 return
-            ids = [r[0] for r in conn.execute("SELECT id FROM records ORDER BY id").fetchall()]
-            if row > len(ids):
-                return
-            rid = ids[row - 1]
+            rid = rid_by_key
+            if rid is None:
+                ids = [r[0] for r in conn.execute("SELECT id FROM records ORDER BY id").fetchall()]
+                if row > len(ids):
+                    return
+                rid = ids[row - 1]
             if col_id == "name":
                 conn.execute("UPDATE records SET name = ? WHERE id = ?", (str(value), rid))
             else:
