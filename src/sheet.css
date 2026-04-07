@@ -837,6 +837,48 @@ a.app-sheet-tabs__tab {
   display: none !important;
 }
 
+/* Row context menu (right-click on cell or row gutter) */
+.sheet-context-menu {
+  position: fixed;
+  z-index: 55;
+  margin: 0;
+  padding: 0.25rem 0;
+  min-width: 11rem;
+  max-width: min(280px, calc(100vw - 16px));
+  background: var(--sheet-surface);
+  border: 1px solid var(--sheet-border);
+  border-radius: 6px;
+  box-shadow:
+    0 8px 24px rgb(0 0 0 / 12%),
+    0 0 0 1px rgb(0 0 0 / 5%);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  color: var(--sheet-cell-text);
+}
+
+.sheet-context-menu[hidden] {
+  display: none !important;
+}
+
+.sheet-context-menu__item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.85rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sheet-context-menu__item:hover,
+.sheet-context-menu__item:focus-visible {
+  background: var(--sheet-accent-bg);
+  outline: none;
+}
+
 /* Read-only comment preview (full text, multiline; not `title`) */
 .sheet-comment-preview {
   position: fixed;

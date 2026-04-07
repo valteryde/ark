@@ -216,9 +216,16 @@ export function mountSpreadsheet(
 
   function applySnapshot(snapshot: HistoryCellMap): void {
     if (!data.replaceCell) return;
-    for (const [k, state] of snapshot) {
-      const { row, col } = keyToRowCol(k);
-      data.replaceCell(row, col, state === undefined ? null : state);
+    const run = (): void => {
+      for (const [k, state] of snapshot) {
+        const { row, col } = keyToRowCol(k);
+        data.replaceCell!(row, col, state === undefined ? null : state);
+      }
+    };
+    if (config.suppressOutboundSyncDuring) {
+      config.suppressOutboundSyncDuring(run);
+    } else {
+      run();
     }
   }
 
@@ -744,6 +751,39 @@ export function mountSpreadsheet(
     return v === undefined ? '' : String(v);
   }
 
+  function buildRowPlainText(targetRow: number): string {
+    const r = clampRow(targetRow);
+    const parts: string[] = [];
+    for (let c = 1; c <= columnCountTotal; c++) {
+      const v = data.get(r, c);
+      const s = v === undefined ? '' : String(v);
+      parts.push(escapeTsvField(s));
+    }
+    return parts.join('\t');
+  }
+
+  function clearSheetRow(targetRow: number): void {
+    if (!data.replaceCell) return;
+    const row = clampRow(targetRow);
+    persistActiveInput();
+    const keys: string[] = [];
+    for (let col = 1; col <= columnCountTotal; col++) {
+      if (!isReadOnlyCol(col)) keys.push(cellKey(row, col));
+    }
+    if (keys.length === 0) return;
+    const before = history ? captureSnapshot(keys) : null;
+    for (const k of keys) {
+      const { row: rr, col } = keyToRowCol(k);
+      data.replaceCell(rr, col, null);
+      hydrateCellFromStore(rr, col);
+    }
+    if (history && before) {
+      const after = captureSnapshot(keys);
+      pushHistoryIfChanged(before, after);
+    }
+    notifySelectionChange();
+  }
+
   function shouldLetInputHandleCopy(evTarget: EventTarget | null): boolean {
     if (!(evTarget instanceof HTMLInputElement)) return false;
     if (!evTarget.classList.contains('sheet-cell-input')) return false;
@@ -965,6 +1005,7 @@ export function mountSpreadsheet(
     rowGutter.style.flex = `0 0 ${rowHeaderWidthPx}px`;
     rowGutter.style.width = `${rowHeaderWidthPx}px`;
     rowGutter.textContent = String(row);
+    rowGutter.dataset.row = String(row);
     rowGutter.setAttribute('aria-hidden', 'true');
 
     const rowCells = document.createElement('div');
@@ -1534,6 +1575,135 @@ export function mountSpreadsheet(
     syncSelectionHighlight();
     if (multi) enterRangeSelectionUi();
   }
+
+  function selectSheetRow(targetRow: number): void {
+    const row = clampRow(targetRow);
+    persistActiveInput();
+    hideSuggestions();
+    cells.get(cellKey(active.row, active.col))?.classList.remove('sheet-cell-active');
+    active = { row, col: 1 };
+    const next = cells.get(cellKey(row, 1));
+    next?.classList.add('sheet-cell-active');
+    const inp = next ? getCellEditor(next) : null;
+    if (inp) {
+      const stored = data.get(row, 1);
+      inp.value = stored !== undefined ? String(stored) : '';
+    }
+    selectArea.row = row;
+    selectArea.col = 1;
+    selectArea.rowEnd = row;
+    selectArea.colEnd = columnCountTotal;
+    selectArea.active = columnCountTotal > 1;
+    syncSelectionHighlight();
+    if (selectArea.active) {
+      enterRangeSelectionUi();
+    } else {
+      exitRangeSelectionUi();
+      if (isReadOnlyCol(1)) setTimeout(() => viewport.focus(), 0);
+      else if (inp) setTimeout(() => inp.focus(), 0);
+    }
+    notifySelectionChange();
+  }
+
+  const contextMenuEl = document.createElement('div');
+  contextMenuEl.className = 'sheet-context-menu';
+  contextMenuEl.setAttribute('role', 'menu');
+  contextMenuEl.setAttribute('aria-label', 'Row actions');
+  contextMenuEl.hidden = true;
+
+  let contextMenuRow: number | null = null;
+
+  function hideContextMenu(): void {
+    contextMenuEl.hidden = true;
+    contextMenuRow = null;
+    document.removeEventListener('pointerdown', onContextMenuDocPointerDown, true);
+    document.removeEventListener('keydown', onContextMenuDocKeydown, true);
+    viewport.removeEventListener('scroll', hideContextMenu);
+  }
+
+  function onContextMenuDocPointerDown(ev: PointerEvent): void {
+    if (contextMenuEl.contains(ev.target as Node)) return;
+    hideContextMenu();
+  }
+
+  function onContextMenuDocKeydown(ev: KeyboardEvent): void {
+    if (ev.key === 'Escape') hideContextMenu();
+  }
+
+  function showContextMenu(clientX: number, clientY: number, row: number): void {
+    hideContextMenu();
+    contextMenuRow = row;
+    contextMenuEl.hidden = false;
+    const pad = 6;
+    contextMenuEl.style.left = `${clientX}px`;
+    contextMenuEl.style.top = `${clientY}px`;
+    const r = contextMenuEl.getBoundingClientRect();
+    let left = clientX;
+    let top = clientY;
+    if (left + r.width > window.innerWidth - pad) {
+      left = Math.max(pad, window.innerWidth - r.width - pad);
+    }
+    if (top + r.height > window.innerHeight - pad) {
+      top = Math.max(pad, window.innerHeight - r.height - pad);
+    }
+    contextMenuEl.style.left = `${left}px`;
+    contextMenuEl.style.top = `${top}px`;
+    document.addEventListener('pointerdown', onContextMenuDocPointerDown, true);
+    document.addEventListener('keydown', onContextMenuDocKeydown, true);
+    viewport.addEventListener('scroll', hideContextMenu, { passive: true });
+  }
+
+  function makeContextMenuItem(label: string, onActivate: () => void): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sheet-context-menu__item';
+    btn.setAttribute('role', 'menuitem');
+    btn.textContent = label;
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      onActivate();
+      hideContextMenu();
+    });
+    return btn;
+  }
+
+  contextMenuEl.append(
+    makeContextMenuItem('Delete row', () => {
+      if (contextMenuRow !== null) clearSheetRow(contextMenuRow);
+    }),
+    makeContextMenuItem('Copy row', () => {
+      if (contextMenuRow === null) return;
+      persistActiveInput();
+      const text = buildRowPlainText(contextMenuRow);
+      void navigator.clipboard?.writeText(text);
+    }),
+    makeContextMenuItem('Select row', () => {
+      if (contextMenuRow !== null) selectSheetRow(contextMenuRow);
+    }),
+  );
+
+  root.appendChild(contextMenuEl);
+
+  viewport.addEventListener(
+    'contextmenu',
+    (e) => {
+      const t = e.target as HTMLElement;
+      const cell = t.closest('.sheet-cell');
+      const gutter = t.closest('.sheet-row-gutter');
+      let row: number | null = null;
+      if (cell && viewport.contains(cell)) {
+        row = clampRow(Number((cell as HTMLElement).dataset.row));
+      } else if (gutter && viewport.contains(gutter)) {
+        row = clampRow(Number((gutter as HTMLElement).dataset.row));
+      }
+      if (row === null || !Number.isFinite(row)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showContextMenu(e.clientX, e.clientY, row);
+    },
+    true,
+  );
 
   function endPointerDrag(focusIfClick: boolean): void {
     viewport.classList.remove('sheet-viewport--dragging');

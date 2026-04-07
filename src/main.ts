@@ -344,6 +344,9 @@ function initPartnerMode(): void {
       lastPartnerPayload = { ...lastPartnerPayload, rowCount: nextCount };
       remountPartnerSheetFromPayload(routingPath, lastPartnerPayload, false);
     };
+    config.suppressOutboundSyncDuring = (fn) => {
+      store.withRemoteApply(fn);
+    };
     sheetHost.replaceChildren();
     liveHandle = mountSpreadsheet(sheetHost, config);
     liveStore = store;

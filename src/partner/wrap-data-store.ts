@@ -1,3 +1,4 @@
+import { parseCommittedCellValue } from '../spreadsheet/cell-value.ts';
 import { createInMemoryDataStore, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
 import type { SpreadsheetColumn, SpreadsheetDataStore } from '../spreadsheet/types.ts';
 
@@ -31,7 +32,22 @@ export function createPartnerNotifyDataStore(
     mergeCellStyle: (row, col, patch) => inner.mergeCellStyle?.(row, col, patch),
     hasCell: (row, col) => inner.hasCell?.(row, col),
     getStoredCell: (row, col) => inner.getStoredCell?.(row, col),
-    replaceCell: (row, col, cell) => inner.replaceCell?.(row, col, cell),
+    replaceCell(row, col, cell) {
+      inner.replaceCell?.(row, col, cell);
+      if (applyingRemote) return;
+      if (cell !== null) return;
+      const colDef = columns[col - 1];
+      if (!colDef || colDef.readOnly) return;
+      const parsed = parseCommittedCellValue(colDef, '');
+      if (!parsed.ok) return;
+      const idCol = readOnlyIdColumnIndex(columns);
+      let recordId: string | number | undefined;
+      if (idCol > 0 && idCol !== col) {
+        const v = inner.get(row, idCol);
+        if (v !== undefined && v !== '') recordId = v;
+      }
+      onSet({ row, col, columnId: colDef.id, value: parsed.value, recordId });
+    },
     set(row, col, value) {
       inner.set(row, col, value);
       if (applyingRemote) return;

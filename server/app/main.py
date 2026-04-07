@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import dotenv
 import re
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from .tunnel_map import map_to_tunnel
 
 logger = logging.getLogger("ark")
+
+dotenv.load_dotenv()
 
 BACKEND = os.environ.get("ARK_BACKEND_URL", "").rstrip("/")
 

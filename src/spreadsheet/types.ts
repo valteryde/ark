@@ -100,6 +100,11 @@ export interface SpreadsheetConfig {
    * and replay the paste. If set, called instead of clipping when the paste grid extends past the bottom.
    */
   growRowCountForPaste?: (args: { minRowCount: number; plain: string }) => void;
+  /**
+   * Wrap undo/redo snapshot application so outbound sync (e.g. partner collab) is suppressed,
+   * matching remote apply paths.
+   */
+  suppressOutboundSyncDuring?: (fn: () => void) => void;
 }
 
 export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
