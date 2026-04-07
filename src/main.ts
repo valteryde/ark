@@ -301,6 +301,12 @@ function initPartnerMode(): void {
       if (path === null || truth.sheetPath !== path) return;
       remountPartnerSheetFromPayload(path, truth.payload, true);
     },
+    onRemoteRowDeleted(row) {
+      if (!liveHandle || !liveStore) return;
+      liveStore.withRemoteApply(() => {
+        liveHandle!.applyRemoteRowClear(row);
+      });
+    },
   });
 
   remountPartnerSheetFromPayload = (
@@ -308,6 +314,16 @@ function initPartnerMode(): void {
     payload: PartnerSheetPayload,
     resetPresence: boolean,
   ): void => {
+    const sameSheetRemount =
+      loadedRoutingPath !== null && routingPath === loadedRoutingPath && liveHandle !== null;
+    let initialViewportScroll: { scrollTop: number; scrollLeft: number } | undefined;
+    if (sameSheetRemount) {
+      const vp = sheetHost.querySelector('.sheet-viewport');
+      if (vp) {
+        initialViewportScroll = { scrollTop: vp.scrollTop, scrollLeft: vp.scrollLeft };
+      }
+    }
+
     const presence = liveHandle?.getCollabPresencePayload();
     const initialSelection =
       presence &&
@@ -324,6 +340,7 @@ function initPartnerMode(): void {
       title: payload.title,
       description: payload.description,
       rowCount: payload.rowCount,
+      ...(payload.ghostRowCount !== undefined ? { ghostRowCount: payload.ghostRowCount } : {}),
       defaultRowHeightPx: payload.defaultRowHeightPx,
       enabledUiCapabilities: payload.enabledUiCapabilities,
     };
@@ -350,6 +367,9 @@ function initPartnerMode(): void {
     if (initialSelection) {
       config.initialSelection = initialSelection;
     }
+    if (initialViewportScroll) {
+      config.initialViewportScroll = initialViewportScroll;
+    }
     config.growRowCountForPaste = ({ minRowCount, plain }) => {
       if (!lastPartnerPayload) return;
       pendingPastePlain = plain;
@@ -359,6 +379,22 @@ function initPartnerMode(): void {
     };
     config.suppressOutboundSyncDuring = (fn) => {
       store.withRemoteApply(fn);
+    };
+    config.onRowDeleted = (row) => {
+      const idIdx = payload.columns.findIndex((c) => c.readOnly);
+      let recordId: string | number | undefined;
+      if (idIdx >= 0) {
+        const v = store.get(row, idIdx + 1);
+        if (v !== undefined && v !== '') recordId = v;
+      }
+      collab.sendRowDeleted({
+        type: 'row.deleted',
+        row,
+        sheetPath: pathForCollab,
+        clientId: collabIdentity.clientId,
+        markerHue: collabIdentity.markerHue,
+        ...(recordId !== undefined ? { recordId } : {}),
+      });
     };
     sheetHost.replaceChildren();
     liveHandle = mountSpreadsheet(sheetHost, config);

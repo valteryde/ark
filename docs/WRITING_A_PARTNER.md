@@ -50,6 +50,8 @@ Typical mapped shape for a value commit:
 }
 ```
 
+Row removal from the grid context menu is **`{ "type": "delete_row", "row", "meta", "recordId"? }`**, not a series of empty **`update_cell`** events.
+
 Other **`type`** values and the exact mapping from WebSocket messages are documented in **[PARTNER_API.md](PARTNER_API.md)** (tunnel section).
 
 **Practical notes:**

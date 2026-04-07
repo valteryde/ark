@@ -90,4 +90,6 @@ async def ark_tunnel(request: Request):
         return {"status": "success"}
     if data.get("type") == "delete_cell":
         return {"status": "success"}
+    if data.get("type") == "delete_row":
+        return {"status": "success"}
     return {"status": "error", "message": "Invalid request"}

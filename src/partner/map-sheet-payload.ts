@@ -71,6 +71,12 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
           : typeof o.rowCount === 'number' && o.rowCount >= 1
             ? o.rowCount
             : undefined,
+      ghostRowCount:
+        typeof i.ghostRowCount === 'number' && i.ghostRowCount >= 0 && Number.isFinite(i.ghostRowCount)
+          ? Math.floor(i.ghostRowCount)
+          : typeof o.ghostRowCount === 'number' && o.ghostRowCount >= 0 && Number.isFinite(o.ghostRowCount)
+            ? Math.floor(o.ghostRowCount)
+            : undefined,
       defaultRowHeightPx:
         typeof i.defaultRowHeightPx === 'number' && i.defaultRowHeightPx > 0
           ? i.defaultRowHeightPx
@@ -91,6 +97,10 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
     columns,
     rows,
     rowCount: typeof src.rowCount === 'number' && src.rowCount >= 1 ? src.rowCount : undefined,
+    ghostRowCount:
+      typeof src.ghostRowCount === 'number' && src.ghostRowCount >= 0 && Number.isFinite(src.ghostRowCount)
+        ? Math.floor(src.ghostRowCount)
+        : undefined,
     defaultRowHeightPx:
       typeof src.defaultRowHeightPx === 'number' && src.defaultRowHeightPx > 0
         ? src.defaultRowHeightPx
@@ -135,12 +145,17 @@ export function sheetPayloadToConfig(
   payload: PartnerSheetPayload,
   data: SpreadsheetConfig['data'],
 ): SpreadsheetConfig {
-  const { columns, rows, rowCount, defaultRowHeightPx, enabledUiCapabilities } = payload;
+  const { columns, rows, rowCount, ghostRowCount, defaultRowHeightPx, enabledUiCapabilities } = payload;
   const rc = partnerEffectiveRowCount(payload);
+  const gc =
+    typeof ghostRowCount === 'number' && ghostRowCount >= 0 && Number.isFinite(ghostRowCount)
+      ? Math.min(Math.floor(ghostRowCount), 10_000)
+      : undefined;
 
   return {
     columns,
     rowCount: rc,
+    ...(gc !== undefined && gc > 0 ? { ghostRowCount: gc } : {}),
     defaultRowHeightPx,
     data,
     enabledUiCapabilities,
@@ -181,6 +196,10 @@ export function normalizeSheetTruthPayload(
     return null;
   }
   const rowCount = typeof o.rowCount === 'number' && o.rowCount >= 1 ? o.rowCount : undefined;
+  const ghostRowCount =
+    typeof o.ghostRowCount === 'number' && o.ghostRowCount >= 0 && Number.isFinite(o.ghostRowCount)
+      ? Math.floor(o.ghostRowCount)
+      : undefined;
   const enabledUiCapabilities = Array.isArray(o.enabledUiCapabilities)
     ? (o.enabledUiCapabilities.filter((s): s is UiToolbarCapability => typeof s === 'string') as UiToolbarCapability[])
     : undefined;
@@ -190,6 +209,7 @@ export function normalizeSheetTruthPayload(
     columns,
     rows,
     rowCount,
+    ...(ghostRowCount !== undefined ? { ghostRowCount } : {}),
     defaultRowHeightPx:
       typeof o.defaultRowHeightPx === 'number' && o.defaultRowHeightPx > 0 ? o.defaultRowHeightPx : undefined,
     enabledUiCapabilities,

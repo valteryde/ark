@@ -1,4 +1,9 @@
-import type { CellPresenceClearEvent, CellPresenceEvent, CellValueCommittedEvent } from './types.ts';
+import type {
+  CellPresenceClearEvent,
+  CellPresenceEvent,
+  CellValueCommittedEvent,
+  RowDeletedEvent,
+} from './types.ts';
 import { normalizeSheetTruthPayload, type SheetTruthNormalized } from './map-sheet-payload.ts';
 import { PARTNER_TOKEN_PARAM, getPartnerToken } from './partner-token.ts';
 import type { SpreadsheetColumn } from '../spreadsheet/types.ts';
@@ -80,6 +85,7 @@ function parsePresenceClear(o: Record<string, unknown>): { sheetPath: string | n
 
 export interface CollabConnection {
   sendCommitted(ev: CellValueCommittedEvent): void;
+  sendRowDeleted(ev: RowDeletedEvent): void;
   sendPresence(ev: CellPresenceEvent): void;
   sendPresenceClear(ev: CellPresenceClearEvent): void;
   close(): void;
@@ -144,6 +150,8 @@ export function openCollabWs(opts: {
   onCellPersistFailed?: (info: CellPersistFailedInfo) => void;
   /** Partner pushed authoritative rows via `POST /api/ark/broadcast`. */
   onSheetTruth?: (truth: SheetTruthNormalized) => void;
+  /** Remote peer cleared a row via `row.deleted`. */
+  onRemoteRowDeleted?: (row: number) => void;
 }): CollabConnection {
   const ws = new WebSocket(collabWsUrl());
   const pending: string[] = [];
@@ -224,6 +232,18 @@ export function openCollabWs(opts: {
       return;
     }
 
+    if (rec.type === 'row.deleted') {
+      const row = rec.row;
+      const clientId = typeof rec.clientId === 'string' ? rec.clientId : null;
+      if (typeof row !== 'number' || !Number.isFinite(row) || row < 1) return;
+      if (clientId !== null && clientId === opts.localClientId) return;
+      const active = opts.getActiveSheetPath();
+      const sheetPath = typeof rec.sheetPath === 'string' ? rec.sheetPath : null;
+      if (sheetPath !== null && active !== null && sheetPath !== active) return;
+      opts.onRemoteRowDeleted?.(Math.trunc(row));
+      return;
+    }
+
     const parsed = parseCommitted(rec);
     if (!parsed) return;
     if (parsed.clientId !== null && parsed.clientId === opts.localClientId) {
@@ -250,6 +270,10 @@ export function openCollabWs(opts: {
     queueSend(JSON.stringify(ev));
   }
 
+  function sendRowDeleted(ev: RowDeletedEvent): void {
+    queueSend(JSON.stringify(ev));
+  }
+
   function sendPresence(ev: CellPresenceEvent): void {
     queueSend(JSON.stringify(ev));
   }
@@ -260,6 +284,7 @@ export function openCollabWs(opts: {
 
   return {
     sendCommitted,
+    sendRowDeleted,
     sendPresence,
     sendPresenceClear,
     close: () => {

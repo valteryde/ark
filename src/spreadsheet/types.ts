@@ -88,7 +88,13 @@ export interface SpreadsheetDataStore {
 
 export interface SpreadsheetConfig {
   columns: SpreadsheetColumn[];
+  /** Number of data rows (1-based indices `1..rowCount`). Selection, paste, and commits apply only here. */
   rowCount: number;
+  /**
+   * Extra blank rows rendered below the data grid for bottom padding. Not editable, excluded from
+   * context menu row actions and paste targets; `rowCount` is unchanged for grow/paste and collab.
+   */
+  ghostRowCount?: number;
   defaultRowHeightPx?: number;
   data: SpreadsheetDataStore;
   /**
@@ -106,9 +112,19 @@ export interface SpreadsheetConfig {
    */
   suppressOutboundSyncDuring?: (fn: () => void) => void;
   /**
+   * After the user deletes a row (context menu), called once with the grid row index.
+   * Hosts send a dedicated collab/tunnel event instead of per-cell clears.
+   */
+  onRowDeleted?: (row: number) => void;
+  /**
    * After mount, start with this cell selected (clamped). Used when remounting without losing focus.
    */
   initialSelection?: { row: number; col: number };
+  /**
+   * Restore viewport scroll after mount (clamped). When set, skips scrolling the active cell into view
+   * so same-sheet remounts (e.g. partner `sheet.truth`) do not jump the scroll position.
+   */
+  initialViewportScroll?: { scrollTop: number; scrollLeft: number };
 }
 
 export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
@@ -209,4 +225,8 @@ export interface SpreadsheetMountHandle {
    * Used after the host expands `rowCount` following `growRowCountForPaste`.
    */
   replayClipboardPaste(plain: string): void;
+  /**
+   * Clear writable cells in a row when a peer deleted it (`row.deleted`). Does not call `onRowDeleted`.
+   */
+  applyRemoteRowClear(row: number): void;
 }

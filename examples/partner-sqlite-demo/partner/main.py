@@ -154,8 +154,49 @@ def _coerce_sqlite_id(record_id) -> int | None:
 
 
 def apply_tunnel_update(data: dict) -> None:
-    if data.get("type") != "update_cell":
+    t = data.get("type")
+    if t == "delete_row":
+        _apply_delete_row(data)
         return
+    if t != "update_cell":
+        return
+    _apply_update_cell(data)
+
+
+def _apply_delete_row(data: dict) -> None:
+    meta = data.get("meta") or {}
+    sheet = meta.get("sheetPath")
+    row = data.get("row")
+    if sheet is None or row is None:
+        return
+    if not isinstance(row, int) or row < 1:
+        return
+    record_id = data.get("recordId")
+    if record_id is None and isinstance(meta, dict):
+        record_id = meta.get("recordId")
+    rid_by_key = _coerce_sqlite_id(record_id)
+
+    with db() as conn:
+        if sheet in ("clients", "api/clients"):
+            rid = rid_by_key
+            if rid is None:
+                ids = [r[0] for r in conn.execute("SELECT id FROM clients ORDER BY id").fetchall()]
+                if row > len(ids):
+                    return
+                rid = ids[row - 1]
+            conn.execute("DELETE FROM records WHERE client_id = ?", (rid,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (rid,))
+        elif sheet in ("records", "api/records"):
+            rid = rid_by_key
+            if rid is None:
+                ids = [r[0] for r in conn.execute("SELECT id FROM records ORDER BY id").fetchall()]
+                if row > len(ids):
+                    return
+                rid = ids[row - 1]
+            conn.execute("DELETE FROM records WHERE id = ?", (rid,))
+
+
+def _apply_update_cell(data: dict) -> None:
     meta = data.get("meta") or {}
     sheet = meta.get("sheetPath")
     row = data.get("row")

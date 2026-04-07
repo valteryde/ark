@@ -7,8 +7,20 @@ export interface PartnerSheetPayload {
   columns: SpreadsheetColumn[];
   rows: ReadonlyArray<Record<string, unknown>>;
   rowCount?: number;
+  /** Non-editable padding rows after the data grid (see `SpreadsheetConfig.ghostRowCount`). */
+  ghostRowCount?: number;
   defaultRowHeightPx?: number;
   enabledUiCapabilities?: ReadonlyArray<UiToolbarCapability>;
+}
+
+/** User deleted a grid row (e.g. context menu); backend should remove the record, not only clear cells. */
+export interface RowDeletedEvent {
+  type: 'row.deleted';
+  row: number;
+  sheetPath?: string;
+  clientId?: string;
+  markerHue?: number;
+  recordId?: string | number;
 }
 
 export interface CellValueCommittedEvent {

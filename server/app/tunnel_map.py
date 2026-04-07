@@ -22,6 +22,16 @@ def map_to_tunnel(event: dict[str, Any]) -> dict[str, Any]:
         return out
     if t in ("cell.created", "row.created"):
         return {"type": "new_cell", "meta": event}
-    if t in ("cell.deleted", "row.deleted"):
+    if t == "row.deleted":
+        out: dict[str, Any] = {
+            "type": "delete_row",
+            "row": event.get("row"),
+            "meta": event,
+        }
+        rid = event.get("recordId")
+        if rid is not None:
+            out["recordId"] = rid
+        return out
+    if t == "cell.deleted":
         return {"type": "delete_cell", "meta": event}
     return {"type": "spreadsheet_event", "payload": event}

@@ -160,12 +160,14 @@ When the browser connected to **`/ws/ark`** with **`?ark_token=…`**, the BFF i
 **Shapes Ark sends** (after BFF mapping from WebSocket events):
 
 - `{ "type": "update_cell", "row", "col", "columnId", "value", "meta" }` — cell value committed. When the grid has a **read-only** column (typically the primary key), Ark may also send top-level **`recordId`** (same value as in **`meta`**) so you can run **`UPDATE … WHERE id = ?`** without relying on row index alone.
-- `{ "type": "new_cell" | "delete_cell", "meta" }` — reserved for future events.
+- `{ "type": "delete_row", "row", "meta" }` — user removed a row from the grid (context menu **Delete row**). Optional top-level **`recordId`** when a read-only id column exists. Use this to **`DELETE`** the backing record; do not rely on many **`update_cell`** clears for the same action.
+- `{ "type": "new_cell" | "delete_cell", "meta" }` — reserved / legacy; **`delete_row`** is the row-deletion contract.
 - `{ "type": "spreadsheet_event", "payload" }` — fallback.
 
 **Client → BFF WebSocket** (browser sends JSON on `ws://…/ws/ark`):
 
 - `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number, "recordId"?: string | number }` — primary edit event. **`sheetPath`** is the same routing suffix as the current page (e.g. `clients`). **`clientId`** lets the sender ignore its own echo. **`markerHue`** (0–360) drives a **brief tint** on the updated cell for remote peers. **`recordId`** is the current value of the **first read-only** column for that row (when present), for id-based persistence.
+- `{ "type": "row.deleted", "row", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number, "recordId"?: string | number }` — user deleted a grid row (context menu). Broadcast to peers so they clear the same row locally; mapped to tunnel **`delete_row`**. Not emitted for per-cell clears.
 - `{ "type": "cell.presence", "row", "col", "mode": "navigate" | "edit", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number }` — **ephemeral** cursor presence. Other clients draw a **colored border** on that cell (hue from **`markerHue`**). **`mode`** distinguishes focus vs editor-focused for the sender; the grid uses the same border either way. These messages are **not** forwarded to **`POST /ark/tunnel`**.
 - `{ "type": "cell.presence_clear", "sheetPath"?: string, "clientId"?: string }` — optional hint that a tab closed or left the sheet; peers remove that **`clientId`** from presence. Also **not** tunneled.
 
@@ -220,7 +222,7 @@ You may use a longer routing suffix (e.g. `api/clients`) if the URL path is stil
 ## Out of scope (v1)
 
 - Authoritative REST `PATCH` per row/cell (tunnel-only persistence is enough for the sample).
-- Formatting-only tunnel events (`mergeCellStyle`) — value commits only in v1.
+- Formatting-only tunnel events (`mergeCellStyle`) — not tunneled; value commits and **`delete_row`** are.
 - Authoritative **locking** or merge conflict resolution (presence outlines are indicative only).
 - Ark-side **validation** of partner tokens (only pass-through; partners validate **`Authorization`**).
 
