@@ -395,6 +395,8 @@ a.app-sheet-tabs__tab {
   --sheet-radius: 0;
   --sheet-shadow: none;
   --sheet-input-top-margin: 1px;
+  /* Ghost padding columns: keep column structure with very faint dividers (low alpha ≈ “nearly transparent”) */
+  --sheet-ghost-grid-line: rgb(0 0 0 / 0.045);
 
   box-sizing: border-box;
   font-family: var(--sheet-font);
@@ -480,11 +482,11 @@ a.app-sheet-tabs__tab {
   border-right-color: rgb(0 0 0 / 8%);
 }
 
-/* Non-data columns that pad the grid to the viewport; no internal grid lines */
+/* Non-data columns: same column rhythm as data, dividers kept ultra-subtle */
 .sheet-column-header--ghost {
   padding: 0.35rem 0.25rem;
   background: var(--sheet-surface);
-  border-right: none;
+  border-right: 1px solid var(--sheet-ghost-grid-line);
   color: transparent;
   font-size: 0.5rem;
   min-height: 2.25rem;
@@ -694,10 +696,10 @@ a.app-sheet-tabs__tab {
   box-shadow: none;
 }
 
-/* Padding columns: flat surface, no vertical lines (noise was mostly border-right × many columns) */
+/* Padding columns: multiple columns visible; verticals use low-opacity line (not full data-grid contrast) */
 .sheet-cell--ghost-column {
   background: var(--sheet-surface);
-  border-right: none;
+  border-right: 1px solid var(--sheet-ghost-grid-line);
   pointer-events: none;
 }
 
