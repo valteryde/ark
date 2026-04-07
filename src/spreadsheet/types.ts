@@ -105,6 +105,10 @@ export interface SpreadsheetConfig {
    * matching remote apply paths.
    */
   suppressOutboundSyncDuring?: (fn: () => void) => void;
+  /**
+   * After mount, start with this cell selected (clamped). Used when remounting without losing focus.
+   */
+  initialSelection?: { row: number; col: number };
 }
 
 export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [

@@ -308,6 +308,16 @@ function initPartnerMode(): void {
     payload: PartnerSheetPayload,
     resetPresence: boolean,
   ): void => {
+    const presence = liveHandle?.getCollabPresencePayload();
+    const initialSelection =
+      presence &&
+      Number.isFinite(presence.row) &&
+      Number.isFinite(presence.col) &&
+      presence.row >= 1 &&
+      presence.col >= 1
+        ? { row: presence.row, col: presence.col }
+        : undefined;
+
     lastPartnerPayload = {
       columns: payload.columns.map((c) => ({ ...c })),
       rows: [...payload.rows],
@@ -337,6 +347,9 @@ function initPartnerMode(): void {
       });
     }) as PartnerNotifyDataStore;
     const config = sheetPayloadToConfig(payload, store);
+    if (initialSelection) {
+      config.initialSelection = initialSelection;
+    }
     config.growRowCountForPaste = ({ minRowCount, plain }) => {
       if (!lastPartnerPayload) return;
       pendingPastePlain = plain;

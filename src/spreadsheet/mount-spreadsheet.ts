@@ -432,6 +432,23 @@ export function mountSpreadsheet(
     return Math.max(1, Math.min(columnCountTotal, col));
   }
 
+  const initSel = config.initialSelection;
+  if (
+    initSel &&
+    typeof initSel.row === 'number' &&
+    Number.isFinite(initSel.row) &&
+    typeof initSel.col === 'number' &&
+    Number.isFinite(initSel.col)
+  ) {
+    active.row = clampRow(Math.trunc(initSel.row));
+    active.col = clampCol(Math.trunc(initSel.col));
+  }
+  selectArea.row = active.row;
+  selectArea.col = active.col;
+  selectArea.rowEnd = active.row;
+  selectArea.colEnd = active.col;
+  selectArea.active = false;
+
   function columnAt(col: number): SpreadsheetColumn | undefined {
     return columns[col - 1];
   }
@@ -1653,12 +1670,22 @@ export function mountSpreadsheet(
     viewport.addEventListener('scroll', hideContextMenu, { passive: true });
   }
 
-  function makeContextMenuItem(label: string, onActivate: () => void): HTMLButtonElement {
+  function makeContextMenuItem(
+    label: string,
+    onActivate: () => void,
+    iconPh: string,
+  ): HTMLButtonElement {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'sheet-context-menu__item';
     btn.setAttribute('role', 'menuitem');
-    btn.textContent = label;
+    const icon = document.createElement('i');
+    icon.className = `ph ${iconPh}`;
+    icon.setAttribute('aria-hidden', 'true');
+    const labelEl = document.createElement('span');
+    labelEl.className = 'sheet-context-menu__label';
+    labelEl.textContent = label;
+    btn.append(icon, labelEl);
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -1671,16 +1698,16 @@ export function mountSpreadsheet(
   contextMenuEl.append(
     makeContextMenuItem('Delete row', () => {
       if (contextMenuRow !== null) clearSheetRow(contextMenuRow);
-    }),
+    }, 'ph-trash'),
     makeContextMenuItem('Copy row', () => {
       if (contextMenuRow === null) return;
       persistActiveInput();
       const text = buildRowPlainText(contextMenuRow);
       void navigator.clipboard?.writeText(text);
-    }),
+    }, 'ph-copy'),
     makeContextMenuItem('Select row', () => {
       if (contextMenuRow !== null) selectSheetRow(contextMenuRow);
-    }),
+    }, 'ph-rows'),
   );
 
   root.appendChild(contextMenuEl);
@@ -2121,6 +2148,14 @@ export function mountSpreadsheet(
 
   if (history) {
     history.subscribe(notifyHistoryChange);
+  }
+
+  if (config.initialSelection) {
+    syncSelectionHighlight();
+    focusActiveInput();
+    queueMicrotask(() => {
+      cells.get(cellKey(active.row, active.col))?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
   }
 
   const handle: SpreadsheetMountHandle = {

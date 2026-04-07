@@ -861,7 +861,9 @@ a.app-sheet-tabs__tab {
 }
 
 .sheet-context-menu__item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   width: 100%;
   margin: 0;
   padding: 0.45rem 0.85rem;
@@ -871,6 +873,17 @@ a.app-sheet-tabs__tab {
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.sheet-context-menu__item .ph {
+  flex-shrink: 0;
+  font-size: 1.05rem;
+  opacity: 0.88;
+  line-height: 1;
+}
+
+.sheet-context-menu__label {
+  min-width: 0;
 }
 
 .sheet-context-menu__item:hover,
