@@ -21,6 +21,98 @@ import type {
 } from './types.ts';
 import { resolveEnabledUiCapabilities } from './types.ts';
 
+let persistTooltipEl: HTMLDivElement | null = null;
+let persistTooltipAnchor: HTMLElement | null = null;
+let persistTooltipHideTimer: ReturnType<typeof setTimeout> | null = null;
+let persistTooltipViewportWired = false;
+
+function getPersistTooltipEl(): HTMLDivElement {
+  if (!persistTooltipEl) {
+    persistTooltipEl = document.createElement('div');
+    persistTooltipEl.className = 'sheet-persist-tooltip';
+    persistTooltipEl.setAttribute('role', 'tooltip');
+    persistTooltipEl.hidden = true;
+    document.body.appendChild(persistTooltipEl);
+  }
+  return persistTooltipEl;
+}
+
+function positionPersistTooltip(anchor: HTMLElement): void {
+  const tip = persistTooltipEl;
+  if (!tip) return;
+  const rect = anchor.getBoundingClientRect();
+  const margin = 8;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  let left = rect.left + rect.width / 2 - tw / 2;
+  let top = rect.top - th - margin;
+  if (top < margin) top = rect.bottom + margin;
+  left = Math.max(margin, Math.min(left, vw - tw - margin));
+  top = Math.max(margin, Math.min(top, vh - th - margin));
+  tip.style.left = `${Math.round(left)}px`;
+  tip.style.top = `${Math.round(top)}px`;
+}
+
+function wirePersistTooltipViewport(): void {
+  if (persistTooltipViewportWired) return;
+  persistTooltipViewportWired = true;
+  const reposition = (): void => {
+    if (
+      persistTooltipAnchor &&
+      persistTooltipEl &&
+      !persistTooltipEl.hidden &&
+      persistTooltipEl.classList.contains('sheet-persist-tooltip--visible')
+    ) {
+      positionPersistTooltip(persistTooltipAnchor);
+    }
+  };
+  window.addEventListener('scroll', reposition, true);
+  window.addEventListener('resize', reposition);
+}
+
+function hidePersistTooltip(): void {
+  persistTooltipAnchor = null;
+  if (persistTooltipHideTimer !== null) {
+    clearTimeout(persistTooltipHideTimer);
+    persistTooltipHideTimer = null;
+  }
+  if (persistTooltipEl) {
+    persistTooltipEl.classList.remove('sheet-persist-tooltip--visible');
+    persistTooltipEl.hidden = true;
+  }
+}
+
+function scheduleHidePersistTooltip(): void {
+  if (persistTooltipHideTimer !== null) clearTimeout(persistTooltipHideTimer);
+  persistTooltipHideTimer = window.setTimeout(() => {
+    persistTooltipHideTimer = null;
+    hidePersistTooltip();
+  }, 100);
+}
+
+function cancelHidePersistTooltip(): void {
+  if (persistTooltipHideTimer !== null) {
+    clearTimeout(persistTooltipHideTimer);
+    persistTooltipHideTimer = null;
+  }
+}
+
+function showPersistTooltipForDot(anchor: HTMLElement, text: string): void {
+  wirePersistTooltipViewport();
+  const tip = getPersistTooltipEl();
+  persistTooltipAnchor = anchor;
+  cancelHidePersistTooltip();
+  tip.textContent = text;
+  tip.hidden = false;
+  tip.classList.add('sheet-persist-tooltip--visible');
+  requestAnimationFrame(() => {
+    if (persistTooltipAnchor !== anchor) return;
+    positionPersistTooltip(anchor);
+  });
+}
+
 function getCellEditor(cell: HTMLElement): HTMLInputElement | null {
   return cell.querySelector<HTMLInputElement>('.sheet-cell-input');
 }
@@ -213,7 +305,9 @@ export function mountSpreadsheet(
     }
     const el = cells.get(k);
     if (el) {
-      el.querySelector('.sheet-cell-persist-dot')?.remove();
+      const dot = el.querySelector('.sheet-cell-persist-dot');
+      if (dot && persistTooltipAnchor === dot) hidePersistTooltip();
+      dot?.remove();
     }
   }
 
@@ -226,18 +320,24 @@ export function mountSpreadsheet(
     const hint = message?.trim()
       ? message.trim()
       : 'Could not save — check your connection or try again';
-    const hintForTitle = hint.length > 4000 ? `${hint.slice(0, 3997)}…` : hint;
+    const hintForTip = hint.length > 4000 ? `${hint.slice(0, 3997)}…` : hint;
     const dot = document.createElement('button');
     dot.type = 'button';
     dot.className = 'sheet-cell-persist-dot';
-    dot.title = hintForTitle;
-    dot.tabIndex = -1;
-    dot.setAttribute('aria-label', `Save failed. ${hint.length > 180 ? `${hint.slice(0, 177)}…` : hint}`);
+    dot.tabIndex = 0;
+    dot.setAttribute('aria-label', 'Save failed');
     dot.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
     });
     dot.addEventListener('click', (e) => e.stopPropagation());
+    dot.addEventListener('mouseenter', () => {
+      cancelHidePersistTooltip();
+      showPersistTooltipForDot(dot, hintForTip);
+    });
+    dot.addEventListener('mouseleave', () => scheduleHidePersistTooltip());
+    dot.addEventListener('focus', () => showPersistTooltipForDot(dot, hintForTip));
+    dot.addEventListener('blur', () => hidePersistTooltip());
     el.appendChild(dot);
     const tid = window.setTimeout(() => clearCellPersistError(row, col), 8000);
     persistErrorClearTimers.set(k, tid);

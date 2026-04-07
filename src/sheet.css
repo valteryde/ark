@@ -658,11 +658,12 @@ a.app-sheet-tabs__tab {
   box-shadow: inset 0 0 0 1px var(--sheet-accent);
 }
 
-/* Partner tunnel failed: corner dot; hover shows native tooltip (server message on button title) */
+/* Partner tunnel failed: bottom-right dot + fixed custom tooltip (see mount-spreadsheet) */
 .sheet-cell-persist-dot {
   position: absolute;
-  left: 4px;
+  right: 4px;
   bottom: 4px;
+  left: auto;
   z-index: 6;
   box-sizing: border-box;
   width: 7px;
@@ -671,17 +672,55 @@ a.app-sheet-tabs__tab {
   margin: 0;
   border: none;
   border-radius: 50%;
-  background: rgb(220 38 38 / 0.9);
+  background: rgb(220 38 38 / 0.92);
   box-shadow: 0 0 0 1px rgb(255 255 255 / 0.85);
   cursor: help;
   pointer-events: auto;
+  animation: sheet-persist-dot-breathe 2.5s ease-in-out infinite;
+}
+
+@keyframes sheet-persist-dot-breathe {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .sheet-cell-persist-dot:hover,
 .sheet-cell-persist-dot:focus-visible {
+  animation: none;
+  opacity: 1;
   background: rgb(185 28 28 / 0.98);
-  transform: scale(1.15);
   outline: none;
+}
+
+.sheet-persist-tooltip {
+  position: fixed;
+  z-index: 100000;
+  box-sizing: border-box;
+  max-width: min(320px, calc(100vw - 20px));
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  font-weight: 450;
+  color: #f1f5f9;
+  background: rgb(28 30 36 / 0.96);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgb(0 0 0 / 24%);
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.14s ease, visibility 0.14s ease;
+}
+
+.sheet-persist-tooltip.sheet-persist-tooltip--visible {
+  visibility: visible;
+  opacity: 1;
 }
 
 /* Cell comment marker (::before — ::after is reserved for range-selection tint) */
