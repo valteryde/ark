@@ -480,11 +480,11 @@ a.app-sheet-tabs__tab {
   border-right-color: rgb(0 0 0 / 8%);
 }
 
-/* Non-data columns that pad the grid to the viewport; no label, quieter than data headers */
+/* Non-data columns that pad the grid to the viewport; no internal grid lines */
 .sheet-column-header--ghost {
   padding: 0.35rem 0.25rem;
-  background: #fafbfc;
-  border-right-color: rgb(0 0 0 / 5%);
+  background: var(--sheet-surface);
+  border-right: none;
   color: transparent;
   font-size: 0.5rem;
   min-height: 2.25rem;
@@ -694,10 +694,10 @@ a.app-sheet-tabs__tab {
   box-shadow: none;
 }
 
-/* Padding columns to the right of data; lighter than ghost rows, never interactive */
+/* Padding columns: flat surface, no vertical lines (noise was mostly border-right × many columns) */
 .sheet-cell--ghost-column {
-  background: #fafbfc;
-  border-right-color: rgb(0 0 0 / 6%);
+  background: var(--sheet-surface);
+  border-right: none;
   pointer-events: none;
 }
 
@@ -710,7 +710,7 @@ a.app-sheet-tabs__tab {
 }
 
 .sheet-cell--ghost-column.sheet-cell--ghost {
-  background: #f3f4f6;
+  background: #f6f7f8;
 }
 
 .sheet-cell-active {
