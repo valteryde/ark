@@ -38,6 +38,17 @@ Returns a **SheetPayload** used to build [`SpreadsheetConfig`](https://github.co
 | `rowCount` | no | Visible grid height; default at least `rows.length`, otherwise often `max(rows.length, 100)` in Ark. For a single empty “staging” row, use **`rows.length + 1`**. |
 | `defaultRowHeightPx` | no | Passed through to config |
 | `enabledUiCapabilities` | no | Toolbar flags (see SPREADSHEET.md) |
+| `chromeActions` | no | Up to **8** header links (top right). Each item is an object (see below). Invalid or unsafe URLs are skipped. With nested **`sheets`**, the first inner sheet’s array wins if set, otherwise the outer object’s array is used (same rule as **`enabledUiCapabilities`**). |
+
+**`chromeActions` entry** (each element of the array):
+
+| Field | Required | Description |
+| ----- | -------- | ----------- |
+| `label` | yes | Button text. |
+| `href` | yes | **Same-origin** path starting with **`/`** (e.g. **`/records`**), or an **`http:`** / **`https:`** / **`mailto:`** URL. Scheme-relative URLs (`//…`), `javascript:`, `data:`, etc. are rejected. |
+| `variant` | no | **`ghost`** (outline; default) or **`primary`** (filled dark style). |
+| `icon` | no | [Phosphor](https://phosphoricons.com/) **regular** name: lowercase letters, digits, hyphens only (e.g. **`arrow-square-out`**). |
+| `openInNewTab` | no | If **`true`**, sets `target="_blank"` and `rel="noopener noreferrer"`. |
 
 **Column object** (aligned with [`SpreadsheetColumn`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/types.ts)):
 
@@ -208,9 +219,12 @@ When **row order**, **row-to-record mapping**, or **grid shape** changes on the 
 
 ## Browser URLs (SPA)
 
-The Ark server serves `index.html` for each configured **single segment** so **`/clients`**, **`/records`**, etc. load the app. Set **`ARK_UI_ROUTES`** to a comma-separated list of those segments (letters/digits/hyphen only). Each segment must match a **`GET /ark/routing/{segment}`** you implement.
+The Ark server serves `index.html` for paths allowed by **`ARK_UI_ROUTES`**: a comma-separated list where each entry is either a **single segment** (letters, digits, hyphen) or a **prefix wildcard** **`base/*`**.
 
-You may use a longer routing suffix (e.g. `api/clients`) if the URL path is still one segment under your hosting rules; the browser path’s first segment must be listed in **`ARK_UI_ROUTES`** and the full suffix is what Ark requests: `GET /api/ark/routing/{path}`.
+- **Exact:** `clients` serves the SPA at **`/clients`** and the UI calls **`GET /api/ark/routing/clients`** (proxied to your **`GET /ark/routing/clients`**).
+- **Wildcard:** `user_transactions/*` serves the SPA at **`/user_transactions`**, **`/user_transactions/abc`**, and any deeper path under that prefix. The **browser path without a leading slash** is the routing key: e.g. **`/user_transactions/abc`** → **`GET /api/ark/routing/user_transactions/abc`**.
+
+Multi-segment bases are allowed (e.g. **`api/v1/*`**). More specific prefixes should be listed before shorter ones in **`ARK_UI_ROUTES`** so overlapping rules resolve predictably (longer bases are registered first).
 
 ## Local development
 

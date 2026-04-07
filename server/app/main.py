@@ -243,14 +243,49 @@ async def collab_ws(websocket: WebSocket) -> None:
 _UI_SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$", re.IGNORECASE)
 
 
-def _ui_route_segments() -> list[str]:
+def _ui_route_specs() -> tuple[list[str], list[tuple[str, ...]]]:
+    """Parse ARK_UI_ROUTES into (exact single-segment paths, prefix bases).
+
+    Exact entries are one segment (letters, digits, hyphen). Wildcard entries
+    look like ``prefix/*`` where each path segment in prefix matches the same rules.
+    Prefix routes are sorted longest-first so more specific bases win over shorter ones.
+    """
     raw = os.environ.get("ARK_UI_ROUTES", "clients,records")
-    out: list[str] = []
+    exact_order: list[str] = []
+    exact_seen: set[str] = set()
+    prefixes: list[tuple[str, ...]] = []
+    prefix_seen: set[tuple[str, ...]] = set()
+
     for s in raw.split(","):
-        seg = s.strip()
-        if seg and _UI_SEGMENT_RE.fullmatch(seg):
-            out.append(seg)
-    return out
+        tok = s.strip()
+        if not tok:
+            continue
+        if "*" in tok:
+            if tok.count("*") != 1 or not tok.endswith("/*"):
+                continue
+            base = tok[:-2].strip()
+            if not base or base.endswith("/") or "//" in base:
+                continue
+            split_parts = base.split("/")
+            if any(not p for p in split_parts):
+                continue
+            parts = tuple(split_parts)
+            if not parts:
+                continue
+            if any(not _UI_SEGMENT_RE.fullmatch(p) for p in parts):
+                continue
+            if parts not in prefix_seen:
+                prefix_seen.add(parts)
+                prefixes.append(parts)
+            continue
+        if _UI_SEGMENT_RE.fullmatch(tok) and tok not in exact_seen:
+            exact_seen.add(tok)
+            exact_order.append(tok)
+
+    prefix_bases_slash = {"/".join(t) for t in prefixes}
+    exact_filtered = [e for e in exact_order if e not in prefix_bases_slash]
+    prefixes.sort(key=lambda t: (-len(t), t))
+    return exact_filtered, prefixes
 
 
 if STATIC_DIR.is_dir():
@@ -259,7 +294,22 @@ if STATIC_DIR.is_dir():
     def _spa_shell() -> FileResponse:
         return FileResponse(_index_html)
 
-    for _seg in _ui_route_segments():
+    _exact_segs, _prefix_parts = _ui_route_specs()
+    for _parts in _prefix_parts:
+        _base = "/" + "/".join(_parts)
+        app.add_api_route(
+            _base,
+            _spa_shell,
+            methods=["GET"],
+            include_in_schema=False,
+        )
+        app.add_api_route(
+            f"{_base}/{{rest:path}}",
+            _spa_shell,
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    for _seg in _exact_segs:
         app.add_api_route(
             f"/{_seg}",
             _spa_shell,

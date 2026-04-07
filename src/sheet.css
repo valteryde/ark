@@ -63,6 +63,20 @@ body {
   color: var(--app-text);
 }
 
+.app-chrome__actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+a.app-btn {
+  text-decoration: none;
+  box-sizing: border-box;
+}
+
 .app-menubar {
   display: flex;
   gap: 1rem;

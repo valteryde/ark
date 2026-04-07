@@ -1,5 +1,16 @@
 import type { SpreadsheetColumn, UiToolbarCapability } from '../spreadsheet/types.ts';
 
+/** Top-right header link rendered from `PartnerSheetPayload.chromeActions`. */
+export interface PartnerChromeAction {
+  label: string;
+  /** Relative path (`/other-sheet`) or `https:` / `http:` / `mailto:` URL. */
+  href: string;
+  variant?: 'ghost' | 'primary';
+  /** Phosphor regular icon name, e.g. `arrow-square-out` → `ph ph-arrow-square-out`. */
+  icon?: string;
+  openInNewTab?: boolean;
+}
+
 /** GET /ark/routing/{path} (and same-origin /api/ark/routing/{path}) for a grid. */
 export interface PartnerSheetPayload {
   title?: string;
@@ -11,6 +22,8 @@ export interface PartnerSheetPayload {
   ghostRowCount?: number;
   defaultRowHeightPx?: number;
   enabledUiCapabilities?: ReadonlyArray<UiToolbarCapability>;
+  /** Optional links in the header chrome (top right). Max 8; invalid entries ignored. */
+  chromeActions?: ReadonlyArray<PartnerChromeAction>;
 }
 
 /** User deleted a grid row (e.g. context menu); backend should remove the record, not only clear cells. */

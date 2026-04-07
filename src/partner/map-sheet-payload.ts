@@ -5,6 +5,7 @@ import type {
   SpreadsheetSelectOption,
   UiToolbarCapability,
 } from '../spreadsheet/types.ts';
+import { normalizePartnerChromeActions } from './chrome-actions.ts';
 import type { PartnerSheetPayload } from './types.ts';
 
 function normalizeSelectOption(x: unknown): SpreadsheetSelectOption | null {
@@ -84,6 +85,7 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
             ? o.defaultRowHeightPx
             : undefined,
       enabledUiCapabilities: i.enabledUiCapabilities ?? o.enabledUiCapabilities,
+      chromeActions: i.chromeActions ?? o.chromeActions,
     };
   }
 
@@ -91,6 +93,7 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
   const columns = (src.columns as unknown[]).map(normalizeColumn).filter((c): c is SpreadsheetColumn => c !== null);
   if (columns.length === 0) return null;
   const rows = (src.rows as unknown[]).filter((r): r is Record<string, unknown> => r !== null && typeof r === 'object');
+  const chromeActions = normalizePartnerChromeActions(src.chromeActions);
   return {
     title: typeof src.title === 'string' ? src.title : undefined,
     description: typeof src.description === 'string' ? src.description : undefined,
@@ -108,6 +111,7 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
     enabledUiCapabilities: Array.isArray(src.enabledUiCapabilities)
       ? (src.enabledUiCapabilities.filter((s): s is UiToolbarCapability => typeof s === 'string') as UiToolbarCapability[])
       : undefined,
+    ...(chromeActions !== undefined ? { chromeActions } : {}),
   };
 }
 
@@ -203,6 +207,7 @@ export function normalizeSheetTruthPayload(
   const enabledUiCapabilities = Array.isArray(o.enabledUiCapabilities)
     ? (o.enabledUiCapabilities.filter((s): s is UiToolbarCapability => typeof s === 'string') as UiToolbarCapability[])
     : undefined;
+  const chromeActions = normalizePartnerChromeActions(o.chromeActions);
   const payload: PartnerSheetPayload = {
     title: typeof o.title === 'string' ? o.title : undefined,
     description: typeof o.description === 'string' ? o.description : undefined,
@@ -213,6 +218,7 @@ export function normalizeSheetTruthPayload(
     defaultRowHeightPx:
       typeof o.defaultRowHeightPx === 'number' && o.defaultRowHeightPx > 0 ? o.defaultRowHeightPx : undefined,
     enabledUiCapabilities,
+    ...(chromeActions !== undefined ? { chromeActions } : {}),
   };
   return { sheetPath, payload };
 }

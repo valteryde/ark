@@ -18,7 +18,7 @@ The Ark **BFF** ([`server/app/main.py` on GitHub](https://github.com/valteryde/a
 1. Stand up any web stack you like (FastAPI, Express, etc.).
 2. Add **`GET /ark/routing/clients`** (or another segment) that returns JSON with at least **`columns`** and **`rows`** (see below).
 3. Run Ark with **`ARK_BACKEND_URL`** pointing at your server (e.g. `http://127.0.0.1:9000`).
-4. List that URL segment in **`ARK_UI_ROUTES`** (comma-separated, e.g. `clients,records`) so Ark serves the SPA at **`/clients`**.
+4. List that path in **`ARK_UI_ROUTES`** (comma-separated exact segments and/or **`prefix/*`** wildcards, e.g. `clients,records,user_transactions/*`) so Ark serves the SPA at **`/clients`** (and under configured prefixes).
 5. Open **`http://127.0.0.1:8000/clients`** (adjust host/port). You should see a grid backed by your JSON.
 
 Try the in-repo sample: [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py) with `uvicorn example_api:app --port 9000`, or the Dockerized demo in [`examples/partner-sqlite-demo`](https://github.com/valteryde/ark/tree/main/examples/partner-sqlite-demo).
@@ -63,9 +63,9 @@ Other **`type`** values and the exact mapping from WebSocket messages are docume
 
 ## URLs and routing
 
-- The **first path segment** of the page URL selects the default sheet route: **`/clients`** → **`path`** = `clients` → **`GET /ark/routing/clients`**.
-- **`ARK_UI_ROUTES`** must include every segment you want as a dedicated SPA entry (letters, digits, hyphen only per segment).
-- You can use a **longer** `{path}` (e.g. `v1/clients`) if your first segment is still listed in **`ARK_UI_ROUTES`** and your links use that path. The full suffix after `/api/ark/routing/` is what gets proxied.
+- The **browser path** (no leading slash; all segments after trimming slashes) is the routing key: **`/clients`** → **`GET /ark/routing/clients`**; **`/user_transactions/xyz`** → **`GET /ark/routing/user_transactions/xyz`**.
+- **`ARK_UI_ROUTES`** lists each exact **single segment** you want as an SPA root, and/or **`prefix/*`** entries so every URL under **`/prefix/…`** serves the SPA (each path segment uses letters, digits, hyphen only).
+- Implement **`GET /ark/routing/{path}`** for every routing key you intend users to open; the BFF proxies **`GET /api/ark/routing/{path}`** with the same **`path`**.
 
 Details: **[PARTNER_API.md](PARTNER_API.md)** (browser URLs section).
 

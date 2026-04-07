@@ -33,6 +33,9 @@ def clients_sheet() -> dict:
     return {
         "title": "Client list for marketing team",
         "description": "Static sample data",
+        "chromeActions": [
+            {"label": "Records", "href": "/records", "icon": "table"},
+        ],
         "sheets": [
             {
                 "title": "Clients",
@@ -55,6 +58,9 @@ def records_sheet() -> dict:
     return {
         "title": "Business records for customer support team",
         "description": "Static sample data",
+        "chromeActions": [
+            {"label": "Clients", "href": "/clients"},
+        ],
         "sheets": [
             {
                 "title": "Records",

@@ -7,6 +7,7 @@ import {
   rowsToInitialMap,
   sheetPayloadToConfig,
 } from './partner/map-sheet-payload.ts';
+import { mountPartnerChromeActions } from './partner/chrome-actions.ts';
 import type { PartnerSheetPayload } from './partner/types.ts';
 import { openCollabWs } from './partner/collab-ws.ts';
 import {
@@ -28,6 +29,7 @@ const toolbarMountEl = document.getElementById('formatting-toolbar-mount');
 const sheetPanelEl = document.getElementById('sheet-panel');
 const sheetTabsEl = document.getElementById('sheet-tabs');
 const chromeTitleEl = document.getElementById('app-chrome-title');
+const chromeActionsEl = document.getElementById('app-chrome-actions');
 const partnerErrorEl = document.getElementById('partner-error');
 
 if (!sheetMountEl) {
@@ -79,7 +81,7 @@ function showPartnerError(err: unknown): void {
   const hint = document.createElement('p');
   hint.className = 'app-partner-error__hint';
   hint.textContent =
-    'Set ARK_BACKEND_URL on the Ark server. Open this UI at a sheet URL whose first path segment matches GET /ark/routing/{segment} on your partner (e.g. /clients). That segment must be listed in ARK_UI_ROUTES on the Ark server so the SPA is served.';
+    'Set ARK_BACKEND_URL on the Ark server. Open this UI at a sheet URL whose path matches GET /ark/routing/{path} on your partner (e.g. /clients). That path must be allowed by ARK_UI_ROUTES on the Ark server (exact segment or prefix/*) so the SPA is served.';
   partnerErrorEl.appendChild(hint);
   const a = document.createElement('a');
   a.className = 'app-partner-error__demo-link';
@@ -89,6 +91,9 @@ function showPartnerError(err: unknown): void {
   partnerErrorEl.hidden = false;
   sheetHost.replaceChildren();
   toolbarHost.replaceChildren();
+  if (chromeActionsEl) {
+    mountPartnerChromeActions(chromeActionsEl, undefined);
+  }
   sheetTabList.replaceChildren();
   tabButtons = [];
 }
@@ -129,6 +134,9 @@ function setTabVisuals(index: number): void {
 
 function initDemoMode(): void {
   hidePartnerError();
+  if (chromeActionsEl) {
+    mountPartnerChromeActions(chromeActionsEl, undefined);
+  }
   sheetTabList.hidden = false;
   sheetPanel.setAttribute('role', 'tabpanel');
   if (chromeTitleEl) {
@@ -185,8 +193,9 @@ function initDemoMode(): void {
   setActiveDemoTab(0);
 }
 
-function pathSegmentFromLocation(): string {
-  return window.location.pathname.replace(/^\//, '').split('/').filter(Boolean)[0] ?? '';
+/** Path after leading slash, segments joined (partner routing key). */
+function routingPathFromLocation(): string {
+  return window.location.pathname.replace(/^\//, '').split('/').filter(Boolean).join('/');
 }
 
 function initPartnerMode(): void {
@@ -203,6 +212,9 @@ function initPartnerMode(): void {
     chromeTitleEl.textContent = 'Ark';
   }
   document.title = 'Ark';
+  if (chromeActionsEl) {
+    mountPartnerChromeActions(chromeActionsEl, undefined);
+  }
 
   const collabIdentity = getCollabClientIdentity();
 
@@ -343,6 +355,9 @@ function initPartnerMode(): void {
       ...(payload.ghostRowCount !== undefined ? { ghostRowCount: payload.ghostRowCount } : {}),
       defaultRowHeightPx: payload.defaultRowHeightPx,
       enabledUiCapabilities: payload.enabledUiCapabilities,
+      ...(payload.chromeActions !== undefined
+        ? { chromeActions: payload.chromeActions.map((a) => ({ ...a })) }
+        : {}),
     };
     const initial = rowsToInitialMap(payload.columns, payload.rows);
     const pathForCollab = routingPath;
@@ -415,6 +430,9 @@ function initPartnerMode(): void {
       chromeTitleEl.textContent = payload.title?.trim() ? payload.title : routingPath;
     }
     document.title = payload.title?.trim() ? payload.title : routingPath;
+    if (chromeActionsEl) {
+      mountPartnerChromeActions(chromeActionsEl, payload.chromeActions);
+    }
     const replay = pendingPastePlain;
     if (replay && liveHandle) {
       pendingPastePlain = null;
@@ -499,8 +517,8 @@ function initPartnerMode(): void {
   }
 
   function boot(): void {
-    const seg = pathSegmentFromLocation();
-    if (!seg) {
+    const routingPath = routingPathFromLocation();
+    if (!routingPath) {
       collab.close();
       showPartnerError(
         new PartnerFetchError(
@@ -510,12 +528,12 @@ function initPartnerMode(): void {
       );
       return;
     }
-    void loadPartnerSheet(seg);
+    void loadPartnerSheet(routingPath);
   }
 
   window.addEventListener('popstate', () => {
-    const seg = pathSegmentFromLocation();
-    if (!seg) {
+    const routingPath = routingPathFromLocation();
+    if (!routingPath) {
       loadedRoutingPath = null;
       showPartnerError(
         new PartnerFetchError(
@@ -525,7 +543,7 @@ function initPartnerMode(): void {
       );
       return;
     }
-    void loadPartnerSheet(seg);
+    void loadPartnerSheet(routingPath);
   });
 
   boot();
