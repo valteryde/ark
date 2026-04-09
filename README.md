@@ -24,10 +24,10 @@ npm run dev
 
 ```bash
 pip install -r server/requirements.txt
-uvicorn app.main:app --reload --app-dir server --port 8000
+uvicorn app.main:app --reload --app-dir server --port "${PORT:-8000}"
 ```
 
-Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/clients) when **`ARK_BACKEND_URL`** points at your partner and **`ARK_UI_ROUTES`** includes that segment. The site root **`/`** shows an error until you use a configured path. Use **`?demo=1`** for offline presets.
+Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/clients) (use your **`PORT`** if set) when **`ARK_BACKEND_URL`** points at your partner and **`ARK_UI_ROUTES`** includes that segment. The site root **`/`** shows an error until you use a configured path. Use **`?demo=1`** for offline presets.
 
 `npm run dev` runs **esbuild in watch mode** and refreshes `dist/`; reload the browser after edits under `src/`.
 
@@ -61,7 +61,9 @@ docker build -t ark:app .
 docker run --rm -p 8000:8000 -e ARK_BACKEND_URL= ark:app
 ```
 
-**Compose** (default port **8000**):
+The image listens on **`PORT`** (default **8000**); map the host port to the same value, e.g. `-e PORT=8080 -p 8080:8080`.
+
+**Compose** (default **`PORT=8000`**; override with **`PORT`** in the environment or `.env`):
 
 ```bash
 docker compose up --build

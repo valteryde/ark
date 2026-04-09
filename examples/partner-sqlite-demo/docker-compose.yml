@@ -2,7 +2,7 @@
 #
 # From this directory:
 #   docker compose up --build
-# Open http://localhost:8000/clients or /records — edit cells; tunnel writes hit SQLite.
+# Open http://localhost:8000/clients or /records (or set PORT) — edit cells; tunnel writes hit SQLite.
 #
 services:
   partner:
@@ -19,10 +19,11 @@ services:
       context: ../..
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:${PORT:-8000}"
     environment:
       ARK_BACKEND_URL: http://partner:9000
       ARK_UI_ROUTES: clients,records
+      PORT: ${PORT:-8000}
     depends_on:
       - partner
 

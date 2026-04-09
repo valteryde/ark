@@ -99,7 +99,7 @@ npm run dev
 **Terminal 2** — serve UI + API from Python (from the repo root):
 
 ```bash
-uvicorn app.main:app --reload --app-dir server --port 8000
+uvicorn app.main:app --reload --app-dir server --port "${PORT:-8000}"
 ```
 
 Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/clients) for **partner mode** (with **`ARK_UI_ROUTES`** and a matching partner route), or [http://127.0.0.1:8000/?demo=1](http://127.0.0.1:8000/?demo=1) for **demo presets**.
@@ -108,7 +108,7 @@ Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/c
 - **Rebuild on save**: `npm run dev` keeps `dist/` up to date; refresh the page after edits under `src/`.
 - **Stop**: Press **Ctrl+C** in each terminal.
 
-**Port 8000 already in use**: Pass a different port to uvicorn, e.g. `--port 8001`.
+**Port 8000 already in use**: Set **`PORT`** (e.g. `PORT=8001`) or pass a different **`--port`** to uvicorn.
 
 Optional: copy [`.env.example`](https://github.com/valteryde/ark/blob/main/.env.example) to `.env` and set **`ARK_BACKEND_URL`** so `GET /api/ark/routing/...` proxies to your partner API.
 
@@ -130,7 +130,7 @@ npm run build
 Output goes to the **`dist/`** folder. To try it with the same server you use in dev:
 
 ```bash
-uvicorn app.main:app --app-dir server --port 8000
+uvicorn app.main:app --app-dir server --port "${PORT:-8000}"
 ```
 
 ## 8. Run with Docker (optional)
@@ -141,7 +141,7 @@ From the same folder as `docker-compose.yml`:
 docker compose up --build
 ```
 
-Then open [http://localhost:8000](http://localhost:8000). The image runs **FastAPI + uvicorn** and serves **`dist/`** from the build stage.
+Then open [http://localhost:8000](http://localhost:8000) (or your **`PORT`**). The image runs **FastAPI + uvicorn** and serves **`dist/`** from the build stage; **`PORT`** defaults to **8000**.
 
 Set **`ARK_BACKEND_URL`** in `docker-compose.yml` (or your orchestrator) to enable routing proxy and tunnel `POST` to your partner API.
 
@@ -157,7 +157,7 @@ docker pull ghcr.io/OWNER/REPO:latest
 docker run --rm -p 8000:8000 -e ARK_BACKEND_URL= ghcr.io/OWNER/REPO:latest
 ```
 
-Open [http://localhost:8000](http://localhost:8000).
+Open [http://localhost:8000](http://localhost:8000). Use **`-e PORT=…`** and **`-p host:PORT`** together if you change the listen port.
 
 ## 10. Hooking up your own backend (next step)
 
@@ -187,7 +187,7 @@ You still need Node/npm installed because those tasks call through to npm script
 | Install Node deps | `npm install` |
 | Watch rebuild → `dist/` | `npm run dev` |
 | Production JS/CSS build | `npm run build` |
-| Local server (UI + `/api` + `/ws/ark`) | `uvicorn app.main:app --reload --app-dir server --port 8000` |
+| Local server (UI + `/api` + `/ws/ark`) | `uvicorn app.main:app --reload --app-dir server --port "${PORT:-8000}"` |
 | Demo UI without partner | Open `http://127.0.0.1:8000/?demo=1` |
 | Docker Compose | `docker compose up --build` |
 

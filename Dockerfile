@@ -18,5 +18,7 @@ RUN pip install --no-cache-dir -r server/requirements.txt
 COPY server ./server
 COPY --from=frontend /app/dist ./dist
 ENV STATIC_ROOT=/app/dist
+# Listen port (override at runtime, e.g. docker run -e PORT=8080 -p 8080:8080)
+ENV PORT=8000
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "server"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --app-dir server"]

@@ -2,7 +2,8 @@ services:
   ark:
     build: .
     ports:
-      - '8000:8000'
+      - '${PORT:-8000}:${PORT:-8000}'
     environment:
       # Optional: your partner API base (no trailing slash)
       ARK_BACKEND_URL: ''
+      PORT: ${PORT:-8000}
