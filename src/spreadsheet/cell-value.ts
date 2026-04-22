@@ -40,6 +40,9 @@ export function parseCommittedCellValue(
   }
   const match = options.find((o) => o.value === t);
   if (match) return { ok: true, value: match.value };
+  const tLower = t.toLowerCase();
+  const byDisplay = options.find((o) => (o.label ?? o.value).toLowerCase() === tLower);
+  if (byDisplay) return { ok: true, value: byDisplay.value };
   return { ok: false };
 }
 

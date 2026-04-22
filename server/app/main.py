@@ -19,6 +19,7 @@ from .tunnel_map import map_to_tunnel
 logger = logging.getLogger("ark")
 
 dotenv.load_dotenv()
+print("Found .env file at:", dotenv.find_dotenv())
 
 BACKEND = os.environ.get("ARK_BACKEND_URL", "").rstrip("/")
 

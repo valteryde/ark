@@ -6,6 +6,7 @@ import {
   filterSelectOptions,
   isSelectColumn,
   parseCommittedCellValue,
+  resolveSelectLabel,
 } from './cell-value.ts';
 import { cellKey } from './data-store.ts';
 import { cellMapsEqual, createSpreadsheetHistory, type HistoryCellMap } from './history.ts';
@@ -791,6 +792,16 @@ export function mountSpreadsheet(
     return { row: active.row, col: active.col };
   }
 
+  function formatCellValueForClipboard(row: number, col: number): string {
+    const v = data.get(row, col);
+    if (v === undefined) return '';
+    const colDef = columnAt(col);
+    if (isSelectColumn(colDef)) {
+      return resolveSelectLabel(colDef, String(v));
+    }
+    return String(v);
+  }
+
   function buildCopyPlainText(): string {
     persistActiveInput();
     if (selectArea.active) {
@@ -802,25 +813,20 @@ export function mountSpreadsheet(
       for (let r = minRow; r <= maxRow; r++) {
         const parts: string[] = [];
         for (let c = minCol; c <= maxCol; c++) {
-          const v = data.get(r, c);
-          const s = v === undefined ? '' : String(v);
-          parts.push(escapeTsvField(s));
+          parts.push(escapeTsvField(formatCellValueForClipboard(r, c)));
         }
         lines.push(parts.join('\t'));
       }
       return lines.join('\n');
     }
-    const v = data.get(active.row, active.col);
-    return v === undefined ? '' : String(v);
+    return formatCellValueForClipboard(active.row, active.col);
   }
 
   function buildRowPlainText(targetRow: number): string {
     const r = clampRow(targetRow);
     const parts: string[] = [];
     for (let c = 1; c <= dataColumnCount; c++) {
-      const v = data.get(r, c);
-      const s = v === undefined ? '' : String(v);
-      parts.push(escapeTsvField(s));
+      parts.push(escapeTsvField(formatCellValueForClipboard(r, c)));
     }
     return parts.join('\t');
   }
