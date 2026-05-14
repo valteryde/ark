@@ -13,6 +13,8 @@ Optionally, when your data **order or row list** changes in a way that no longer
 
 The Ark **BFF** ([`server/app/main.py` on GitHub](https://github.com/valteryde/ark/blob/main/server/app/main.py)) proxies the browser’s same-origin **`GET /api/ark/routing/{path}`** to your **`GET /ark/routing/{path}`**, and forwards **`Authorization`**, **`Cookie`**, and standard accept headers. The browser never calls your partner origin directly, so you avoid CORS for those reads.
 
+If your users open Ark inside an **iframe** on a **different** domain than Ark (for example **`https://example.com`** embedding **`https://ark.example.com`**), configure **`ARK_IFRAME_FRAME_ANCESTORS`** (and optionally **`ARK_IFRAME_X_FRAME_OPTIONS`**) on the Ark server—see **[PARTNER_API.md — Framing](PARTNER_API.md#framing-iframe-embedding)**.
+
 ## Minimal first slice
 
 1. Stand up any web stack you like (FastAPI, Express, etc.).

@@ -11,7 +11,7 @@ If you are implementing the backend Ark calls, read **[Writing a partner](WRITIN
 | Document | Purpose |
 | -------- | ------- |
 | [Writing a partner](WRITING_A_PARTNER.md) | Step-by-step partner implementation |
-| [Partner API](PARTNER_API.md) | Full HTTP + tunnel + WebSocket contract |
+| [Partner API](PARTNER_API.md) | Full HTTP + tunnel + WebSocket contract (includes **iframe framing** env vars) |
 | [Spreadsheet behavior](SPREADSHEET.md) | Grid UX, column types, undo, toolbar |
 | [Getting started](GETTING_STARTED.md) | Clone, Node, Python, Docker, first run |
 

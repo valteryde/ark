@@ -52,6 +52,15 @@ Output: **`dist/`** (HTML, `assets/main.js`, `assets/main.css`, favicon). Serve 
 
 Embedders can still use **`mountSpreadsheet`** from TypeScript in their own apps; this repo’s default page is partner-first.
 
+### Embedding Ark in an iframe (another domain)
+
+If the parent app is on **one origin** and Ark on another (for example **`https://example.com`** embedding **`https://ark.example.com/clients`**), configure framing on the **Ark** host via `.env` or container env:
+
+- **`ARK_IFRAME_FRAME_ANCESTORS`** — space-separated allowed **parent** origins (the CSP `frame-ancestors` sources only). Example: `ARK_IFRAME_FRAME_ANCESTORS=https://example.com`. Use **`https://www.example.com`** as well if users load the parent under both hostnames.
+- **`ARK_IFRAME_X_FRAME_OPTIONS`** — optional `DENY` or `SAMEORIGIN`. Leave unset for cross-site embeds: **`SAMEORIGIN`** only allows framing from Ark’s own origin, so it blocks **`example.com`** embedding **`ark.example.com`**.
+
+See **[docs/PARTNER_API.md](docs/PARTNER_API.md#framing-iframe-embedding)** and [`.env.example`](.env.example).
+
 ## Docker
 
 Single image (esbuild build + FastAPI):

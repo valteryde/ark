@@ -226,6 +226,27 @@ The Ark server serves `index.html` for paths allowed by **`ARK_UI_ROUTES`**: a c
 
 Multi-segment bases are allowed (e.g. **`api/v1/*`**). More specific prefixes should be listed before shorter ones in **`ARK_UI_ROUTES`** so overlapping rules resolve predictably (longer bases are registered first).
 
+## Framing (iframe embedding)
+
+You can load Ark inside a parent page’s **`<iframe>`** when the iframe **`src`** points at your Ark deployment (for example **`https://ark.example.com/clients`**).
+
+Parent and Ark hosts are usually **different origins** (for example **`https://example.com`** vs **`https://ark.example.com`**). The Ark **BFF** ([`server/app/main.py`](https://github.com/valteryde/ark/blob/main/server/app/main.py)) can send framing-related HTTP headers controlled by environment variables (same `.env` as **`ARK_BACKEND_URL`**):
+
+| Variable | Purpose |
+| -------- | ------- |
+| **`ARK_IFRAME_FRAME_ANCESTORS`** | If set, Ark adds **`Content-Security-Policy: frame-ancestors <value>`**. Put only the directive sources (what follows **`frame-ancestors `**), space-separated—for example **`https://example.com`** so only that origin may embed Ark. Include **`https://www.example.com`** too if the parent app is served from both bare and **`www`** hosts. **`'self'`** refers to Ark’s origin (e.g. **`https://ark.example.com`**), not the parent frame. |
+| **`ARK_IFRAME_X_FRAME_OPTIONS`** | If set, Ark adds **`X-Frame-Options`** with this exact value (typically **`DENY`** or **`SAMEORIGIN`**). For embedding from **`example.com`**, leave this **unset**: **`SAMEORIGIN`** allows framing only from **`https://ark.example.com`** itself and blocks the parent site. |
+
+If both variables are unset, Ark does **not** add these headers (same behavior as older deployments).
+
+Example **`.env`** on **`ark.example.com`** when the shell UI lives at **`https://example.com`**:
+
+```bash
+ARK_IFRAME_FRAME_ANCESTORS=https://example.com
+```
+
+Full notes and examples live in [`.env.example`](https://github.com/valteryde/ark/blob/main/.env.example).
+
 ## Local development
 
 1. Run your partner API (e.g. `uvicorn example_api:app --port 9000`).

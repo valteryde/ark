@@ -66,6 +66,24 @@ _PARTNER_TOKEN_QUERY = "ark_token"
 # Server-to-server: partner calls BFF to fan out sheet snapshots. If unset, POST is disabled.
 _BROADCAST_TOKEN = os.environ.get("ARK_BROADCAST_TOKEN", "").strip()
 
+# Embedding Ark inside another site’s iframe: optional framing headers from .env (see .env.example).
+# Leave unset to omit headers (same as legacy behavior). For cross-origin embeds, avoid
+# X-Frame-Options SAMEORIGIN/DENY — use CSP frame-ancestors instead.
+_IFRAME_X_FRAME_OPTIONS = os.environ.get("ARK_IFRAME_X_FRAME_OPTIONS", "").strip()
+_IFRAME_FRAME_ANCESTORS = os.environ.get("ARK_IFRAME_FRAME_ANCESTORS", "").strip()
+
+
+@app.middleware("http")
+async def ark_iframe_embed_headers(request: Request, call_next):
+    response = await call_next(request)
+    if _IFRAME_X_FRAME_OPTIONS:
+        response.headers["X-Frame-Options"] = _IFRAME_X_FRAME_OPTIONS
+    if _IFRAME_FRAME_ANCESTORS:
+        response.headers["Content-Security-Policy"] = (
+            f"frame-ancestors {_IFRAME_FRAME_ANCESTORS}"
+        )
+    return response
+
 
 def _tunnel_headers_from_ws(websocket: WebSocket) -> dict[str, str]:
     token = websocket.query_params.get(_PARTNER_TOKEN_QUERY)

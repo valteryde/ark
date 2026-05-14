@@ -145,6 +145,8 @@ Then open [http://localhost:8000](http://localhost:8000) (or your **`PORT`**). T
 
 Set **`ARK_BACKEND_URL`** in `docker-compose.yml` (or your orchestrator) to enable routing proxy and tunnel `POST` to your partner API.
 
+**Iframe embedding:** If you embed Ark from another domain (for example parent **`https://example.com`**, Ark at **`https://ark.example.com`**), set **`ARK_IFRAME_FRAME_ANCESTORS`** on the Ark server and omit **`ARK_IFRAME_X_FRAME_OPTIONS`** unless you intend **`SAMEORIGIN`**/`DENY`. Details: **[PARTNER_API.md — Framing](PARTNER_API.md#framing-iframe-embedding)** and [`.env.example`](https://github.com/valteryde/ark/blob/main/.env.example).
+
 ## 9. Use images from GitHub Container Registry (optional)
 
 If your team publishes images on push to `main`, you can pull instead of building:
@@ -166,6 +168,7 @@ Open [http://localhost:8000](http://localhost:8000). Use **`-e PORT=…`** and *
 3. Read **[SPREADSHEET.md](SPREADSHEET.md)** — column config, undo, value types, toolbar capabilities.
 4. **BFF**: **`GET /api/ark/routing/{path}`** → **`{ARK_BACKEND_URL}/ark/routing/{path}`**; **`WebSocket /ws/ark`** → broadcast + **`POST …/ark/tunnel`**; optional **`POST /api/ark/broadcast`** ( **`ARK_BROADCAST_TOKEN`** ) for partner-pushed **`sheet.truth`**. Sample: [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py).
 5. **Production**: Run the Docker image or `uvicorn` behind your reverse proxy; set **`ARK_BACKEND_URL`**.
+6. **Iframe**: Parent on **`example.com`**, Ark on **`ark.example.com`** → set **`ARK_IFRAME_FRAME_ANCESTORS`** on Ark (see **[PARTNER_API.md — Framing](PARTNER_API.md#framing-iframe-embedding)**).
 
 Entry points: partner wiring in [`src/main.ts`](https://github.com/valteryde/ark/blob/main/src/main.ts) and [`src/partner/`](https://github.com/valteryde/ark/tree/main/src/partner); reusable grid API under **`src/spreadsheet/`** ([`src/spreadsheet/index.ts`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/index.ts)).
 
