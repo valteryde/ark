@@ -79,6 +79,106 @@ body {
   gap: 0.5rem;
 }
 
+.app-chrome__about-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  font-family: inherit;
+  font-size: 0.78rem;
+  color: var(--app-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.app-chrome__about-toggle:hover {
+  color: var(--app-text);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: var(--app-border);
+}
+
+.app-chrome__about-toggle:focus-visible {
+  outline: 2px solid var(--app-border);
+  outline-offset: 2px;
+}
+
+.app-chrome__about-toggle[aria-expanded='true'] {
+  color: var(--app-text);
+  background: rgba(0, 0, 0, 0.05);
+  border-color: var(--app-border);
+}
+
+.app-chrome__about-toggle .ph {
+  font-size: 0.95rem;
+}
+
+.app-chrome__about {
+  padding: 0.5rem 1.25rem 0.75rem;
+  border-top: 1px solid rgb(232 232 232 / 0.7);
+  background: #fafafa;
+}
+
+.app-chrome__about-text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--app-text);
+  max-width: 72ch;
+  white-space: pre-wrap;
+}
+
+.app-chrome__connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.55rem 0.2rem 0.45rem;
+  font-size: 0.75rem;
+  color: var(--app-text-muted);
+  background: #f3f3f3;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.app-chrome__connection-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.app-chrome__connection--open {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.app-chrome__connection--connecting {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.app-chrome__connection--connecting .app-chrome__connection-dot {
+  animation: app-chrome-connection-pulse 1.2s ease-in-out infinite;
+}
+
+.app-chrome__connection--disconnected {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+@keyframes app-chrome-connection-pulse {
+  0%, 100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 a.app-btn {
   text-decoration: none;
   box-sizing: border-box;
@@ -500,6 +600,7 @@ a.app-sheet-tabs__tab {
 }
 
 .sheet-column-header {
+  position: relative;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -515,6 +616,32 @@ a.app-sheet-tabs__tab {
   line-height: 1.25;
   user-select: none;
   background: var(--sheet-header-bg);
+}
+
+.sheet-column-header-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-column-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 5;
+  background: transparent;
+  transition: background-color 80ms ease-in;
+}
+
+.sheet-column-resize-handle:hover,
+.sheet-column-resize-handle--dragging {
+  background: rgba(37, 99, 235, 0.45);
 }
 
 .sheet-column-header:last-child {
@@ -683,6 +810,50 @@ a.app-sheet-tabs__tab {
 .sheet-cell--remote-presence {
   z-index: 4;
   box-shadow: inset 0 0 0 2px hsl(var(--remote-collab-hue, 210) 65% 42% / 0.95);
+}
+
+/* Persona chips: small icon badges (one per peer, capped) in the cell's top-left corner. */
+.sheet-cell-presence-chips {
+  position: absolute;
+  top: -7px;
+  left: -7px;
+  display: inline-flex;
+  align-items: center;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.sheet-cell-presence-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: -6px;
+  border-radius: 50%;
+  background: hsl(var(--peer-hue, 210) 70% 48%);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  border: 1.5px solid #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  text-transform: uppercase;
+}
+
+.sheet-cell-presence-chip:last-child {
+  margin-right: 0;
+}
+
+.sheet-cell-presence-chip .ph {
+  font-size: 9px;
+  line-height: 1;
+}
+
+.sheet-cell-presence-chip--more {
+  background: #475569;
+  font-size: 8px;
+  letter-spacing: -0.02em;
 }
 
 /* Above range-selection tint (::after) */

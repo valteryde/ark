@@ -83,12 +83,16 @@ function parsePresenceClear(o: Record<string, unknown>): { sheetPath: string | n
   return { sheetPath, clientId };
 }
 
+/** Lifecycle states the chrome can render. */
+export type CollabConnectionState = 'connecting' | 'open' | 'disconnected';
+
 export interface CollabConnection {
   sendCommitted(ev: CellValueCommittedEvent): void;
   sendRowDeleted(ev: RowDeletedEvent): void;
   sendPresence(ev: CellPresenceEvent): void;
   sendPresenceClear(ev: CellPresenceClearEvent): void;
   close(): void;
+  getConnectionState(): CollabConnectionState;
 }
 
 export interface RemoteCommittedMeta {
@@ -134,6 +138,19 @@ function parsePersistFailed(
   return { row, col, sheetPath, columnId, message };
 }
 
+/** Cap on the offline outbound buffer; older messages are dropped first. */
+const MAX_QUEUED_OUTBOUND = 256;
+/** Base backoff (ms) doubles per attempt up to MAX_BACKOFF_MS, with light jitter. */
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
+
+function computeBackoffMs(attempts: number): number {
+  const exp = Math.min(6, Math.max(0, attempts - 1));
+  const base = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** exp);
+  const jitter = Math.floor(Math.random() * (base / 4));
+  return base + jitter;
+}
+
 export function openCollabWs(opts: {
   getActiveSheetPath: () => string | null;
   localClientId: string;
@@ -152,18 +169,23 @@ export function openCollabWs(opts: {
   onSheetTruth?: (truth: SheetTruthNormalized) => void;
   /** Remote peer cleared a row via `row.deleted`. */
   onRemoteRowDeleted?: (row: number) => void;
+  /** Connection lifecycle; fired on every state transition (including initial `connecting`). */
+  onConnectionState?: (state: CollabConnectionState) => void;
 }): CollabConnection {
-  const ws = new WebSocket(collabWsUrl());
-  const pending: string[] = [];
+  let ws: WebSocket | null = null;
+  let state: CollabConnectionState = 'connecting';
+  let intentionalClose = false;
+  let reconnectAttempts = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const outbound: string[] = [];
 
-  ws.addEventListener('open', () => {
-    for (const s of pending) {
-      ws.send(s);
-    }
-    pending.length = 0;
-  });
+  function setState(next: CollabConnectionState): void {
+    if (state === next) return;
+    state = next;
+    opts.onConnectionState?.(next);
+  }
 
-  ws.addEventListener('message', (e) => {
+  function handleMessage(e: MessageEvent): void {
     let data: unknown;
     try {
       data = typeof e.data === 'string' ? JSON.parse(e.data) : null;
@@ -256,13 +278,62 @@ export function openCollabWs(opts: {
     const meta: RemoteCommittedMeta | undefined =
       parsed.markerHue !== undefined ? { markerHue: parsed.markerHue } : undefined;
     opts.onRemoteCommitted(parsed.row, parsed.col, parsed.value, meta);
-  });
+  }
+
+  function connect(): void {
+    if (intentionalClose) return;
+    setState('connecting');
+    const sock = new WebSocket(collabWsUrl());
+    ws = sock;
+
+    sock.addEventListener('open', () => {
+      if (sock !== ws) return;
+      reconnectAttempts = 0;
+      setState('open');
+      while (outbound.length > 0) {
+        const s = outbound.shift()!;
+        try {
+          sock.send(s);
+        } catch {
+          outbound.unshift(s);
+          break;
+        }
+      }
+    });
+
+    sock.addEventListener('message', handleMessage);
+
+    sock.addEventListener('close', () => {
+      if (sock !== ws) return;
+      ws = null;
+      if (intentionalClose) return;
+      setState('disconnected');
+      reconnectAttempts += 1;
+      const delay = computeBackoffMs(reconnectAttempts);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    });
+
+    sock.addEventListener('error', () => {
+      /* close handler runs next; no-op here so we don't double-schedule. */
+    });
+  }
 
   function queueSend(s: string): void {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(s);
-    } else if (ws.readyState === WebSocket.CONNECTING) {
-      pending.push(s);
+    if (intentionalClose) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(s);
+        return;
+      } catch {
+        /* fall through to queue; close handler will reconnect. */
+      }
+    }
+    outbound.push(s);
+    if (outbound.length > MAX_QUEUED_OUTBOUND) {
+      outbound.shift();
     }
   }
 
@@ -282,14 +353,31 @@ export function openCollabWs(opts: {
     queueSend(JSON.stringify(ev));
   }
 
+  connect();
+  opts.onConnectionState?.(state);
+
   return {
     sendCommitted,
     sendRowDeleted,
     sendPresence,
     sendPresenceClear,
+    getConnectionState: () => state,
     close: () => {
-      pending.length = 0;
-      ws.close();
+      intentionalClose = true;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      outbound.length = 0;
+      if (ws) {
+        const sock = ws;
+        ws = null;
+        try {
+          sock.close();
+        } catch {
+          /* ignore */
+        }
+      }
     },
   };
 }

@@ -9,7 +9,8 @@ import {
 } from './partner/map-sheet-payload.ts';
 import { mountPartnerChromeActions } from './partner/chrome-actions.ts';
 import type { PartnerSheetPayload } from './partner/types.ts';
-import { openCollabWs } from './partner/collab-ws.ts';
+import { openCollabWs, type CollabConnectionState } from './partner/collab-ws.ts';
+import { peerDisplayFromClientId } from './partner/presence-persona.ts';
 import {
   createPartnerNotifyDataStore,
   type PartnerNotifyDataStore,
@@ -31,6 +32,11 @@ const sheetTabsEl = document.getElementById('sheet-tabs');
 const chromeTitleEl = document.getElementById('app-chrome-title');
 const chromeActionsEl = document.getElementById('app-chrome-actions');
 const chromeSearchHostEl = document.getElementById('app-chrome-search');
+const chromeConnectionEl = document.getElementById('app-chrome-connection');
+const chromeAboutToggleEl = document.getElementById('app-chrome-about-toggle') as
+  | HTMLButtonElement
+  | null;
+const chromeAboutEl = document.getElementById('app-chrome-about');
 const partnerErrorEl = document.getElementById('partner-error');
 
 let currentSheetHandle: SpreadsheetMountHandle | null = null;
@@ -72,6 +78,79 @@ function hidePartnerError(): void {
   }
 }
 
+const CONNECTION_CHIP_CONFIG: Record<
+  CollabConnectionState,
+  { label: string; modifier: string }
+> = {
+  connecting: { label: 'Connecting…', modifier: 'app-chrome__connection--connecting' },
+  open: { label: 'Live', modifier: 'app-chrome__connection--open' },
+  disconnected: {
+    label: 'Offline — reconnecting…',
+    modifier: 'app-chrome__connection--disconnected',
+  },
+};
+
+function renderConnectionChip(state: CollabConnectionState): void {
+  if (!chromeConnectionEl) return;
+  const cfg = CONNECTION_CHIP_CONFIG[state];
+  chromeConnectionEl.hidden = false;
+  chromeConnectionEl.replaceChildren();
+  for (const cls of Object.values(CONNECTION_CHIP_CONFIG)) {
+    chromeConnectionEl.classList.remove(cls.modifier);
+  }
+  chromeConnectionEl.classList.add(cfg.modifier);
+  const dot = document.createElement('span');
+  dot.className = 'app-chrome__connection-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  const label = document.createElement('span');
+  label.className = 'app-chrome__connection-label';
+  label.textContent = cfg.label;
+  chromeConnectionEl.append(dot, label);
+}
+
+function clearConnectionChip(): void {
+  if (!chromeConnectionEl) return;
+  chromeConnectionEl.hidden = true;
+  chromeConnectionEl.replaceChildren();
+  for (const cls of Object.values(CONNECTION_CHIP_CONFIG)) {
+    chromeConnectionEl.classList.remove(cls.modifier);
+  }
+}
+
+function setAboutDescription(description: string | null): void {
+  if (!chromeAboutEl || !chromeAboutToggleEl) return;
+  const trimmed = description?.trim() ?? '';
+  if (chromeTitleEl) {
+    if (trimmed) {
+      chromeTitleEl.title = trimmed;
+    } else {
+      chromeTitleEl.removeAttribute('title');
+    }
+  }
+  if (!trimmed) {
+    chromeAboutToggleEl.hidden = true;
+    chromeAboutToggleEl.setAttribute('aria-expanded', 'false');
+    chromeAboutEl.hidden = true;
+    chromeAboutEl.textContent = '';
+    return;
+  }
+  chromeAboutToggleEl.hidden = false;
+  const para = document.createElement('p');
+  para.className = 'app-chrome__about-text';
+  para.textContent = trimmed;
+  chromeAboutEl.replaceChildren(para);
+}
+
+function wireAboutToggle(): void {
+  if (!chromeAboutToggleEl || !chromeAboutEl) return;
+  chromeAboutToggleEl.addEventListener('click', () => {
+    const open = chromeAboutToggleEl.getAttribute('aria-expanded') === 'true';
+    const next = !open;
+    chromeAboutToggleEl.setAttribute('aria-expanded', next ? 'true' : 'false');
+    chromeAboutEl.hidden = !next;
+  });
+}
+
 function showPartnerError(err: unknown): void {
   if (!partnerErrorEl) return;
   partnerErrorEl.replaceChildren();
@@ -103,6 +182,8 @@ function showPartnerError(err: unknown): void {
   if (chromeActionsEl) {
     mountPartnerChromeActions(chromeActionsEl, undefined);
   }
+  setAboutDescription(null);
+  clearConnectionChip();
   sheetTabList.replaceChildren();
   tabButtons = [];
 }
@@ -234,6 +315,8 @@ function initDemoMode(): void {
   if (chromeActionsEl) {
     mountPartnerChromeActions(chromeActionsEl, undefined);
   }
+  setAboutDescription(null);
+  clearConnectionChip();
   sheetTabList.hidden = false;
   sheetPanel.setAttribute('role', 'tabpanel');
   if (chromeTitleEl) {
@@ -339,13 +422,18 @@ function initPartnerMode(): void {
   function flushRemotePresenceToGrid(): void {
     if (!liveHandle) return;
     liveHandle.setRemoteCollabPresence(
-      [...remotePeers.entries()].map(([clientId, v]) => ({
-        clientId,
-        row: v.row,
-        col: v.col,
-        mode: v.mode,
-        markerHue: v.markerHue,
-      })),
+      [...remotePeers.entries()].map(([clientId, v]) => {
+        const persona = peerDisplayFromClientId(clientId);
+        return {
+          clientId,
+          row: v.row,
+          col: v.col,
+          mode: v.mode,
+          markerHue: v.markerHue,
+          peerIcon: persona.icon,
+          peerLabel: persona.label,
+        };
+      }),
     );
   }
 
@@ -375,6 +463,9 @@ function initPartnerMode(): void {
     getActiveSheetPath: () => activeSheetPath,
     getFallbackColumns: () => lastPartnerPayload?.columns ?? null,
     localClientId: collabIdentity.clientId,
+    onConnectionState(state) {
+      renderConnectionChip(state);
+    },
     onRemoteCommitted(row, col, value, meta) {
       if (!liveHandle || !liveStore) return;
       liveStore.withRemoteApply(() => {
@@ -480,6 +571,7 @@ function initPartnerMode(): void {
       });
     }) as PartnerNotifyDataStore;
     const config = sheetPayloadToConfig(payload, store);
+    config.columnWidthPersistenceKey = `ark:colw:${routingPath}`;
     if (initialSelection) {
       config.initialSelection = initialSelection;
     }
@@ -535,6 +627,7 @@ function initPartnerMode(): void {
       chromeTitleEl.textContent = payload.title?.trim() ? payload.title : routingPath;
     }
     document.title = payload.title?.trim() ? payload.title : routingPath;
+    setAboutDescription(payload.description ?? null);
     if (chromeActionsEl) {
       mountPartnerChromeActions(chromeActionsEl, payload.chromeActions);
     }
@@ -656,6 +749,7 @@ function initPartnerMode(): void {
 
 function init(): void {
   mountSheetFindChrome();
+  wireAboutToggle();
   const demo = new URLSearchParams(window.location.search).has('demo');
   if (demo) {
     initDemoMode();

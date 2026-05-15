@@ -135,6 +135,13 @@ export interface SpreadsheetConfig {
    * so same-sheet remounts (e.g. partner `sheet.truth`) do not jump the scroll position.
    */
   initialViewportScroll?: { scrollTop: number; scrollLeft: number };
+  /**
+   * When set, data column widths are loaded from `sessionStorage` under this key on mount and
+   * written back after every user resize. Values are validated and clamped before being applied;
+   * a missing or mismatched payload falls back to `columns[i].widthPx`. Resize grips are
+   * rendered only when this key is provided.
+   */
+  columnWidthPersistenceKey?: string;
 }
 
 export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
@@ -178,6 +185,13 @@ export interface RemoteCollabPeer {
   mode: CollabPresenceMode;
   /** 0–360; defaults in the UI if omitted by older clients. */
   markerHue: number;
+  /**
+   * Phosphor regular icon name for this peer's persona chip (e.g. `cat`).
+   * Sanitized against /^[a-z0-9-]+$/; missing or invalid names skip the icon.
+   */
+  peerIcon?: string;
+  /** Short nickname for the persona; used as the chip's `title` and accessible label. */
+  peerLabel?: string;
 }
 
 /** Returned by `mountSpreadsheet` for wiring the formatting toolbar and extensions. */

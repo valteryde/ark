@@ -119,6 +119,44 @@ function getCellEditor(cell: HTMLElement): HTMLInputElement | null {
   return cell.querySelector<HTMLInputElement>('.sheet-cell-input');
 }
 
+/** Bounds applied to user-resized column widths. */
+const COLUMN_MIN_WIDTH_PX = 48;
+const COLUMN_MAX_WIDTH_PX = 800;
+
+function clampColumnWidth(w: number): number {
+  if (!Number.isFinite(w)) return COLUMN_MIN_WIDTH_PX;
+  return Math.max(COLUMN_MIN_WIDTH_PX, Math.min(COLUMN_MAX_WIDTH_PX, Math.round(w)));
+}
+
+function readPersistedColumnWidths(key: string | undefined, columnCount: number): number[] | null {
+  if (!key || columnCount === 0) return null;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const widths = (parsed as { widths?: unknown }).widths;
+    if (!Array.isArray(widths) || widths.length !== columnCount) return null;
+    const out: number[] = [];
+    for (const w of widths) {
+      if (typeof w !== 'number' || !Number.isFinite(w)) return null;
+      out.push(clampColumnWidth(w));
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function persistColumnWidths(key: string | undefined, widths: readonly number[]): void {
+  if (!key) return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify({ widths }));
+  } catch {
+    /* quota / disabled storage: silently ignore */
+  }
+}
+
 function applyCellDisplay(
   content: HTMLDivElement,
   column: SpreadsheetColumn | undefined,
@@ -181,8 +219,15 @@ export function mountSpreadsheet(
   }
   const defaultRowHeight = config.defaultRowHeightPx ?? 28;
   const rowHeights = Array.from({ length: mountedRowCount }, () => defaultRowHeight);
-  const columnWidths = columns.map((c) => c.widthPx);
-  const dataSheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
+  const columnWidthPersistenceKey = config.columnWidthPersistenceKey;
+  const columnWidths = columns.map((c) => clampColumnWidth(c.widthPx));
+  const persistedWidths = readPersistedColumnWidths(columnWidthPersistenceKey, columns.length);
+  if (persistedWidths) {
+    for (let i = 0; i < columnWidths.length; i++) {
+      columnWidths[i] = persistedWidths[i]!;
+    }
+  }
+  let dataSheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
 
   const ghostColumnsEnabled =
     dataColumnCount > 0 &&
@@ -411,12 +456,52 @@ export function mountSpreadsheet(
   }
 
   let remotePresenceList: RemoteCollabPeer[] = [];
+  const presenceChipEls = new Map<string, HTMLDivElement>();
+  /** Cap chips per cell; remaining peers collapse into a "+N" badge. */
+  const PRESENCE_CHIP_MAX = 3;
+  const PHOSPHOR_NAME_RX = /^[a-z0-9-]+$/;
 
   function clearRemotePresenceDecor(): void {
     for (const el of cells.values()) {
       el.classList.remove('sheet-cell--remote-presence');
       el.style.removeProperty('--remote-collab-hue');
     }
+    for (const chip of presenceChipEls.values()) {
+      chip.remove();
+    }
+    presenceChipEls.clear();
+  }
+
+  function renderPresenceChips(peers: readonly RemoteCollabPeer[]): HTMLDivElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'sheet-cell-presence-chips';
+    wrap.setAttribute('aria-hidden', 'true');
+    const shown = peers.slice(0, PRESENCE_CHIP_MAX);
+    for (const p of shown) {
+      const chip = document.createElement('span');
+      chip.className = 'sheet-cell-presence-chip';
+      chip.style.setProperty('--peer-hue', String(p.markerHue));
+      const label = p.peerLabel?.trim();
+      if (label) chip.title = label;
+      const iconName = p.peerIcon?.trim().toLowerCase();
+      if (iconName && PHOSPHOR_NAME_RX.test(iconName) && iconName.length <= 48) {
+        const i = document.createElement('i');
+        i.className = `ph ph-${iconName}`;
+        i.setAttribute('aria-hidden', 'true');
+        chip.appendChild(i);
+      } else if (label) {
+        chip.textContent = label.charAt(0).toUpperCase();
+      }
+      wrap.appendChild(chip);
+    }
+    const overflow = peers.length - shown.length;
+    if (overflow > 0) {
+      const more = document.createElement('span');
+      more.className = 'sheet-cell-presence-chip sheet-cell-presence-chip--more';
+      more.textContent = `+${overflow}`;
+      wrap.appendChild(more);
+    }
+    return wrap;
   }
 
   function paintRemotePresenceOverlays(): void {
@@ -434,6 +519,9 @@ export function mountSpreadsheet(
       if (!el) continue;
       el.classList.add('sheet-cell--remote-presence');
       el.style.setProperty('--remote-collab-hue', String(plist[0]!.markerHue));
+      const chips = renderPresenceChips(plist);
+      el.appendChild(chips);
+      presenceChipEls.set(k, chips);
     }
   }
 
@@ -1189,14 +1277,30 @@ export function mountSpreadsheet(
   headerCorner.setAttribute('aria-hidden', 'true');
   headerRow.appendChild(headerCorner);
 
+  const dataColumnHeaderEls: HTMLDivElement[] = [];
+  const columnResizeEnabled = columnWidthPersistenceKey !== undefined;
   for (let c = 0; c < columns.length; c++) {
     const h = document.createElement('div');
     h.className = 'sheet-column-header';
     if (columns[c]!.readOnly) h.classList.add('sheet-column-header--readonly');
     h.style.width = `${columnWidths[c]}px`;
     h.dataset.col = String(c + 1);
-    h.textContent = columns[c]!.header;
+
+    const headerLabel = document.createElement('span');
+    headerLabel.className = 'sheet-column-header-label';
+    headerLabel.textContent = columns[c]!.header;
+    h.appendChild(headerLabel);
+
+    if (columnResizeEnabled) {
+      const grip = document.createElement('div');
+      grip.className = 'sheet-column-resize-handle';
+      grip.dataset.col = String(c + 1);
+      grip.setAttribute('aria-hidden', 'true');
+      h.appendChild(grip);
+    }
+
     headerRow.appendChild(h);
+    dataColumnHeaderEls.push(h);
   }
 
   const gridBody = document.createElement('div');
@@ -1370,6 +1474,119 @@ export function mountSpreadsheet(
     const vpW = viewport.clientWidth;
     const need = Math.ceil((vpW - rowHeaderWidthPx - dataSheetTotalWidth) / ghostColumnWidthPx);
     setGhostColumnCount(need);
+  }
+
+  /**
+   * Re-apply column layout after `columnWidths[]` mutates. Updates header widths, the cumulative
+   * left-offset table, every cell's `width`/`left` (data and ghost), and the grid envelope, then
+   * recomputes ghost-column padding. Pass `persist: true` to write to `sessionStorage` once the
+   * gesture settles.
+   */
+  function applyColumnLayout(opts?: { persist?: boolean }): void {
+    dataSheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
+    rebuildCumulativeColumnWidthsAndMountedWidth();
+    gridInner.style.width = `${rowHeaderWidthPx + mountedSheetCellsWidth}px`;
+    for (let c = 0; c < dataColumnCount; c++) {
+      const h = dataColumnHeaderEls[c];
+      if (h) h.style.width = `${columnWidths[c]}px`;
+    }
+    const totalMountedCols = dataColumnCount + ghostColumnCount;
+    for (let row = 1; row <= mountedRowCount; row++) {
+      const rowCells = rowCellsEls[row - 1];
+      if (rowCells) {
+        rowCells.style.width = `${mountedSheetCellsWidth}px`;
+      }
+      for (let col = 1; col <= totalMountedCols; col++) {
+        const cell = cells.get(cellKey(row, col));
+        if (!cell) continue;
+        cell.style.width = `${widthOfMountedCol1Based(col)}px`;
+        cell.style.left = `${cumulativeColumnWidths[col - 1]}px`;
+      }
+    }
+    syncGhostColumnsToViewport();
+    if (opts?.persist) {
+      persistColumnWidths(columnWidthPersistenceKey, columnWidths);
+    }
+  }
+
+  function setColumnWidth(colIndex: number, nextWidth: number, opts?: { persist?: boolean }): void {
+    if (colIndex < 1 || colIndex > dataColumnCount) return;
+    const clamped = clampColumnWidth(nextWidth);
+    if (columnWidths[colIndex - 1] === clamped) return;
+    columnWidths[colIndex - 1] = clamped;
+    applyColumnLayout({ persist: opts?.persist === true });
+  }
+
+  if (columnResizeEnabled) {
+    let resizeCol = 0;
+    let resizeStartX = 0;
+    let resizeStartWidth = 0;
+    let activeGrip: HTMLElement | null = null;
+    let resizePointerId: number | null = null;
+    let resizeRaf: number | null = null;
+    let resizePendingWidth: number | null = null;
+
+    const flushPendingResize = (): void => {
+      resizeRaf = null;
+      if (resizePendingWidth === null || resizeCol === 0) return;
+      const desired = resizePendingWidth;
+      resizePendingWidth = null;
+      setColumnWidth(resizeCol, desired, { persist: false });
+    };
+
+    const onGripPointerDown = (e: PointerEvent): void => {
+      if (e.button !== 0) return;
+      const grip = e.currentTarget as HTMLElement;
+      const col = Number(grip.dataset.col);
+      if (!Number.isFinite(col) || col < 1 || col > dataColumnCount) return;
+      e.preventDefault();
+      e.stopPropagation();
+      resizeCol = col;
+      resizeStartX = e.clientX;
+      resizeStartWidth = columnWidths[col - 1]!;
+      resizePointerId = e.pointerId;
+      activeGrip = grip;
+      grip.classList.add('sheet-column-resize-handle--dragging');
+      grip.setPointerCapture(e.pointerId);
+    };
+
+    const onGripPointerMove = (e: PointerEvent): void => {
+      if (resizePointerId === null || e.pointerId !== resizePointerId) return;
+      const next = resizeStartWidth + (e.clientX - resizeStartX);
+      resizePendingWidth = next;
+      if (resizeRaf === null) {
+        resizeRaf = requestAnimationFrame(flushPendingResize);
+      }
+    };
+
+    const onGripPointerUp = (e: PointerEvent): void => {
+      if (resizePointerId === null || e.pointerId !== resizePointerId) return;
+      if (resizeRaf !== null) {
+        cancelAnimationFrame(resizeRaf);
+        resizeRaf = null;
+      }
+      flushPendingResize();
+      if (activeGrip) {
+        activeGrip.classList.remove('sheet-column-resize-handle--dragging');
+        if (activeGrip.hasPointerCapture(e.pointerId)) {
+          activeGrip.releasePointerCapture(e.pointerId);
+        }
+      }
+      resizePointerId = null;
+      activeGrip = null;
+      resizeCol = 0;
+      resizePendingWidth = null;
+      persistColumnWidths(columnWidthPersistenceKey, columnWidths);
+    };
+
+    for (const h of dataColumnHeaderEls) {
+      const grip = h.querySelector<HTMLElement>('.sheet-column-resize-handle');
+      if (!grip) continue;
+      grip.addEventListener('pointerdown', onGripPointerDown);
+      grip.addEventListener('pointermove', onGripPointerMove);
+      grip.addEventListener('pointerup', onGripPointerUp);
+      grip.addEventListener('pointercancel', onGripPointerUp);
+    }
   }
 
   const suggestPopover = document.createElement('div');
