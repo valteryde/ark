@@ -609,11 +609,25 @@ a.app-sheet-tabs__tab {
   border-right: 1px solid rgb(232 232 232 / 0.85);
   background: #f1f2f4;
   user-select: none;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   position: sticky;
   left: 0;
   z-index: 3;
   align-self: stretch;
+}
+
+.sheet-row-gutter--ghost {
+  cursor: default;
+  pointer-events: none;
+}
+
+.sheet-column-header {
+  cursor: pointer;
+}
+
+.sheet-column-header--ghost {
+  cursor: default;
 }
 
 .sheet-row-gutter--ghost {

@@ -346,6 +346,20 @@ export function mountSpreadsheet(
 
   const cells = new Map<string, HTMLDivElement>();
   let active = { row: 1, col: 1 };
+  /**
+   * Excel-style view-vs-edit toggle. View mode (false) is the default after
+   * navigation; the active cell's input is focused with all text selected so the
+   * first printable keystroke overwrites. Edit mode (true) is entered via F2,
+   * double-click, or typing a printable key into a populated cell — caret stays
+   * within the text and Backspace/Delete edit the buffer instead of clearing.
+   */
+  let editMode = false;
+  /**
+   * When the user moves with Tab/Shift+Tab, we remember the column they started
+   * in so a subsequent Enter returns to it on the next row (standard
+   * spreadsheet behavior). Any non-Tab navigation clears this anchor.
+   */
+  let tabAnchorCol: number | null = null;
 
   const persistErrorClearTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -469,6 +483,11 @@ export function mountSpreadsheet(
   let dragMoved = false;
   let dragRaf: number | null = null;
   let dragPendingEnd: { row: number; col: number } | null = null;
+  /** Last pointer position observed during an active drag, in client coords;
+   *  used by the edge-autoscroll loop to keep growing the selection while the
+   *  cursor sits past the viewport. */
+  let dragLastPointer: { clientX: number; clientY: number } | null = null;
+  let autoScrollRaf: number | null = null;
 
   function clampRow(row: number): number {
     return Math.max(1, Math.min(dataRowCount, row));
@@ -783,6 +802,39 @@ export function mountSpreadsheet(
     return lines.map((line) => line.split('\t').map(parsePastedCellField));
   }
 
+  /**
+   * Some clipboard sources (e.g. Google Sheets, Excel-on-web) expose the
+   * selection as `text/html` only — a bare `<table>` with <tr>/<td>. If we got
+   * empty plain text, fall back to extracting that table into a TSV-shaped
+   * string so {@link applyPastedGrid} can handle it uniformly.
+   */
+  function parseHtmlClipboardTable(html: string): string | null {
+    if (!html) return null;
+    let doc: Document;
+    try {
+      doc = new DOMParser().parseFromString(html, 'text/html');
+    } catch {
+      return null;
+    }
+    const table = doc.querySelector('table');
+    if (!table) return null;
+    const rows = Array.from(table.querySelectorAll('tr'));
+    if (rows.length === 0) return null;
+    const lines: string[] = [];
+    for (const tr of rows) {
+      const cells = Array.from(tr.querySelectorAll<HTMLTableCellElement>('th, td'));
+      if (cells.length === 0) continue;
+      const parts: string[] = [];
+      for (const td of cells) {
+        const text = (td.innerText ?? td.textContent ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        parts.push(escapeTsvField(text));
+      }
+      lines.push(parts.join('\t'));
+    }
+    if (lines.length === 0) return null;
+    return lines.join('\n');
+  }
+
   function getPasteAnchor(): { row: number; col: number } {
     if (selectArea.active) {
       return {
@@ -1062,10 +1114,65 @@ export function mountSpreadsheet(
     if (!viewport.contains(e.target as Node)) return;
     const plain = e.clipboardData?.getData('text/plain') ?? '';
     if (shouldLetInputHandlePaste(e.target, plain)) return;
-    if (plain === '') return;
+    let payload = plain;
+    if (payload === '') {
+      const html = e.clipboardData?.getData('text/html') ?? '';
+      const fromHtml = parseHtmlClipboardTable(html);
+      if (fromHtml) payload = fromHtml;
+    }
+    if (payload === '') return;
     e.preventDefault();
     e.stopPropagation();
-    applyPastedGrid(plain);
+    applyPastedGrid(payload);
+  }
+
+  function clearWritableCellsInActiveRange(): void {
+    const keys: string[] = [];
+    if (selectArea.active) {
+      const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+      const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+      const minCol = Math.min(selectArea.col, selectArea.colEnd);
+      const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+      for (let r = minRow; r <= maxRow; r++) {
+        if (r < 1 || r > dataRowCount) continue;
+        for (let c = minCol; c <= maxCol; c++) {
+          if (c < 1 || c > dataColumnCount) continue;
+          if (isReadOnlyCol(c)) continue;
+          keys.push(cellKey(r, c));
+        }
+      }
+    } else if (!isReadOnlyCol(active.col) && !isGhostRow(active.row)) {
+      keys.push(cellKey(active.row, active.col));
+    }
+    if (keys.length === 0) return;
+    const before = history ? captureSnapshot(keys) : null;
+    for (const k of keys) {
+      const { row: r, col: c } = keyToRowCol(k);
+      data.set(r, c, '');
+      const cellEl = cells.get(k);
+      if (cellEl) {
+        const contentEl = cellEl.querySelector<HTMLDivElement>('.sheet-cell-content');
+        if (contentEl) applyCellDisplay(contentEl, columnAt(c), '');
+        const inp = getCellEditor(cellEl);
+        if (inp) inp.value = '';
+        syncCellChrome(r, c);
+      }
+    }
+    if (history && before) {
+      const after = captureSnapshot(keys);
+      pushHistoryIfChanged(before, after);
+    }
+  }
+
+  function onCutCapture(e: ClipboardEvent): void {
+    if (!viewport.contains(e.target as Node)) return;
+    if (shouldLetInputHandleCopy(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const text = buildCopyPlainText();
+    e.clipboardData?.setData('text/plain', text);
+    clearWritableCellsInActiveRange();
+    syncSelectionHighlight();
   }
 
   const gridInner = document.createElement('div');
@@ -1087,6 +1194,7 @@ export function mountSpreadsheet(
     h.className = 'sheet-column-header';
     if (columns[c]!.readOnly) h.classList.add('sheet-column-header--readonly');
     h.style.width = `${columnWidths[c]}px`;
+    h.dataset.col = String(c + 1);
     h.textContent = columns[c]!.header;
     headerRow.appendChild(h);
   }
@@ -1581,6 +1689,7 @@ export function mountSpreadsheet(
 
   viewport.addEventListener('copy', onCopyCapture, true);
   viewport.addEventListener('paste', onPasteCapture, true);
+  viewport.addEventListener('cut', onCutCapture, true);
 
   viewport.addEventListener('scroll', () => {
     if (!suggestPopover.hidden) positionSuggestPopover();
@@ -1643,7 +1752,11 @@ export function mountSpreadsheet(
     }
     const cell = cells.get(cellKey(active.row, active.col));
     const inp = cell ? getCellEditor(cell) : null;
-    setTimeout(() => inp?.focus(), 0);
+    setTimeout(() => {
+      if (!inp) return;
+      inp.focus();
+      selectAllInputForOverwrite(inp);
+    }, 0);
   }
 
   function blurActiveInput(): void {
@@ -1741,8 +1854,13 @@ export function mountSpreadsheet(
         if (isReadOnlyCol(col)) viewport.focus();
         else {
           const c = cells.get(cellKey(row, col));
-          if (c) getCellEditor(c)?.focus();
+          const inp = c ? getCellEditor(c) : null;
+          if (inp) {
+            inp.focus();
+            selectAllInputForOverwrite(inp);
+          }
         }
+        scrollActiveIntoView();
       });
       return;
     }
@@ -1762,6 +1880,7 @@ export function mountSpreadsheet(
     prev?.classList.remove('sheet-cell-active');
 
     active = { row, col };
+    editMode = false;
     const next = cells.get(cellKey(row, col));
     next?.classList.add('sheet-cell-active');
 
@@ -1770,7 +1889,44 @@ export function mountSpreadsheet(
       const stored = data.get(row, col);
       inp.value = stored !== undefined ? String(stored) : '';
       if (isReadOnlyCol(col)) setTimeout(() => viewport.focus(), 0);
-      else setTimeout(() => inp.focus(), 0);
+      else {
+        setTimeout(() => {
+          inp.focus();
+          selectAllInputForOverwrite(inp);
+        }, 0);
+      }
+    }
+    scrollActiveIntoView();
+  }
+
+  function scrollActiveIntoView(): void {
+    const cell = cells.get(cellKey(active.row, active.col));
+    if (!cell) return;
+    cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  function selectAllInputForOverwrite(inp: HTMLInputElement): void {
+    if (editMode) return;
+    if (inp.readOnly) return;
+    try {
+      inp.select();
+    } catch {
+      /* select may throw for non-text inputs; safe to ignore */
+    }
+  }
+
+  function enterEditModeAtEnd(): void {
+    if (isReadOnlyCol(active.col) || isGhostRow(active.row)) return;
+    const cell = cells.get(cellKey(active.row, active.col));
+    const inp = cell ? getCellEditor(cell) : null;
+    if (!inp) return;
+    editMode = true;
+    inp.focus();
+    const len = inp.value.length;
+    try {
+      inp.setSelectionRange(len, len);
+    } catch {
+      /* setSelectionRange may throw for non-text inputs; safe to ignore */
     }
   }
 
@@ -1788,11 +1944,14 @@ export function mountSpreadsheet(
     if (multi) enterRangeSelectionUi();
   }
 
-  function selectSheetRow(targetRow: number): void {
+  function selectSheetRow(targetRow: number, extend = false): void {
     const row = clampRow(targetRow);
     persistActiveInput();
     hideSuggestions();
+    tabAnchorCol = null;
+    editMode = false;
     cells.get(cellKey(active.row, active.col))?.classList.remove('sheet-cell-active');
+    const anchorRow = extend && selectArea.active ? selectArea.row : row;
     active = { row, col: 1 };
     const next = cells.get(cellKey(row, 1));
     next?.classList.add('sheet-cell-active');
@@ -1801,18 +1960,61 @@ export function mountSpreadsheet(
       const stored = data.get(row, 1);
       inp.value = stored !== undefined ? String(stored) : '';
     }
-    selectArea.row = row;
+    selectArea.row = anchorRow;
     selectArea.col = 1;
     selectArea.rowEnd = row;
     selectArea.colEnd = dataColumnCount;
-    selectArea.active = dataColumnCount > 1;
+    selectArea.active = dataColumnCount > 1 || anchorRow !== row;
     syncSelectionHighlight();
     if (selectArea.active) {
       enterRangeSelectionUi();
     } else {
       exitRangeSelectionUi();
       if (isReadOnlyCol(1)) setTimeout(() => viewport.focus(), 0);
-      else if (inp) setTimeout(() => inp.focus(), 0);
+      else if (inp) {
+        setTimeout(() => {
+          inp.focus();
+          selectAllInputForOverwrite(inp);
+        }, 0);
+      }
+    }
+    notifySelectionChange();
+  }
+
+  function selectSheetColumn(targetCol: number, extend = false): void {
+    const col = clampCol(targetCol);
+    if (dataRowCount < 1) return;
+    persistActiveInput();
+    hideSuggestions();
+    tabAnchorCol = null;
+    editMode = false;
+    cells.get(cellKey(active.row, active.col))?.classList.remove('sheet-cell-active');
+    const anchorCol = extend && selectArea.active ? selectArea.col : col;
+    active = { row: 1, col };
+    const next = cells.get(cellKey(1, col));
+    next?.classList.add('sheet-cell-active');
+    const inp = next ? getCellEditor(next) : null;
+    if (inp) {
+      const stored = data.get(1, col);
+      inp.value = stored !== undefined ? String(stored) : '';
+    }
+    selectArea.row = 1;
+    selectArea.col = anchorCol;
+    selectArea.rowEnd = dataRowCount;
+    selectArea.colEnd = col;
+    selectArea.active = dataRowCount > 1 || anchorCol !== col;
+    syncSelectionHighlight();
+    if (selectArea.active) {
+      enterRangeSelectionUi();
+    } else {
+      exitRangeSelectionUi();
+      if (isReadOnlyCol(col)) setTimeout(() => viewport.focus(), 0);
+      else if (inp) {
+        setTimeout(() => {
+          inp.focus();
+          selectAllInputForOverwrite(inp);
+        }, 0);
+      }
     }
     notifySelectionChange();
   }
@@ -1891,9 +2093,9 @@ export function mountSpreadsheet(
   }
 
   contextMenuEl.append(
-    makeContextMenuItem('Delete row', () => {
+    makeContextMenuItem('Clear row contents', () => {
       if (contextMenuRow !== null) clearSheetRow(contextMenuRow);
-    }, 'ph-trash'),
+    }, 'ph-eraser'),
     makeContextMenuItem('Copy row', () => {
       if (contextMenuRow === null) return;
       persistActiveInput();
@@ -1946,6 +2148,25 @@ export function mountSpreadsheet(
   viewport.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
+
+    const headerHit = target.closest('.sheet-column-header') as HTMLElement | null;
+    if (headerHit && viewport.contains(headerHit) && !headerHit.classList.contains('sheet-column-header--ghost')) {
+      const col = Number(headerHit.dataset.col);
+      if (!Number.isFinite(col) || col < 1 || col > dataColumnCount) return;
+      e.preventDefault();
+      selectSheetColumn(col, e.shiftKey);
+      return;
+    }
+
+    const gutterHit = target.closest('.sheet-row-gutter') as HTMLElement | null;
+    if (gutterHit && viewport.contains(gutterHit) && !gutterHit.classList.contains('sheet-row-gutter--ghost')) {
+      const gRow = Number(gutterHit.dataset.row);
+      if (!Number.isFinite(gRow) || gRow < 1 || gRow > dataRowCount) return;
+      e.preventDefault();
+      selectSheetRow(gRow, e.shiftKey);
+      return;
+    }
+
     const hit = target.closest('.sheet-cell');
     if (!hit || !viewport.contains(hit)) return;
     const cell = hit as HTMLElement;
@@ -1961,12 +2182,54 @@ export function mountSpreadsheet(
       dragRaf = null;
     }
     dragPendingEnd = null;
+
+    // Shift-click extends the existing range from the current anchor instead
+    // of starting a fresh drag. The anchor is `selectArea.row/col` when a
+    // range is already active, otherwise the current `active` cell.
+    if (e.shiftKey) {
+      hideSuggestions();
+      persistActiveInput();
+      const anchorRow = selectArea.active ? selectArea.row : active.row;
+      const anchorCol = selectArea.active ? selectArea.col : active.col;
+      cells.get(cellKey(active.row, active.col))?.classList.remove('sheet-cell-active');
+      active = { row, col };
+      editMode = false;
+      tabAnchorCol = null;
+      const nextCell = cells.get(cellKey(row, col));
+      nextCell?.classList.add('sheet-cell-active');
+      const inpExtend = nextCell ? getCellEditor(nextCell) : null;
+      if (inpExtend) {
+        const stored = data.get(row, col);
+        inpExtend.value = stored !== undefined ? String(stored) : '';
+      }
+      selectArea.row = anchorRow;
+      selectArea.col = anchorCol;
+      selectArea.rowEnd = row;
+      selectArea.colEnd = col;
+      selectArea.active = anchorRow !== row || anchorCol !== col;
+      syncSelectionHighlight();
+      if (selectArea.active) enterRangeSelectionUi();
+      else {
+        exitRangeSelectionUi();
+        if (isReadOnlyCol(col)) setTimeout(() => viewport.focus(), 0);
+        else if (inpExtend) {
+          setTimeout(() => {
+            inpExtend.focus();
+            selectAllInputForOverwrite(inpExtend);
+          }, 0);
+        }
+      }
+      return;
+    }
+
     exitRangeSelectionUi();
 
     dragging = true;
     dragMoved = false;
     dragPointerId = e.pointerId;
     dragAnchor = { row, col };
+    tabAnchorCol = null;
+    editMode = false;
     viewport.classList.add('sheet-viewport--dragging');
     viewport.setPointerCapture(e.pointerId);
 
@@ -1991,13 +2254,70 @@ export function mountSpreadsheet(
     }
   });
 
+  function computeAutoScrollDelta(clientX: number, clientY: number): { dx: number; dy: number } {
+    const rect = viewport.getBoundingClientRect();
+    const edge = 30;
+    const maxSpeed = 24;
+    let dx = 0;
+    let dy = 0;
+    if (clientX < rect.left + edge) {
+      dx = -Math.min(maxSpeed, Math.ceil((rect.left + edge - clientX) / 2));
+    } else if (clientX > rect.right - edge) {
+      dx = Math.min(maxSpeed, Math.ceil((clientX - (rect.right - edge)) / 2));
+    }
+    if (clientY < rect.top + edge) {
+      dy = -Math.min(maxSpeed, Math.ceil((rect.top + edge - clientY) / 2));
+    } else if (clientY > rect.bottom - edge) {
+      dy = Math.min(maxSpeed, Math.ceil((clientY - (rect.bottom - edge)) / 2));
+    }
+    return { dx, dy };
+  }
+
+  function stopAutoScroll(): void {
+    if (autoScrollRaf !== null) {
+      cancelAnimationFrame(autoScrollRaf);
+      autoScrollRaf = null;
+    }
+  }
+
+  function autoScrollTick(): void {
+    autoScrollRaf = null;
+    if (!dragging || !dragLastPointer) return;
+    const { clientX, clientY } = dragLastPointer;
+    const { dx, dy } = computeAutoScrollDelta(clientX, clientY);
+    if (dx === 0 && dy === 0) return;
+    viewport.scrollBy(dx, dy);
+    const hit = cellFromPoint(clientX, clientY);
+    if (hit) {
+      if (hit.row !== dragAnchor.row || hit.col !== dragAnchor.col) dragMoved = true;
+      dragPendingEnd = hit;
+      scheduleDragPaint();
+    }
+    autoScrollRaf = requestAnimationFrame(autoScrollTick);
+  }
+
+  function ensureAutoScroll(clientX: number, clientY: number): void {
+    dragLastPointer = { clientX, clientY };
+    const { dx, dy } = computeAutoScrollDelta(clientX, clientY);
+    if (dx === 0 && dy === 0) {
+      stopAutoScroll();
+      return;
+    }
+    if (autoScrollRaf === null) {
+      autoScrollRaf = requestAnimationFrame(autoScrollTick);
+    }
+  }
+
   viewport.addEventListener('pointermove', (e) => {
     if (!dragging || e.pointerId !== dragPointerId) return;
+    dragLastPointer = { clientX: e.clientX, clientY: e.clientY };
     const hit = cellFromPoint(e.clientX, e.clientY);
-    if (!hit) return;
-    if (hit.row !== dragAnchor.row || hit.col !== dragAnchor.col) dragMoved = true;
-    dragPendingEnd = hit;
-    scheduleDragPaint();
+    if (hit) {
+      if (hit.row !== dragAnchor.row || hit.col !== dragAnchor.col) dragMoved = true;
+      dragPendingEnd = hit;
+      scheduleDragPaint();
+    }
+    ensureAutoScroll(e.clientX, e.clientY);
   });
 
   viewport.addEventListener('pointerup', (e) => {
@@ -2007,6 +2327,8 @@ export function mountSpreadsheet(
     } catch {
       /* released */
     }
+    stopAutoScroll();
+    dragLastPointer = null;
     flushDragPaint();
     endPointerDrag(true);
   });
@@ -2018,6 +2340,8 @@ export function mountSpreadsheet(
     } catch {
       /* released */
     }
+    stopAutoScroll();
+    dragLastPointer = null;
     flushDragPaint();
     endPointerDrag(false);
   });
@@ -2126,6 +2450,13 @@ export function mountSpreadsheet(
       return;
     }
 
+    if (e.key === 'F2' && !e.shiftKey && !sheetModEarly && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      enterEditModeAtEnd();
+      return;
+    }
+
     const hit = target.closest('.sheet-cell');
     const focusRowCol = hit
       ? {
@@ -2136,6 +2467,16 @@ export function mountSpreadsheet(
 
     const { row, col } = focusRowCol;
     const sheetMod = e.metaKey || e.ctrlKey;
+
+    if (editMode) {
+      // In edit mode the input is the actor: only Escape / Tab / Enter commit
+      // or cancel. Everything else (arrows, Home/End, Cmd+A, Cmd+Z, typing,
+      // Backspace, Delete) is left to the browser so the user can edit text
+      // naturally.
+      if (e.key !== 'Escape' && e.key !== 'Tab' && e.key !== 'Enter') {
+        return;
+      }
+    }
 
     if (history && sheetMod && (e.key === 'z' || e.key === 'Z') && !e.altKey) {
       e.preventDefault();
@@ -2151,22 +2492,91 @@ export function mountSpreadsheet(
       return;
     }
 
+    if (sheetMod && (e.key === 'a' || e.key === 'A') && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      tabAnchorCol = null;
+      if (dataRowCount > 0 && dataColumnCount > 0) {
+        persistActiveInput();
+        selectArea.row = 1;
+        selectArea.col = 1;
+        selectArea.rowEnd = dataRowCount;
+        selectArea.colEnd = dataColumnCount;
+        selectArea.active = dataRowCount > 1 || dataColumnCount > 1;
+        syncSelectionHighlight();
+        if (selectArea.active) enterRangeSelectionUi();
+      }
+      return;
+    }
+
     if (e.key === 'Escape') {
       e.preventDefault();
       hideSuggestions();
+      if (editMode) {
+        const cellEl = cells.get(cellKey(active.row, active.col));
+        const inp = cellEl ? getCellEditor(cellEl) : null;
+        if (inp) {
+          const stored = data.get(active.row, active.col);
+          inp.value = stored !== undefined ? String(stored) : '';
+        }
+      }
       collapseRange();
+      editMode = false;
+      tabAnchorCol = null;
       focusActiveInput();
+      return;
+    }
+
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      hideSuggestions();
+      if (tabAnchorCol === null) tabAnchorCol = active.col;
+      const dir = e.shiftKey ? -1 : 1;
+      setActive(row, col + dir);
       return;
     }
 
     if (e.key === 'Enter') {
       e.preventDefault();
       hideSuggestions();
-      setActive(row + 1, col);
+      const targetCol = tabAnchorCol ?? col;
+      tabAnchorCol = null;
+      const dir = e.shiftKey ? -1 : 1;
+      setActive(row + dir, targetCol);
       return;
     }
 
-    if (e.key === 'Backspace' && selectArea.active) {
+    if (e.key === 'Home' && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      tabAnchorCol = null;
+      setActive(sheetMod ? 1 : row, 1);
+      return;
+    }
+
+    if (e.key === 'End' && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      tabAnchorCol = null;
+      setActive(sheetMod ? dataRowCount : row, dataColumnCount);
+      return;
+    }
+
+    if (e.key === 'PageDown' && !sheetMod && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      tabAnchorCol = null;
+      const visibleRows = Math.max(1, Math.floor(viewport.clientHeight / defaultRowHeight));
+      setActive(row + visibleRows, col);
+      return;
+    }
+
+    if (e.key === 'PageUp' && !sheetMod && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      tabAnchorCol = null;
+      const visibleRows = Math.max(1, Math.floor(viewport.clientHeight / defaultRowHeight));
+      setActive(row - visibleRows, col);
+      return;
+    }
+
+    if ((e.key === 'Backspace' || e.key === 'Delete') && selectArea.active) {
       e.preventDefault();
       const keys: string[] = [];
       doOnEverySelectedCell((cell) => {
@@ -2191,6 +2601,59 @@ export function mountSpreadsheet(
       }
       exitRangeSelectionUi();
       syncSelectionHighlight();
+      return;
+    }
+
+    if (
+      selectArea.active &&
+      !sheetMod &&
+      !e.altKey &&
+      e.key.length === 1 &&
+      !isReadOnlyCol(active.col) &&
+      !isGhostRow(active.row)
+    ) {
+      e.preventDefault();
+      const seed = e.key;
+      collapseRange();
+      const cellEl = cells.get(cellKey(active.row, active.col));
+      const inp = cellEl ? getCellEditor(cellEl) : null;
+      if (inp) {
+        inp.value = seed;
+        inp.focus();
+        try {
+          inp.setSelectionRange(seed.length, seed.length);
+        } catch {
+          /* ignore */
+        }
+      }
+      editMode = true;
+      return;
+    }
+
+    if (
+      (e.key === 'Backspace' || e.key === 'Delete') &&
+      !selectArea.active &&
+      !editMode &&
+      !isReadOnlyCol(active.col) &&
+      !isGhostRow(active.row)
+    ) {
+      e.preventDefault();
+      const k = cellKey(active.row, active.col);
+      const before = history ? captureSnapshot([k]) : null;
+      data.set(active.row, active.col, '');
+      const cellEl = cells.get(k);
+      if (cellEl) {
+        const contentEl = cellEl.querySelector<HTMLDivElement>('.sheet-cell-content');
+        if (contentEl) applyCellDisplay(contentEl, columnAt(active.col), '');
+        const inp = getCellEditor(cellEl);
+        if (inp) inp.value = '';
+        syncCellChrome(active.row, active.col);
+      }
+      if (history && before) {
+        const after = captureSnapshot([k]);
+        pushHistoryIfChanged(before, after);
+      }
+      focusActiveInput();
       return;
     }
 
@@ -2300,6 +2763,7 @@ export function mountSpreadsheet(
         return;
       }
       e.preventDefault();
+      tabAnchorCol = null;
       let nr = row;
       let nc = col;
       if (e.key === 'ArrowUp') nr = jumpRow(row, col, false);
@@ -2312,15 +2776,19 @@ export function mountSpreadsheet(
 
     if (e.key === 'ArrowUp') {
       e.preventDefault();
+      tabAnchorCol = null;
       setActive(row - 1, col);
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
+      tabAnchorCol = null;
       setActive(row + 1, col);
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
+      tabAnchorCol = null;
       setActive(row, col - 1);
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
+      tabAnchorCol = null;
       setActive(row, col + 1);
     }
   }
@@ -2337,10 +2805,24 @@ export function mountSpreadsheet(
       const row = Number((cell as HTMLElement).dataset.row);
       const col = Number((cell as HTMLElement).dataset.col);
       if (!Number.isFinite(row) || !Number.isFinite(col)) return;
+      editMode = true;
       clearCellPersistError(row, col);
     },
     true,
   );
+
+  viewport.addEventListener('dblclick', (e) => {
+    const target = e.target as HTMLElement;
+    const hit = target.closest('.sheet-cell');
+    if (!hit || !viewport.contains(hit)) return;
+    const cell = hit as HTMLElement;
+    const row = clampRow(Number(cell.dataset.row));
+    const col = clampCol(Number(cell.dataset.col));
+    if (row !== active.row || col !== active.col) return;
+    if (isReadOnlyCol(col) || isGhostRow(row)) return;
+    e.preventDefault();
+    enterEditModeAtEnd();
+  });
 
   if (history) {
     history.subscribe(notifyHistoryChange);
