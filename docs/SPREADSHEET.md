@@ -49,6 +49,13 @@ Rich cell HTML for select chips is built from **sanitized** `color` / `backgroun
 - **Keyboard**: **Cmd+Z** / **Ctrl+Z** undo; **Cmd+Shift+Z** / **Ctrl+Shift+Z** redo; **Ctrl+Y** redo (Windows-style).
 - **Handle**: `SpreadsheetMountHandle` exposes **`undo()`**, **`redo()`**, **`canUndo()`**, **`canRedo()`**, **`subscribeHistoryChange`**, **`runHistoryBatch`**, **`beginHistoryBatch`**, **`endHistoryBatch`**, **`historyEnabled`**, **`applyExternalValue`** (collab), **`replayClipboardPaste`** (same paste pipeline as native paste, for host-driven replay after row growth), and collab/persist helpers documented in TypeScript.
 
+## Find in sheet
+
+- **Behavior**: Search scans **data cells only** (`rowCount` × column count; not ghost rows/columns). Matching is **case-insensitive substring** on plain text as the user sees it: **select** columns use the same display string as the grid (**label** when present); **number** and **text** use trimmed string forms.
+- **Navigation**: **Next** starts at the cell **after** the current selection in row-major order and **wraps**. **Previous** scans backward with wrap.
+- **Bundled Ark app**: Header **Find in sheet** field, **Enter** = next match, **Shift+Enter** = previous, **Cmd+F** / **Ctrl+F** focuses the field. Browser page find is not used for cell values.
+- **Embeds**: Use **`findInSheet({ query, forward })`** on the mount handle to drive your own UI; it returns whether a match was found and moves the selection + scrolls the match into view.
+
 ## API entrypoints (TypeScript)
 
 - `mountSpreadsheet(container, config)` — Build the grid once; returns a **`SpreadsheetMountHandle`** (apply CSS patches on selection, subscribe to selection changes, undo/redo when the store supports it) for `mountFormattingToolbar(toolbarEl, handle, resolveEnabledUiCapabilities(config.enabledUiCapabilities))`.

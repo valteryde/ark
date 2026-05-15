@@ -244,4 +244,9 @@ export interface SpreadsheetMountHandle {
    * container from the DOM (e.g. sheet remount).
    */
   disconnectLayout?: () => void;
+  /**
+   * Find next/previous data cell whose display text (case-insensitive substring) matches `query`.
+   * Skips ghost rows/columns. Starts after the active cell and wraps. Empty `query` returns false.
+   */
+  findInSheet(options: { query: string; forward: boolean }): boolean;
 }

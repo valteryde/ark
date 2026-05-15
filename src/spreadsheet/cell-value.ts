@@ -56,6 +56,29 @@ export function resolveSelectLabel(
   return opt?.label ?? opt?.value ?? storedValue;
 }
 
+/**
+ * Plain text used for Find-in-sheet: matches what users see (select labels via `resolveSelectLabel`;
+ * numbers and text as trimmed string form).
+ */
+export function cellPlainTextForSearch(
+  column: SpreadsheetColumn | undefined,
+  raw: string | number | undefined,
+): string {
+  if (raw === undefined) return '';
+  const vt = columnValueType(column);
+  if (vt === 'number') {
+    if (typeof raw === 'number') return Number.isFinite(raw) ? String(raw) : '';
+    return raw.trim();
+  }
+  const asString = typeof raw === 'number' ? String(raw) : raw;
+  if (vt === 'select') {
+    const t = asString.trim();
+    if (!t) return '';
+    return resolveSelectLabel(column, t).trim();
+  }
+  return asString.trim();
+}
+
 /** Prefix matches first, then substring; case-insensitive on value and label. */
 export function filterSelectOptions(
   column: SpreadsheetColumn | undefined,

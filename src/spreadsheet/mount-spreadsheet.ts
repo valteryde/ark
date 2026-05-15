@@ -2,6 +2,7 @@ import '../sheet.css';
 
 import { formatCellHtml, formatSelectOptionMarkup } from './cell-display.ts';
 import {
+  cellPlainTextForSearch,
   columnValueType,
   filterSelectOptions,
   isSelectColumn,
@@ -2368,6 +2369,33 @@ export function mountSpreadsheet(
     });
   }
 
+  function findInSheet(options: { query: string; forward: boolean }): boolean {
+    const q = options.query.trim();
+    if (!q) return false;
+    const total = dataRowCount * dataColumnCount;
+    if (total < 1) return false;
+    const needle = q.toLowerCase();
+    const activeFlat = (active.row - 1) * dataColumnCount + (active.col - 1);
+    for (let step = 1; step < total; step++) {
+      const flat = options.forward
+        ? (activeFlat + step) % total
+        : ((activeFlat - step) % total + total) % total;
+      const row = Math.floor(flat / dataColumnCount) + 1;
+      const col = (flat % dataColumnCount) + 1;
+      const colDef = columnAt(col);
+      const raw = data.get(row, col);
+      const text = cellPlainTextForSearch(colDef, raw).toLowerCase();
+      if (text.includes(needle)) {
+        setActive(row, col);
+        requestAnimationFrame(() => {
+          cells.get(cellKey(row, col))?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+
   const handle: SpreadsheetMountHandle = {
     historyEnabled,
     commentsEnabled,
@@ -2406,6 +2434,7 @@ export function mountSpreadsheet(
     showCellPersistError,
     replayClipboardPaste: applyPastedGrid,
     applyRemoteRowClear,
+    findInSheet,
     ...(disconnectLayout ? { disconnectLayout } : {}),
   };
 

@@ -30,7 +30,10 @@ const sheetPanelEl = document.getElementById('sheet-panel');
 const sheetTabsEl = document.getElementById('sheet-tabs');
 const chromeTitleEl = document.getElementById('app-chrome-title');
 const chromeActionsEl = document.getElementById('app-chrome-actions');
+const chromeSearchHostEl = document.getElementById('app-chrome-search');
 const partnerErrorEl = document.getElementById('partner-error');
+
+let currentSheetHandle: SpreadsheetMountHandle | null = null;
 
 if (!sheetMountEl) {
   throw new Error('Missing #sheet-mount');
@@ -92,6 +95,7 @@ function showPartnerError(err: unknown): void {
   a.textContent = 'Run demo mode (local presets, no partner)';
   partnerErrorEl.appendChild(a);
   partnerErrorEl.hidden = false;
+  currentSheetHandle = null;
   disconnectSheetLayout?.();
   disconnectSheetLayout = null;
   sheetHost.replaceChildren();
@@ -101,6 +105,94 @@ function showPartnerError(err: unknown): void {
   }
   sheetTabList.replaceChildren();
   tabButtons = [];
+}
+
+function runFindInSheet(
+  forward: boolean,
+  searchInput: HTMLInputElement,
+  statusEl: HTMLElement,
+): void {
+  const q = searchInput.value;
+  const trimmed = q.trim();
+  if (!currentSheetHandle) return;
+  const ok = currentSheetHandle.findInSheet({ query: q, forward });
+  if (ok) {
+    statusEl.textContent = '';
+    return;
+  }
+  if (trimmed.length > 0) {
+    statusEl.textContent = 'No matches';
+    window.setTimeout(() => {
+      if (statusEl.textContent === 'No matches') statusEl.textContent = '';
+    }, 2000);
+  }
+}
+
+function mountSheetFindChrome(): void {
+  if (!chromeSearchHostEl) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'app-search';
+
+  const statusEl = document.createElement('span');
+  statusEl.className = 'app-search__status';
+  statusEl.setAttribute('aria-live', 'polite');
+
+  const icon = document.createElement('i');
+  icon.className = 'ph ph-magnifying-glass app-search__icon';
+  icon.setAttribute('aria-hidden', 'true');
+
+  const searchInput = document.createElement('input');
+  searchInput.type = 'search';
+  searchInput.className = 'app-search__input';
+  searchInput.placeholder = 'Find in sheet';
+  searchInput.autocomplete = 'off';
+  searchInput.setAttribute('aria-label', 'Find in sheet');
+
+  const btnPrev = document.createElement('button');
+  btnPrev.type = 'button';
+  btnPrev.className = 'app-search__btn';
+  btnPrev.title = 'Find previous';
+  btnPrev.setAttribute('aria-label', 'Find previous');
+  const prevIc = document.createElement('i');
+  prevIc.className = 'ph ph-caret-left';
+  prevIc.setAttribute('aria-hidden', 'true');
+  btnPrev.appendChild(prevIc);
+
+  const btnNext = document.createElement('button');
+  btnNext.type = 'button';
+  btnNext.className = 'app-search__btn';
+  btnNext.title = 'Find next';
+  btnNext.setAttribute('aria-label', 'Find next');
+  const nextIc = document.createElement('i');
+  nextIc.className = 'ph ph-caret-right';
+  nextIc.setAttribute('aria-hidden', 'true');
+  btnNext.appendChild(nextIc);
+
+  btnPrev.addEventListener('click', () => runFindInSheet(false, searchInput, statusEl));
+  btnNext.addEventListener('click', () => runFindInSheet(true, searchInput, statusEl));
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    runFindInSheet(!e.shiftKey, searchInput, statusEl);
+  });
+
+  wrap.append(icon, searchInput, btnPrev, btnNext, statusEl);
+  chromeSearchHostEl.replaceChildren(wrap);
+
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'f' && e.key !== 'F') return;
+      if (!e.metaKey && !e.ctrlKey) return;
+      if (currentSheetHandle === null) return;
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    },
+    true,
+  );
 }
 
 function wireTabKeyboard(onSelect: (index: number) => void): void {
@@ -182,6 +274,7 @@ function initDemoMode(): void {
     disconnectSheetLayout = null;
     sheetHost.replaceChildren();
     const sheet = mountSpreadsheet(sheetHost, config);
+    currentSheetHandle = sheet;
     disconnectSheetLayout = sheet.disconnectLayout ?? null;
     toolbarHost.replaceChildren();
     mountFormattingToolbar(
@@ -423,6 +516,7 @@ function initPartnerMode(): void {
     disconnectSheetLayout = null;
     sheetHost.replaceChildren();
     liveHandle = mountSpreadsheet(sheetHost, config);
+    currentSheetHandle = liveHandle;
     disconnectSheetLayout = liveHandle.disconnectLayout ?? null;
     liveStore = store;
     toolbarHost.replaceChildren();
@@ -561,6 +655,7 @@ function initPartnerMode(): void {
 }
 
 function init(): void {
+  mountSheetFindChrome();
   const demo = new URLSearchParams(window.location.search).has('demo');
   if (demo) {
     initDemoMode();

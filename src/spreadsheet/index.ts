@@ -16,6 +16,7 @@ export { ALL_UI_CAPABILITIES, resolveEnabledUiCapabilities } from './types.ts';
 export { cellKey, createInMemoryDataStore } from './data-store.ts';
 export type { InMemoryDataInitValue } from './data-store.ts';
 export {
+  cellPlainTextForSearch,
   columnValueType,
   filterSelectOptions,
   isSelectColumn,
