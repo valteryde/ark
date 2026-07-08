@@ -174,6 +174,64 @@ domTest('arrow key navigation moves the active cell', (env) => {
   assertEquals(activeAt(), '2:2');
 });
 
+domTest('edit mode plain arrow keys commit and move to adjacent cells', (env) => {
+  const container = env.makeContainer();
+  mountSpreadsheet(container, config({ '1:1': 'hello', '2:1': 'world' }));
+
+  const viewport = container.querySelector('.sheet-viewport') as HTMLElement;
+  const activeAt = () =>
+    container.querySelector('.sheet-cell-active')?.getAttribute('data-row') +
+    ':' +
+    container.querySelector('.sheet-cell-active')?.getAttribute('data-col');
+  const activeInput = () =>
+    container.querySelector('.sheet-cell-active .sheet-cell-input') as HTMLInputElement | null;
+  const isEditing = () =>
+    container.querySelector('.sheet-cell-active')?.classList.contains('sheet-cell-editing') ??
+    false;
+
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'F2', bubbles: true }),
+  );
+  const input = activeInput();
+  assertExists(input);
+  assertEquals(isEditing(), true);
+
+  input.setSelectionRange(2, 2);
+  input.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
+  );
+  assertEquals(activeAt(), '1:2');
+  assertEquals(isEditing(), false);
+
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
+  );
+  assertEquals(activeAt(), '1:1');
+
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'F2', bubbles: true }),
+  );
+  activeInput()!.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
+  );
+  assertEquals(activeAt(), '1:1');
+
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+  );
+  assertEquals(activeAt(), '2:1');
+
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'x', bubbles: true }),
+  );
+  assertEquals(isEditing(), true);
+  activeInput()!.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+  );
+  assertEquals(activeAt(), '3:1');
+  assertEquals(isEditing(), false);
+});
+
 domTest('Cmd+C copies the active cell when the viewport has focus (navigation mode)', (env) => {
   const container = env.makeContainer();
   const cfg = config({ '1:1': 'Alpha', '2:1': 'Beta' });

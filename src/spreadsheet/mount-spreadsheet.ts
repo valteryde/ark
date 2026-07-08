@@ -2689,10 +2689,28 @@ export function mountSpreadsheet(
     const sheetMod = e.metaKey || e.ctrlKey;
 
     if (editMode) {
-      // In edit mode the input is the actor: only Escape / Tab / Enter commit
-      // or cancel. Everything else (arrows, Home/End, Cmd+A, Cmd+Z, typing,
-      // Backspace, Delete) is left to the browser so the user can edit text
-      // naturally.
+      // Escape / Tab / Enter fall through to shared handlers below. Plain arrow
+      // keys commit and move to the adjacent cell (movement intent). Everything
+      // else (Home/End, Cmd+A, Cmd+Z, typing, Backspace, Delete, modified
+      // arrows) is left to the browser so the user can edit text naturally.
+      if (
+        (e.key === 'ArrowUp' ||
+          e.key === 'ArrowDown' ||
+          e.key === 'ArrowLeft' ||
+          e.key === 'ArrowRight') &&
+        !sheetMod &&
+        !e.shiftKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        hideSuggestions();
+        tabAnchorCol = null;
+        if (e.key === 'ArrowUp') setActive(row - 1, col);
+        else if (e.key === 'ArrowDown') setActive(row + 1, col);
+        else if (e.key === 'ArrowLeft') setActive(row, col - 1);
+        else if (e.key === 'ArrowRight') setActive(row, col + 1);
+        return;
+      }
       if (e.key !== 'Escape' && e.key !== 'Tab' && e.key !== 'Enter') {
         return;
       }
