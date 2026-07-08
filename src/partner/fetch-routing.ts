@@ -1,6 +1,6 @@
 import { partnerAuthHeaders } from './partner-token.ts';
 
-/** Encode each path segment for use in /api/ark/routing/{path}. */
+/** Encode each path segment for use in /api/sheets/{path}. */
 function encodeRoutingPath(path: string): string {
   return path
     .split('/')
@@ -19,9 +19,9 @@ export class PartnerFetchError extends Error {
   }
 }
 
-/** GET same-origin /api/ark/routing/{path} and parse JSON. */
+/** GET same-origin /api/sheets/{path} and parse JSON (auto-creates unknown sheets). */
 export async function fetchRoutingJson<T>(path: string): Promise<T> {
-  const url = `/api/ark/routing/${encodeRoutingPath(path)}`;
+  const url = `/api/sheets/${encodeRoutingPath(path)}`;
   let res: Response;
   const auth = partnerAuthHeaders();
   try {

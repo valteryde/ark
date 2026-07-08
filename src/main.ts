@@ -166,7 +166,7 @@ function showPartnerError(err: unknown): void {
   const hint = document.createElement('p');
   hint.className = 'app-partner-error__hint';
   hint.textContent =
-    'Set ARK_BACKEND_URL on the Ark server. Open this UI at a sheet URL whose path matches GET /ark/routing/{path} on your partner (e.g. /clients). That path must be allowed by ARK_UI_ROUTES on the Ark server (exact segment or prefix/*) so the SPA is served.';
+    'Open this UI at a sheet URL (e.g. /clients) — Ark creates the sheet automatically on first visit. The path must be allowed by ARK_UI_ROUTES on the Ark server (exact segment or prefix/*) so the SPA is served. If ARK_PARTNER_BASE_URL is set, requests need a valid ark_token.';
   partnerErrorEl.appendChild(hint);
   const a = document.createElement('a');
   a.className = 'app-partner-error__demo-link';
@@ -550,8 +550,11 @@ function initPartnerMode(): void {
       ...(payload.chromeActions !== undefined
         ? { chromeActions: payload.chromeActions.map((a) => ({ ...a })) }
         : {}),
+      ...(payload.revision !== undefined ? { revision: payload.revision } : {}),
+      ...(payload.template !== undefined ? { template: { ...payload.template } } : {}),
+      ...(payload.cells !== undefined ? { cells: { ...payload.cells } } : {}),
     };
-    const initial = rowsToInitialMap(payload.columns, payload.rows);
+    const initial = rowsToInitialMap(payload.columns, payload.rows, payload.cells);
     const pathForCollab = routingPath;
     clearPresenceWiring();
     if (resetPresence) {

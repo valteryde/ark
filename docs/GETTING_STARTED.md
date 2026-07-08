@@ -4,7 +4,7 @@ This guide assumes you are new to Ark and maybe new to Node or Docker. Follow th
 
 ## 1. What you are setting up
 
-Ark is a **web app** you run on your computer for development. **By default** it expects a **partner API** behind the Ark BFF: the **first URL path segment** selects the sheet (`GET /ark/routing/{segment}`), and the UI opens a **WebSocket** for collab/tunnel. There is **no bootstrap** and **no partner-mode tabs**—each URL is one spreadsheet. If you are building that API, start with **[WRITING_A_PARTNER.md](WRITING_A_PARTNER.md)**; the full contract is **[PARTNER_API.md](PARTNER_API.md)**.
+Ark is a **web app** you run on your computer for development. The Ark server **owns the sheet documents**: the browser URL path selects the sheet (`GET /api/sheets/{path}`), unknown sheets are **auto-created**, and the UI opens a **WebSocket** for collab; edits persist in Ark's SQLite. There is **no bootstrap** and **no partner-mode tabs**—each URL is one spreadsheet. If you are integrating a partner app (auth, change notifications, CRUD), start with **[WRITING_A_PARTNER.md](WRITING_A_PARTNER.md)**; the full contract is **[PARTNER_API.md](PARTNER_API.md)**.
 
 To try the UI **without** a partner, open the app with **`?demo=1`** (offline “Product Roadmap” presets and fake in-memory data).
 
@@ -27,7 +27,7 @@ You should see version numbers (Node **20** or newer is ideal). If the command i
 
 ### Python 3.12+ (for the bundled server in dev)
 
-The repo ships a small **FastAPI** app under [`server/`](https://github.com/valteryde/ark/tree/main/server) that serves the built UI, proxies `GET /api/ark/routing/*` to your partner API, and exposes **`/ws/ark`** for collaboration. To run it locally:
+The repo ships a **FastAPI** app under [`server/`](https://github.com/valteryde/ark/tree/main/server) that serves the built UI, stores sheet documents in SQLite (`ARK_DB_PATH`, default `./ark.db`), serves them at `GET /api/sheets/*`, and exposes **`/ws/ark`** for collaboration. To run it locally:
 
 ```bash
 python3 -V
@@ -104,17 +104,17 @@ uvicorn app.main:app --reload --app-dir server --port "${PORT:-8000}"
 
 Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/clients) for **partner mode** (with **`ARK_UI_ROUTES`** and a matching partner route), or [http://127.0.0.1:8000/?demo=1](http://127.0.0.1:8000/?demo=1) for **demo presets**.
 
-- **Partner mode**: Set **`ARK_BACKEND_URL`** (e.g. `http://127.0.0.1:9000`) and run your partner service (try [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py) with `uvicorn example_api:app --port 9000`).
+- **Partner integration**: Set **`ARK_PARTNER_BASE_URL`** (e.g. `http://127.0.0.1:9000`) and a shared **`ARK_PARTNER_API_TOKEN`**, then run your partner service (try [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py) with `uvicorn example_api:app --port 9000`).
 - **Rebuild on save**: `npm run dev` keeps `dist/` up to date; refresh the page after edits under `src/`.
 - **Stop**: Press **Ctrl+C** in each terminal.
 
 **Port 8000 already in use**: Set **`PORT`** (e.g. `PORT=8001`) or pass a different **`--port`** to uvicorn.
 
-Optional: copy [`.env.example`](https://github.com/valteryde/ark/blob/main/.env.example) to `.env` and set **`ARK_BACKEND_URL`** so `GET /api/ark/routing/...` proxies to your partner API.
+Optional: copy [`.env.example`](https://github.com/valteryde/ark/blob/main/.env.example) to `.env` and set **`ARK_PARTNER_BASE_URL`** / **`ARK_PARTNER_API_TOKEN`** to enable partner auth, notifications, and the CRUD API.
 
 ## 6. What you should see
 
-- **Partner mode**: Header title from the sheet payload’s **`title`** when present; one grid per URL; edits go over **`/ws/ark`** and **`POST /ark/tunnel`** on the partner.
+- **Partner mode**: Header title from the sheet payload’s **`title`** when present; one grid per URL; edits go over **`/ws/ark`**, persist in Ark's document store, and reach the partner as **`sheet.changed`** notifications.
 - **`?demo=1`**: Header **Product Roadmap 2026**, tabs **Quarterly plan / Backlog / Archive**, in-memory sample data.
 
 Cells are editable where columns are not `readOnly`; undo/redo and the formatting toolbar follow **[SPREADSHEET.md](SPREADSHEET.md)** and each sheet’s `enabledUiCapabilities`.
@@ -143,7 +143,7 @@ docker compose up --build
 
 Then open [http://localhost:8000](http://localhost:8000) (or your **`PORT`**). The image runs **FastAPI + uvicorn** and serves **`dist/`** from the build stage; **`PORT`** defaults to **8000**.
 
-Set **`ARK_BACKEND_URL`** in `docker-compose.yml` (or your orchestrator) to enable routing proxy and tunnel `POST` to your partner API.
+Set **`ARK_PARTNER_BASE_URL`** and **`ARK_PARTNER_API_TOKEN`** in `docker-compose.yml` (or your orchestrator) to wire up partner auth, notifications, and the CRUD API; mount a volume for **`ARK_DB_PATH`** so documents persist.
 
 **Iframe embedding:** If you embed Ark from another domain (for example parent **`https://example.com`**, Ark at **`https://ark.example.com`**), set **`ARK_IFRAME_FRAME_ANCESTORS`** on the Ark server and omit **`ARK_IFRAME_X_FRAME_OPTIONS`** unless you intend **`SAMEORIGIN`**/`DENY`. Details: **[PARTNER_API.md — Framing](PARTNER_API.md#framing-iframe-embedding)** and [`.env.example`](https://github.com/valteryde/ark/blob/main/.env.example).
 
@@ -156,7 +156,7 @@ If your team publishes images on push to `main`, you can pull instead of buildin
 
 ```bash
 docker pull ghcr.io/OWNER/REPO:latest
-docker run --rm -p 8000:8000 -e ARK_BACKEND_URL= ghcr.io/OWNER/REPO:latest
+docker run --rm -p 8000:8000 -v ark_sqlite:/data -e ARK_DB_PATH=/data/ark.db ghcr.io/OWNER/REPO:latest
 ```
 
 Open [http://localhost:8000](http://localhost:8000). Use **`-e PORT=…`** and **`-p host:PORT`** together if you change the listen port.
@@ -166,8 +166,8 @@ Open [http://localhost:8000](http://localhost:8000). Use **`-e PORT=…`** and *
 1. Read **[WRITING_A_PARTNER.md](WRITING_A_PARTNER.md)** — step-by-step partner implementation.
 2. Read **[PARTNER_API.md](PARTNER_API.md)** — URL → sheet route, sheet JSON, tunnel, and WebSocket events.
 3. Read **[SPREADSHEET.md](SPREADSHEET.md)** — column config, undo, value types, toolbar capabilities.
-4. **BFF**: **`GET /api/ark/routing/{path}`** → **`{ARK_BACKEND_URL}/ark/routing/{path}`**; **`WebSocket /ws/ark`** → broadcast + **`POST …/ark/tunnel`**; optional **`POST /api/ark/broadcast`** ( **`ARK_BROADCAST_TOKEN`** ) for partner-pushed **`sheet.truth`**. Sample: [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py).
-5. **Production**: Run the Docker image or `uvicorn` behind your reverse proxy; set **`ARK_BACKEND_URL`**.
+4. **Backend**: **`GET /api/sheets/{path}`** loads (and auto-creates) sheets; **`WebSocket /ws/ark`** persists edits, broadcasts to peers, and notifies the partner (**`POST {ARK_PARTNER_BASE_URL}/ark/notify`**); partners manage documents via **`/api/partner/…`** ( **`ARK_PARTNER_API_TOKEN`** ). Sample: [`example_api.py`](https://github.com/valteryde/ark/blob/main/example_api.py).
+5. **Production**: Run the Docker image or `uvicorn` behind your reverse proxy; persist **`ARK_DB_PATH`** and set **`ARK_PARTNER_BASE_URL`**.
 6. **Iframe**: Parent on **`example.com`**, Ark on **`ark.example.com`** → set **`ARK_IFRAME_FRAME_ANCESTORS`** on Ark (see **[PARTNER_API.md — Framing](PARTNER_API.md#framing-iframe-embedding)**).
 
 Entry points: partner wiring in [`src/main.ts`](https://github.com/valteryde/ark/blob/main/src/main.ts) and [`src/partner/`](https://github.com/valteryde/ark/tree/main/src/partner); reusable grid API under **`src/spreadsheet/`** ([`src/spreadsheet/index.ts`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/index.ts)).

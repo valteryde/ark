@@ -11,7 +11,7 @@ export interface PartnerChromeAction {
   openInNewTab?: boolean;
 }
 
-/** GET /ark/routing/{path} (and same-origin /api/ark/routing/{path}) for a grid. */
+/** GET /api/sheets/{path} — Ark-owned sheet document payload for a grid. */
 export interface PartnerSheetPayload {
   title?: string;
   description?: string;
@@ -24,6 +24,12 @@ export interface PartnerSheetPayload {
   enabledUiCapabilities?: ReadonlyArray<UiToolbarCapability>;
   /** Optional links in the header chrome (top right). Max 8; invalid entries ignored. */
   chromeActions?: ReadonlyArray<PartnerChromeAction>;
+  /** Server document revision (increments per mutation). */
+  revision?: number;
+  /** Partner template the document was created from (pulled live at creation). */
+  template?: { name?: string; version: string };
+  /** Sparse out-of-schema cells keyed `"row:col"` (1-based grid indices). */
+  cells?: Record<string, string | number>;
 }
 
 /** User deleted a grid row (e.g. context menu); backend should remove the record, not only clear cells. */

@@ -94,7 +94,12 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
   if (columns.length === 0) return null;
   const rows = (src.rows as unknown[]).filter((r): r is Record<string, unknown> => r !== null && typeof r === 'object');
   const chromeActions = normalizePartnerChromeActions(src.chromeActions);
+  const sparseCells = normalizeSparseCells(src.cells);
   return {
+    ...(sparseCells !== undefined ? { cells: sparseCells } : {}),
+    ...(typeof src.revision === 'number' && Number.isFinite(src.revision)
+      ? { revision: src.revision }
+      : {}),
     title: typeof src.title === 'string' ? src.title : undefined,
     description: typeof src.description === 'string' ? src.description : undefined,
     columns,
@@ -115,6 +120,23 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
   };
 }
 
+const SPARSE_CELL_KEY_RE = /^[1-9]\d*:[1-9]\d*$/;
+
+/** Validate a server sparse cells map (`"row:col"` keys, scalar values). */
+function normalizeSparseCells(raw: unknown): Record<string, string | number> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string | number> = {};
+  let any = false;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!SPARSE_CELL_KEY_RE.test(k)) continue;
+    if (typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v))) {
+      out[k] = v;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
+}
+
 function cellValueFromRow(row: Record<string, unknown>, columnId: string): string | number | undefined {
   const v = row[columnId];
   if (v === undefined || v === null) return undefined;
@@ -124,10 +146,14 @@ function cellValueFromRow(row: Record<string, unknown>, columnId: string): strin
   return String(v);
 }
 
-/** Map API rows (objects keyed by column id) to createInMemoryDataStore initial keys `"row:col"`. */
+/**
+ * Map API rows (objects keyed by column id) to createInMemoryDataStore initial keys `"row:col"`.
+ * `sparseCells` (out-of-schema cells keyed `"row:col"`) are merged in when supplied.
+ */
 export function rowsToInitialMap(
   columns: readonly SpreadsheetColumn[],
   rows: ReadonlyArray<Record<string, unknown>>,
+  sparseCells?: Record<string, string | number>,
 ): Record<string, InMemoryDataInitValue> {
   const initial: Record<string, InMemoryDataInitValue> = {};
   for (let r = 0; r < rows.length; r++) {
@@ -139,6 +165,11 @@ export function rowsToInitialMap(
       if (v !== undefined) {
         initial[cellKey(rowIndex, c + 1)] = v;
       }
+    }
+  }
+  if (sparseCells) {
+    for (const [k, v] of Object.entries(sparseCells)) {
+      initial[k] = v;
     }
   }
   return initial;

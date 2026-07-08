@@ -1,8 +1,8 @@
 # Ark
 
-Configurable spreadsheet UI for **API-driven** row/column data. **Default behavior:** each URL path (e.g. **`/clients`**) loads **one** sheet via **`GET /api/ark/routing/{segment}`** (proxied to your partner). There is **no bootstrap** and **no in-app sheet tabs** in partner mode—only the offline **`?demo=1`** presets use tabs. The UI uses **`WebSocket /ws/ark`** for collab + tunnel persistence. The UI is bundled with **esbuild** into `dist/`; a **FastAPI** app in [`server/`](server/) serves `dist/`, **`/api/*`**, and **`/ws/ark`** when **`ARK_BACKEND_URL`** is set.
+Spreadsheet with a **document-owning backend**. Each URL path (e.g. **`/clients`** or **`/clients/21`**) loads **one** sheet via **`GET /api/sheets/{path}`**; unknown sheets are **auto-created** (from the partner's `GET /ark/template/{path}` response — versioned, pulled live at creation — else blank). Edits go over **`WebSocket /ws/ark`**, are persisted in Ark's own SQLite document store, broadcast to peers, and forwarded to your partner app as live coalesced **`sheet.changed`** notifications. Partners read/write full sheets through the **CRUD API** under **`/api/partner/…`**. The UI is bundled with **esbuild** into `dist/`; a **FastAPI** app in [`server/`](server/) serves `dist/`, **`/api/*`**, and **`/ws/ark`**.
 
-**Writing a partner API:** **[docs/WRITING_A_PARTNER.md](docs/WRITING_A_PARTNER.md)**. Full contract: **[docs/PARTNER_API.md](docs/PARTNER_API.md)**. Sample backend: [`example_api.py`](example_api.py).
+**Integrating a partner app:** **[docs/WRITING_A_PARTNER.md](docs/WRITING_A_PARTNER.md)**. Full contract: **[docs/PARTNER_API.md](docs/PARTNER_API.md)**. Sample partner: [`example_api.py`](example_api.py).
 
 **Documentation site** (GitHub Pages): after you enable **Settings → Pages → GitHub Actions** in this repo, the built docs publish at **https://valteryde.github.io/ark/** (see [.github/workflows/pages.yml](.github/workflows/pages.yml)).
 
@@ -27,11 +27,11 @@ pip install -r server/requirements.txt
 uvicorn app.main:app --reload --app-dir server --port "${PORT:-8000}"
 ```
 
-Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/clients) (use your **`PORT`** if set) when **`ARK_BACKEND_URL`** points at your partner and **`ARK_UI_ROUTES`** includes that segment. The site root **`/`** shows an error until you use a configured path. Use **`?demo=1`** for offline presets.
+Open a sheet URL such as [http://127.0.0.1:8000/clients](http://127.0.0.1:8000/clients) (use your **`PORT`** if set); the sheet is auto-created and persisted in **`ARK_DB_PATH`** (default `./ark.db`). **`ARK_UI_ROUTES`** must include that segment. The site root **`/`** shows an error until you use a configured path. Use **`?demo=1`** for offline presets.
 
 `npm run dev` runs **esbuild in watch mode** and refreshes `dist/`; reload the browser after edits under `src/`.
 
-Optional: copy [`.env.example`](.env.example) to `.env` and set **`ARK_BACKEND_URL`** (no trailing slash).
+Optional: copy [`.env.example`](.env.example) to `.env` and set **`ARK_PARTNER_BASE_URL`** / **`ARK_PARTNER_API_TOKEN`** to wire up a partner app.
 
 ### Deno task aliases
 
@@ -47,8 +47,8 @@ Output: **`dist/`** (HTML, `assets/main.js`, `assets/main.css`, favicon). Serve 
 
 ## Embedding and backends
 
-- **Same-origin BFF**: Run `uvicorn` (or Docker). The browser uses **`GET /api/ark/routing/{path}`** (proxied to `{ARK_BACKEND_URL}/ark/routing/{path}`) and can use **`WebSocket /ws/ark`** for collaboration; the server **`POST`s** mapped events to **`{ARK_BACKEND_URL}/ark/tunnel`**. Optional **`ARK_BROADCAST_TOKEN`**: when set, your partner can **`POST /api/ark/broadcast`** to the BFF with a **`sheet.truth`** payload so all connected browsers resync rows (see **[docs/PARTNER_API.md](docs/PARTNER_API.md)**).
-- **Static only**: Deploy `dist/` behind any reverse proxy if you do not need this repo’s Python routes.
+- **Document backend** (default): Run `uvicorn` (or Docker). The browser loads sheets from **`GET /api/sheets/{path}`** and edits over **`WebSocket /ws/ark`**; Ark persists everything in **`ARK_DB_PATH`**. Set **`ARK_PARTNER_BASE_URL`** so Ark verifies user tokens (`GET /ark/auth`) and sends live **`sheet.changed`** notifications (`POST /ark/notify`); set **`ARK_PARTNER_API_TOKEN`** so your backend can use the CRUD API under **`/api/partner/…`** (see **[docs/PARTNER_API.md](docs/PARTNER_API.md)**).
+- **Static only**: Deploy `dist/` behind any reverse proxy if you do not need this repo’s Python routes (demo mode only — no persistence without the backend).
 
 Embedders can still use **`mountSpreadsheet`** from TypeScript in their own apps; this repo’s default page is partner-first.
 
@@ -67,7 +67,7 @@ Single image (esbuild build + FastAPI):
 
 ```bash
 docker build -t ark:app .
-docker run --rm -p 8000:8000 -e ARK_BACKEND_URL= ark:app
+docker run --rm -p 8000:8000 -v ark_sqlite:/data -e ARK_DB_PATH=/data/ark.db ark:app
 ```
 
 The image listens on **`PORT`** (default **8000**); map the host port to the same value, e.g. `-e PORT=8080 -p 8080:8080`.
@@ -78,7 +78,7 @@ The image listens on **`PORT`** (default **8000**); map the host port to the sam
 docker compose up --build
 ```
 
-**Full mini stack** (Ark + SQLite partner API in Compose): [examples/partner-sqlite-demo](examples/partner-sqlite-demo/README.md). Partner routes **`clients`** / **`records`** match **`/clients`** and **`/records`** (see **`ARK_UI_ROUTES`** in [`.env.example`](.env.example)).
+**Full mini stack** (Ark document backend + SQLite partner in Compose): [examples/partner-sqlite-demo](examples/partner-sqlite-demo/README.md). The partner seeds **`/clients`** and **`/records`** and syncs edits into its own SQLite via `sheet.changed` notifications (see **`ARK_UI_ROUTES`** in [`.env.example`](.env.example)).
 
 ### CI: GitHub Container Registry
 
@@ -127,7 +127,7 @@ cd server && pytest
 
 ## Manual smoke check
 
-- **Partner mode**: Run [`example_api.py`](example_api.py) on port 9000, set `ARK_BACKEND_URL=http://127.0.0.1:9000`, open **`/clients`** or **`/records`**, edit cells, confirm tunnel hits (see server logs).
+- **Partner mode**: Run [`example_api.py`](example_api.py) on port 9000, set `ARK_PARTNER_BASE_URL=http://127.0.0.1:9000` and a shared `ARK_PARTNER_API_TOKEN` on both, open **`/clients`** or **`/records`**, edit cells, confirm `sheet.changed` notifications in the partner logs.
 - **Demo mode** (`?demo=1`): Quarterly / Backlog / Archive tabs, undo/redo, formatting toolbar (bold, fill, borders, alignment, link prompt).
 
 ## License

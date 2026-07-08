@@ -4,6 +4,15 @@ services:
     ports:
       - '${PORT:-8000}:${PORT:-8000}'
     environment:
-      # Optional: your partner API base (no trailing slash)
-      ARK_BACKEND_URL: ''
+      # Optional: your partner base URL for auth + notifications (no trailing slash)
+      ARK_PARTNER_BASE_URL: ''
+      # Optional: token for the partner CRUD API (/api/partner/...)
+      ARK_PARTNER_API_TOKEN: ''
+      # Persist Ark's sheet documents on a volume
+      ARK_DB_PATH: /data/ark.db
       PORT: ${PORT:-8000}
+    volumes:
+      - ark_sqlite:/data
+
+volumes:
+  ark_sqlite:

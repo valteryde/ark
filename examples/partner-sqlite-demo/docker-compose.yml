@@ -1,14 +1,18 @@
-# Ark UI + BFF + tiny SQLite partner API (persistent volume for the DB file).
+# Ark document backend + tiny SQLite partner (persistent volumes for both DBs).
 #
 # From this directory:
 #   docker compose up --build
-# Open http://localhost:8000/clients or /records (or set PORT) — edit cells; tunnel writes hit SQLite.
+# Open http://localhost:8000/clients or /records (or set PORT).
+# Ark stores the sheets; edits are pushed to the partner as sheet.changed
+# notifications and the partner syncs them into its own SQLite tables.
 #
 services:
   partner:
     build: ./partner
     environment:
       PARTNER_DB: /data/partner.db
+      ARK_API_URL: http://ark:${PORT:-8000}
+      ARK_PARTNER_API_TOKEN: demo-partner-token
     volumes:
       - partner_sqlite:/data
     expose:
@@ -21,11 +25,16 @@ services:
     ports:
       - "${PORT:-8000}:${PORT:-8000}"
     environment:
-      ARK_BACKEND_URL: http://partner:9000
+      ARK_PARTNER_BASE_URL: http://partner:9000
+      ARK_PARTNER_API_TOKEN: demo-partner-token
+      ARK_DB_PATH: /data/ark.db
       ARK_UI_ROUTES: clients,records
       PORT: ${PORT:-8000}
+    volumes:
+      - ark_sqlite:/data
     depends_on:
       - partner
 
 volumes:
   partner_sqlite:
+  ark_sqlite:

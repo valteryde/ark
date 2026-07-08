@@ -163,9 +163,9 @@ export function openCollabWs(opts: {
     meta?: RemoteCommittedMeta,
   ) => void;
   onRemotePresence: (msg: RemotePresenceUpdate) => void;
-  /** BFF sends this when POST /ark/tunnel fails after a local `cell.value_committed`. */
+  /** Server sends this when persisting a local `cell.value_committed` fails. */
   onCellPersistFailed?: (info: CellPersistFailedInfo) => void;
-  /** Partner pushed authoritative rows via `POST /api/ark/broadcast`. */
+  /** Partner replaced the sheet via `PUT /api/partner/sheets/{path}`. */
   onSheetTruth?: (truth: SheetTruthNormalized) => void;
   /** Remote peer cleared a row via `row.deleted`. */
   onRemoteRowDeleted?: (row: number) => void;

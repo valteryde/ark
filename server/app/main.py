@@ -1,74 +1,56 @@
+"""Ark backend: document-owning API + collab hub + static UI host.
+
+Ark is the system of record for sheet documents (SQLite, see store.py).
+Browsers load sheets from GET /api/sheets/{path} (auto-created on first
+access from the partner's versioned template, see partner_template.py) and
+edit over WebSocket /ws/ark; edits are persisted server-side, broadcast to
+peers, and forwarded to the partner as lightweight coalesced `sheet.changed`
+notifications. Partners manage sheets through the CRUD API under /api/partner
+(see partner_api.py).
+"""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import os
-import dotenv
 import re
 from pathlib import Path
 from typing import Any
 
-import httpx
+import dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .tunnel_map import map_to_tunnel
+from .collab import hub
+from .partner_api import router as partner_router
+from .partner_auth import verify_browser_token
+from .partner_notify import notifier
+from .partner_template import PartnerTemplateError, fetch_partner_template
+from .store import SheetValidationError, get_store, normalize_sheet_path
 
 logger = logging.getLogger("ark")
 
 dotenv.load_dotenv()
-print("Found .env file at:", dotenv.find_dotenv())
-
-BACKEND = os.environ.get("ARK_BACKEND_URL", "").rstrip("/")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_DIST = _REPO_ROOT / "dist"
 STATIC_DIR = Path(os.environ.get("STATIC_ROOT", str(_DEFAULT_DIST))).resolve()
 
-app = FastAPI(title="Ark", description="UI + BFF for Ark spreadsheet")
+app = FastAPI(title="Ark", description="Ark spreadsheet backend (documents + collab + UI)")
+app.include_router(partner_router)
 
-
-class CollabHub:
-    def __init__(self) -> None:
-        self._clients: list[WebSocket] = []
-
-    async def connect(self, ws: WebSocket) -> None:
-        await ws.accept()
-        self._clients.append(ws)
-
-    def disconnect(self, ws: WebSocket) -> None:
-        if ws in self._clients:
-            self._clients.remove(ws)
-
-    async def broadcast(self, message: dict[str, Any]) -> None:
-        dead: list[WebSocket] = []
-        for c in self._clients:
-            try:
-                await c.send_json(message)
-            except Exception:
-                dead.append(c)
-        for c in dead:
-            self.disconnect(c)
-
-
-hub = CollabHub()
-
-# Ephemeral WebSocket-only messages; do not POST to partner tunnel.
-_TUNNEL_SKIP_TYPES = frozenset({"cell.presence", "cell.presence_clear"})
-# Partner-authoritative grid sync; only allowed via POST /api/ark/broadcast (not from browsers).
+# Ephemeral WebSocket-only messages; never persisted or sent to the partner.
+_PRESENCE_TYPES = frozenset({"cell.presence", "cell.presence_clear"})
+# Server/partner-authoritative messages browsers may not send.
 _FORBIDDEN_WS_TYPES = frozenset({"sheet.truth"})
 
 # Browser WebSocket passes the partner token as a query param (same name as the SPA).
 _PARTNER_TOKEN_QUERY = "ark_token"
 
-# Server-to-server: partner calls BFF to fan out sheet snapshots. If unset, POST is disabled.
-_BROADCAST_TOKEN = os.environ.get("ARK_BROADCAST_TOKEN", "").strip()
-
-# Embedding Ark inside another site’s iframe: optional framing headers from .env (see .env.example).
-# Leave unset to omit headers (same as legacy behavior). For cross-origin embeds, avoid
-# X-Frame-Options SAMEORIGIN/DENY — use CSP frame-ancestors instead.
+# Embedding Ark inside another site's iframe: optional framing headers from .env.
 _IFRAME_X_FRAME_OPTIONS = os.environ.get("ARK_IFRAME_X_FRAME_OPTIONS", "").strip()
 _IFRAME_FRAME_ANCESTORS = os.environ.get("ARK_IFRAME_FRAME_ANCESTORS", "").strip()
 
@@ -85,68 +67,110 @@ async def ark_iframe_embed_headers(request: Request, call_next):
     return response
 
 
-def _tunnel_headers_from_ws(websocket: WebSocket) -> dict[str, str]:
-    token = websocket.query_params.get(_PARTNER_TOKEN_QUERY)
-    if token:
-        return {"authorization": f"Bearer {token}"}
-    return {}
+def _bearer_token(value: str | None) -> str | None:
+    if not value:
+        return None
+    parts = value.strip().split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1].strip():
+        return parts[1].strip()
+    return None
 
 
-def _tunnel_error_message(exc: BaseException, response: httpx.Response | None) -> str:
-    if response is not None:
-        try:
-            data = response.json()
-        except Exception:
-            return f"HTTP {response.status_code}"
-        if isinstance(data, dict):
-            detail = data.get("message")
-            if detail is None:
-                detail = data.get("detail")
-            if isinstance(detail, str) and detail.strip():
-                return detail.strip()[:240]
-            if isinstance(detail, list) and detail:
-                first = detail[0]
-                if isinstance(first, dict) and isinstance(first.get("msg"), str):
-                    return str(first["msg"]).strip()[:240]
-                return str(first)[:240]
-        return f"HTTP {response.status_code}"
-    return str(exc)[:240] if str(exc) else "Request failed"
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
-async def post_tunnel_async(
-    body: dict[str, Any],
-    partner_headers: dict[str, str] | None = None,
-) -> tuple[bool, str | None]:
-    """POST mapped body to partner tunnel. Returns (success, user_message_on_failure)."""
-    if not BACKEND:
-        return (True, None)
-    payload = map_to_tunnel(body)
-    url = f"{BACKEND}/ark/tunnel"
-    headers = dict(partner_headers) if partner_headers else {}
+@app.get("/api/sheets/{path:path}")
+async def get_sheet(path: str, request: Request) -> JSONResponse:
+    """Sheet payload for the browser.
+
+    Unknown sheets are auto-created: Ark asks the partner for its template
+    (`GET {partner}/ark/template/{path}`, fetched live — no registration step)
+    and records the template name/version on the new document. Partner 404 =
+    blank sheet; other partner failures abort the request so a temporary
+    outage never creates a wrongly-blank document.
+    """
+    token = _bearer_token(request.headers.get("authorization"))
+    if not await verify_browser_token(token):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    normalized = normalize_sheet_path(path)
+    if not normalized:
+        return JSONResponse({"detail": "sheet path must not be empty"}, status_code=400)
+    store = get_store()
+    existing = store.get_sheet_payload(normalized)
+    if existing is not None:
+        return JSONResponse(existing)
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(url, json=payload, headers=headers)
-            r.raise_for_status()
-        return (True, None)
-    except httpx.HTTPStatusError as e:
-        logger.warning("ark tunnel POST failed: %s", e)
-        return (False, _tunnel_error_message(e, e.response))
-    except Exception as e:
-        logger.warning("ark tunnel POST failed: %s", e)
-        return (False, _tunnel_error_message(e, None))
+        template = await fetch_partner_template(normalized, token)
+    except PartnerTemplateError as e:
+        return JSONResponse({"detail": str(e)}, status_code=502)
+    try:
+        payload, created = store.get_or_create_sheet(normalized, template)
+    except SheetValidationError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
+    if created:
+        event: dict[str, Any] = {"kind": "sheet_created", "path": normalized}
+        if payload.get("template") is not None:
+            event["template"] = payload["template"]
+        notifier.enqueue(normalized, event, payload.get("revision", 1), token)
+    return JSONResponse(payload)
 
 
-async def _tunnel_task_notify_sender(
-    websocket: WebSocket,
-    data: dict[str, Any],
-    tunnel_headers: dict[str, str] | None,
+def _persist_ws_event(
+    data: dict[str, Any], token: str | None
+) -> tuple[bool, str | None, dict[str, Any] | None, int]:
+    """Apply a browser WS event to the store (runs in a worker thread).
+
+    Returns (persisted_ok, error_message, partner_event, revision). The caller
+    enqueues `partner_event` on the event loop — PartnerNotifier schedules
+    asyncio tasks and must not be touched from a thread without a running loop.
+    """
+    msg_type = data.get("type")
+    sheet_path = data.get("sheetPath")
+    if not isinstance(sheet_path, str) or not sheet_path.strip():
+        return (False, "missing sheetPath", None, 0)
+    sheet_path = normalize_sheet_path(sheet_path)
+    store = get_store()
+
+    if msg_type == "cell.value_committed":
+        try:
+            revision = store.apply_cell(
+                sheet_path,
+                data.get("row"),
+                data.get("col"),
+                data.get("value"),
+            )
+        except SheetValidationError as e:
+            return (False, str(e), None, 0)
+        event: dict[str, Any] = {
+            "kind": "cell",
+            "row": data.get("row"),
+            "col": data.get("col"),
+            "columnId": data.get("columnId"),
+            "value": data.get("value"),
+        }
+        if data.get("recordId") is not None:
+            event["recordId"] = data.get("recordId")
+        return (True, None, event, revision)
+
+    if msg_type == "row.deleted":
+        try:
+            revision = store.apply_row_delete(sheet_path, data.get("row"))
+        except SheetValidationError as e:
+            return (False, str(e), None, 0)
+        event = {"kind": "row_deleted", "row": data.get("row")}
+        if data.get("recordId") is not None:
+            event["recordId"] = data.get("recordId")
+        return (True, None, event, revision)
+
+    # Unknown types are broadcast-only (forward-compatible).
+    return (True, None, None, 0)
+
+
+async def _send_persist_status(
+    websocket: WebSocket, data: dict[str, Any], message: str | None
 ) -> None:
-    """Notify originating client when a cell commit fails to persist (tunnel)."""
-    ok, err = await post_tunnel_async(data, tunnel_headers)
-    if ok or not BACKEND:
-        return
-    if data.get("type") != "cell.value_committed":
-        return
     row, col = data.get("row"), data.get("col")
     if not isinstance(row, int) or not isinstance(col, int):
         return
@@ -159,78 +183,20 @@ async def _tunnel_task_notify_sender(
                 "col": col,
                 "columnId": data.get("columnId"),
                 "sheetPath": data.get("sheetPath"),
-                "message": err,
+                "message": (message or "Could not save")[:240],
             }
         )
     except Exception:
         pass
 
 
-@app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.post("/api/ark/broadcast")
-async def partner_broadcast_sheet_truth(request: Request) -> JSONResponse:
-    """Partner pushes authoritative grid state; BFF broadcasts to all /ws/ark clients (no tunnel)."""
-    if not _BROADCAST_TOKEN:
-        return JSONResponse(
-            {"detail": "ARK_BROADCAST_TOKEN is not set on the Ark server"},
-            status_code=503,
-        )
-    auth = (request.headers.get("authorization") or "").strip()
-    if auth != f"Bearer {_BROADCAST_TOKEN}":
-        return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return JSONResponse({"detail": "invalid_json"}, status=400)
-    if not isinstance(body, dict):
-        return JSONResponse({"detail": "expected_object"}, status=400)
-    if body.get("type") != "sheet.truth":
-        return JSONResponse({"detail": "expected type sheet.truth"}, status=400)
-    sheet_path = body.get("sheetPath")
-    if not isinstance(sheet_path, str) or not sheet_path.strip():
-        return JSONResponse({"detail": "sheetPath must be a non-empty string"}, status=400)
-    if not isinstance(body.get("rows"), list):
-        return JSONResponse({"detail": "rows must be an array"}, status=400)
-    rc = body.get("rowCount")
-    if not isinstance(rc, int) or rc < 1:
-        return JSONResponse({"detail": "rowCount must be an integer >= 1"}, status=400)
-    cols = body.get("columns")
-    if cols is not None and not isinstance(cols, list):
-        return JSONResponse({"detail": "columns must be an array when present"}, status=400)
-    await hub.broadcast(body)
-    return JSONResponse({"status": "ok"})
-
-
-@app.api_route("/api/ark/routing/{path:path}", methods=["GET", "HEAD"])
-async def proxy_routing(path: str, request: Request) -> Response:
-    if not BACKEND:
-        return JSONResponse(
-            {"detail": "ARK_BACKEND_URL is not set"},
-            status_code=503,
-        )
-    url = f"{BACKEND}/ark/routing/{path}"
-    headers: dict[str, str] = {}
-    for h in ("authorization", "cookie", "accept", "accept-language"):
-        v = request.headers.get(h)
-        if v:
-            headers[h] = v
-    params = list(request.query_params.multi_items())
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        r = await client.request(request.method, url, headers=headers, params=params)
-    ct = r.headers.get("content-type")
-    out_headers: dict[str, str] = {}
-    if ct:
-        out_headers["content-type"] = ct
-    return Response(content=r.content, status_code=r.status_code, headers=out_headers)
-
-
 @app.websocket("/ws/ark")
 async def collab_ws(websocket: WebSocket) -> None:
-    tunnel_headers = _tunnel_headers_from_ws(websocket)
+    token = websocket.query_params.get(_PARTNER_TOKEN_QUERY)
+    if not await verify_browser_token(token):
+        # Policy violation close; browser shows the reconnect state.
+        await websocket.close(code=4401)
+        return
     await hub.connect(websocket)
     try:
         while True:
@@ -243,18 +209,25 @@ async def collab_ws(websocket: WebSocket) -> None:
             if not isinstance(data, dict):
                 await websocket.send_json({"error": "expected_object"})
                 continue
-            if data.get("type") in _FORBIDDEN_WS_TYPES:
+            msg_type = data.get("type")
+            if msg_type in _FORBIDDEN_WS_TYPES:
                 await websocket.send_json({"error": "forbidden_message_type"})
                 continue
+            if msg_type in _PRESENCE_TYPES:
+                await hub.broadcast(data)
+                continue
+            # Persist first: Ark is authoritative, peers only see stored state.
+            ok, err, partner_event, revision = await asyncio.to_thread(
+                _persist_ws_event, data, token
+            )
+            if not ok:
+                if msg_type == "cell.value_committed":
+                    await _send_persist_status(websocket, data, err)
+                continue
+            if partner_event is not None:
+                sheet_path = normalize_sheet_path(data["sheetPath"])
+                notifier.enqueue(sheet_path, partner_event, revision, token)
             await hub.broadcast(data)
-            if data.get("type") not in _TUNNEL_SKIP_TYPES:
-                asyncio.create_task(
-                    _tunnel_task_notify_sender(
-                        websocket,
-                        data,
-                        tunnel_headers if tunnel_headers else None,
-                    ),
-                )
     except WebSocketDisconnect:
         hub.disconnect(websocket)
 

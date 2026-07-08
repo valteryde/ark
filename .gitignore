@@ -35,6 +35,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 .venv-docs/
+.venv-test/
+
+# Ark document store (local dev)
+ark.db
 
 # MkDocs
 /site/

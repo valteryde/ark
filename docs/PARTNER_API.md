@@ -2,43 +2,149 @@
 
 New to partners? Read **[Writing a partner](WRITING_A_PARTNER.md)** first.
 
-Ark’s browser app talks **same-origin** to the Ark BFF (`server/app/main.py`). The BFF proxies read routes to your service when **`ARK_BACKEND_URL`** is set. You implement the partner HTTP API on that base URL.
+**Ark owns the sheet documents.** The Ark server (`server/app/main.py`) stores sheets in its own SQLite database, serves them to browsers, and persists every edit itself. Your partner app integrates in four ways:
 
-Ark is **one spreadsheet per browser URL**. There is **no bootstrap** and **no in-app tab navigation** between sheets: opening **`/clients`** loads that sheet only; **`/records`** is a separate page with its own grid. Link between them with normal HTML links if you want.
+1. **Auth** — Ark verifies user tokens against your **`GET /ark/auth`** endpoint (when **`ARK_PARTNER_BASE_URL`** is set).
+2. **Templates** — When Ark creates a new document it pulls the template live from your **`GET /ark/template/{path}`** endpoint. The response **must include a `version`**; the document records the template name + version it was built from.
+3. **Notifications** — Ark POSTs live, lightweight **`sheet.changed`** notifications to your **`POST /ark/notify`** endpoint as users edit.
+4. **CRUD API** — You read and write full sheet documents through **`/api/partner/…`** on the Ark server.
+
+Sheets are **auto-created** on first visit: when a user opens **`/clients/21`** and no document exists, Ark fetches your template for that path (or creates a blank generic spreadsheet if you return 404) and saves the document immediately. There is **no template registration step** and no startup-order dependency between Ark and your service.
+
+Ark is **one spreadsheet per browser URL**. Opening **`/clients`** loads that sheet only; **`/records`** is a separate page with its own grid. Link between them with normal HTML links if you want.
+
+## Environment variables (Ark server)
+
+| Variable | Purpose |
+| -------- | ------- |
+| `ARK_DB_PATH` | SQLite file for Ark's sheet documents (default `./ark.db`). |
+| `ARK_PARTNER_BASE_URL` | Your partner base URL (no trailing slash). Enables token verification (`GET {base}/ark/auth`), template pulls (`GET {base}/ark/template/{path}`), and change notifications (`POST {base}/ark/notify`). Unset = no auth, blank auto-create, no notifications (local dev). |
+| `ARK_PARTNER_API_TOKEN` | Bearer token your backend uses on `/api/partner/…` routes. Unset = partner CRUD API disabled (503). |
+| `ARK_AUTH_CACHE_TTL` | Seconds to cache token verification results (default 300). |
+| `ARK_NOTIFY_COALESCE_MS` | Coalescing window for change notifications (default 250). |
+| `ARK_UI_ROUTES` | Comma-separated SPA route specs (see Browser URLs). |
 
 ## Partner token (`ark_token`)
 
-Partners can redirect users to Ark with a **token** the partner will recognize on its own API:
+Partners can redirect users to Ark with a **token** the partner will recognize:
 
 1. Add **`ark_token`** to the landing URL (**query** `?ark_token=…` or **hash** `#ark_token=…`).
-2. The browser app saves it in **`sessionStorage`**, removes it from the visible URL, and on each routing request sends **`Authorization: Bearer <token>`** to the BFF (which forwards it to **`GET {ARK_BACKEND_URL}/ark/routing/{path}`**).
-3. The collab **WebSocket** is opened as **`/ws/ark?ark_token=…`** (browsers cannot set custom WebSocket headers). The BFF reads the token at connect time and sends **`Authorization: Bearer <token>`** on each **`POST {ARK_BACKEND_URL}/ark/tunnel`** for messages from that connection.
+2. The browser app saves it in **`sessionStorage`**, removes it from the visible URL, and sends **`Authorization: Bearer <token>`** on each sheet request. The collab **WebSocket** is opened as **`/ws/ark?ark_token=…`**.
+3. When **`ARK_PARTNER_BASE_URL`** is set, Ark verifies each unseen token with **`GET {base}/ark/auth`** carrying **`Authorization: Bearer <token>`** (no header for anonymous requests). A **2xx** response means valid; anything else rejects the request (HTTP **401**, WebSocket close **4401**). Results are cached for **`ARK_AUTH_CACHE_TTL`** seconds.
+4. The same token is forwarded as **`Authorization: Bearer <token>`** on the **`sheet.changed`** notifications produced by that user's edits, so you can audit who changed what.
 
-Use **HTTPS** and **short-lived** tokens in production. Prefer **hash** over **query** if you want to avoid the token in the initial document request and some referrer chains. Ark does not interpret the token—only forwards it.
+Use **HTTPS** and **short-lived** tokens in production. Prefer **hash** over **query** if you want to avoid the token in the initial document request and some referrer chains. Ark never interprets the token — your `/ark/auth` decides.
 
-## Routes you implement
+## Routes you implement (on `ARK_PARTNER_BASE_URL`)
 
-### `GET /ark/routing/{path}` (sheet payload)
+### `GET /ark/auth`
 
-The **first path segment** of the browser URL is `{path}` (e.g. **`/clients`** → `path` = `clients`). The UI calls **`GET /api/ark/routing/{path}`**, which proxies to **`GET {ARK_BACKEND_URL}/ark/routing/{path}`**.
+Receives **`Authorization: Bearer <ark_token>`** (absent for anonymous users). Return **2xx** to allow, anything else to deny. This is the only auth gate — decide here whether anonymous access is allowed.
 
-Returns a **SheetPayload** used to build [`SpreadsheetConfig`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/types.ts) and initial cell data.
+### `GET /ark/template/{path}`
 
-**Flat shape** — `columns`, `rows`, etc. at the top level (see table).
+Called **once per document, at creation time**, when a user opens a sheet path that has no document yet. Receives the requesting user's **`Authorization: Bearer <ark_token>`**. Respond with:
 
-**Nested shape** — Page-level `title` / `description` plus **`sheets`: `[{ title, columns, rows, rowCount, … }]`**. Ark normalizes using the first inner sheet and merges the outer `title` / `description` when useful (outer title wins for the header when both exist).
+```json
+{
+  "name": "client",
+  "version": 3,
+  "title": "Client",
+  "columns": [ { "id": "name", "header": "Name", "widthPx": 240 } ],
+  "rows": [ { "name": "Prefilled row" } ],
+  "rowCount": 100
+}
+```
 
-| Field | Required | Description |
-|--------|----------|-------------|
-| `title` | no | Shown in the header when present; also used for `document.title` |
-| `description` | no | Informational |
-| `columns` | yes* | Array of column objects (see below); *or supply via nested `sheets[0]` |
-| `rows` | yes* | Array of row objects; keys should match column `id` |
-| `sheets` | no | If present, first element supplies `columns` / `rows` / `rowCount` when top-level fields are omitted |
-| `rowCount` | no | Visible grid height; default at least `rows.length`, otherwise often `max(rows.length, 100)` in Ark. For a single empty “staging” row, use **`rows.length + 1`**. |
-| `defaultRowHeightPx` | no | Passed through to config |
-| `enabledUiCapabilities` | no | Toolbar flags (see SPREADSHEET.md) |
-| `chromeActions` | no | Up to **8** header links (top right). Each item is an object (see below). Invalid or unsafe URLs are skipped. With nested **`sheets`**, the first inner sheet’s array wins if set, otherwise the outer object’s array is used (same rule as **`enabledUiCapabilities`**). |
+- **`version`** (required, string or integer) — Ark **rejects** template responses without one. The created document stores `name` + `version`, and both appear as **`template`** in every sheet payload and in the `sheet_created` notification — so when you change a template later, you can tell which documents were created from which version.
+- **`columns`** (required) and any other sheet payload fields (`title`, `rowCount`, `enabledUiCapabilities`, `chromeActions`, …).
+- **`rows`** (optional) — prefill for the new document (useful for seeding data without any startup push).
+- **`name`** (optional) — template identifier stored on the document.
+
+Status handling:
+
+| Your response | Ark behavior |
+| ------------- | ------------ |
+| 2xx with valid template | Document created from the template. |
+| **404** | No template for this path — a blank generic sheet is created. |
+| Any other error / unreachable / missing `version` | Request fails (**502**), **no document is created** — a temporary partner outage never pins a wrongly-blank document; the next visit retries. |
+
+Templates are only consulted at creation. Existing documents never change when your template changes; use the CRUD API if you want to migrate them.
+
+### `POST /ark/notify`
+
+Ark sends live change notifications as users edit. Events for the same sheet and user are **coalesced** for a short window (default 250 ms), so a paste of 200 cells arrives as one batch while single edits are effectively instant.
+
+```json
+{
+  "type": "sheet.changed",
+  "sheetPath": "clients/21",
+  "revision": 42,
+  "events": [
+    { "kind": "cell", "row": 3, "col": 2, "columnId": "name", "value": "Acme", "recordId": 21 },
+    { "kind": "row_deleted", "row": 5, "recordId": 7 },
+    { "kind": "sheet_created", "path": "clients/21", "template": { "name": "client", "version": "3" } }
+  ]
+}
+```
+
+- **`revision`** — the sheet's document revision after the last event in the batch. Increments on every mutation.
+- **`kind: "cell"`** — a committed cell value. `row`/`col` are 1-based grid indices; `columnId` matches the sheet's column config; `recordId` is the row's first read-only column value when present.
+- **`kind: "row_deleted"`** — user deleted a grid row (cells cleared; rows are not shifted).
+- **`kind: "sheet_created"`** — a sheet was auto-created on first visit; includes the `template` name/version it was built from (absent for blank sheets).
+
+The notification is intentionally lightweight: when you need full state, pull the sheet with **`GET /api/partner/sheets/{path}`**. Notifications carry the editing user's `ark_token` as a Bearer header and are fire-and-forget (one retry); Ark never blocks the grid on your response.
+
+## Ark's partner CRUD API (`/api/partner/…`)
+
+All routes require **`Authorization: Bearer <ARK_PARTNER_API_TOKEN>`**.
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/partner/sheets` | List sheets (`path`, `title`, `revision`, `updatedAt`). |
+| `GET` | `/api/partner/sheets/{path}` | Full sheet document (same shape browsers get, plus `revision`). |
+| `PUT` | `/api/partner/sheets/{path}` | Create or fully replace a sheet. Open tabs remount live (`sheet.truth` push). |
+| `PATCH` | `/api/partner/sheets/{path}` | Partial update: cells and/or metadata. Open tabs apply cell updates live without remounting. |
+| `DELETE` | `/api/partner/sheets/{path}` | Delete the document. |
+
+### `PUT /api/partner/sheets/{path}` (create / replace)
+
+Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `enabledUiCapabilities`, `chromeActions`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`.
+
+### `PATCH /api/partner/sheets/{path}` (partial update)
+
+```json
+{
+  "title": "Optional new title",
+  "rowCount": 200,
+  "cells": [
+    { "row": 1, "columnId": "name", "value": "Acme Corp" },
+    { "recordId": 2, "columnId": "name", "value": "Beta LLC" },
+    { "row": 3, "col": 2, "value": "Gamma" }
+  ]
+}
+```
+
+Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `columnId`** (row resolved through the first read-only column), or raw **`row` + `col`**. An empty-string `value` clears the cell. Applied updates are broadcast to open tabs as live cell commits.
+
+## Sheet payload reference
+
+`GET /api/sheets/{path}` (browser) and `GET /api/partner/sheets/{path}` (partner) return:
+
+| Field | Description |
+|--------|-------------|
+| `path` | Normalized sheet path. |
+| `revision` | Document revision; increments on every mutation. |
+| `template` | `{ "name"?, "version" }` of the partner template the document was created from (absent for blank sheets). Version is stored as a string. |
+| `title` | Shown in the header when present; also used for `document.title` |
+| `description` | Informational |
+| `columns` | Array of column objects (see below) |
+| `rows` | Array of row objects; keys match column `id` |
+| `rowCount` | Visible grid height. Grows automatically when users write below it. |
+| `cells` | Sparse out-of-schema cells keyed `"row:col"` (values written outside the defined columns), when present. |
+| `defaultRowHeightPx` | Passed through to config |
+| `enabledUiCapabilities` | Toolbar flags (see SPREADSHEET.md) |
+| `chromeActions` | Up to **8** header links (top right). Each item is an object (see below). Invalid or unsafe URLs are skipped. |
 
 **`chromeActions` entry** (each element of the array):
 
@@ -57,7 +163,7 @@ Returns a **SheetPayload** used to build [`SpreadsheetConfig`](https://github.co
 | `id` | yes | Stable key for the column and for row objects (e.g. API field name). |
 | `header` | yes | Column label in the grid header. |
 | `widthPx` | yes | Width in CSS pixels. |
-| `readOnly` | no | If `true`, the cell cannot be edited (computed / system fields). |
+| `readOnly` | no | If `true`, the cell cannot be edited (computed / system fields). The **first** read-only column doubles as the record id: its value is sent as `recordId` on notifications. |
 | `valueType` | no | **`text`** (default), **`number`**, or **`select`**. Affects validation and editors. |
 | `selectOptions` | no | When `valueType` is **`select`**, list of option objects (see below). |
 | `allowEmpty` | no | On **`select`** columns: if `false`, committing empty uses the first option’s value. Default **`true`**. |
@@ -78,27 +184,7 @@ If an option has **at least one** of `color`, `backgroundColor`, or a valid `ico
 
 **Text and number columns** are always plain text (no per-column display style enum).
 
-#### Rows
-
-Each row is a **plain JSON object**. Keys should match column **`id`** strings. Values are turned into cell values (strings/numbers). If a row omits a column id, that cell is empty.
-
-**Example — minimal sheet**
-
-```json
-{
-  "title": "Clients",
-  "columns": [
-    { "id": "name", "header": "Name", "widthPx": 200 },
-    { "id": "revenue", "header": "Revenue", "widthPx": 120, "valueType": "number" }
-  ],
-  "rows": [
-    { "name": "Acme Corp", "revenue": 120000 },
-    { "name": "Beta LLC", "revenue": 45000 }
-  ]
-}
-```
-
-**Example — select columns with custom chips**
+**Example — sheet with select chips (PUT body)**
 
 ```json
 {
@@ -111,118 +197,38 @@ Each row is a **plain JSON object**. Keys should match column **`id`** strings. 
       "widthPx": 100,
       "valueType": "select",
       "selectOptions": [
-        {
-          "value": "HIGH",
-          "backgroundColor": "#d8f3dc",
-          "color": "#1b4332",
-          "icon": "arrow-up"
-        },
-        {
-          "value": "MEDIUM",
-          "backgroundColor": "#fde8d4",
-          "color": "#9a3412",
-          "icon": "equals"
-        }
-      ]
-    },
-    {
-      "id": "status",
-      "header": "Status",
-      "widthPx": 130,
-      "valueType": "select",
-      "selectOptions": [
-        {
-          "value": "open",
-          "label": "Open",
-          "backgroundColor": "#dbeafe",
-          "color": "#1d4ed8",
-          "icon": "circle-dashed"
-        },
-        {
-          "value": "done",
-          "label": "Done",
-          "backgroundColor": "#d1fae5",
-          "color": "#047857",
-          "icon": "check-circle"
-        }
+        { "value": "HIGH", "backgroundColor": "#d8f3dc", "color": "#1b4332", "icon": "arrow-up" },
+        { "value": "MEDIUM", "backgroundColor": "#fde8d4", "color": "#9a3412", "icon": "equals" }
       ]
     },
     { "id": "owner", "header": "Owner", "widthPx": 160 },
     { "id": "updatedAt", "header": "Updated", "widthPx": 140, "readOnly": true }
   ],
   "rows": [
-    {
-      "title": "Ship v1",
-      "priority": "HIGH",
-      "status": "open",
-      "owner": "Alex",
-      "updatedAt": "2026-04-01"
-    }
+    { "title": "Ship v1", "priority": "HIGH", "owner": "Alex", "updatedAt": "2026-04-01" }
   ]
 }
 ```
 
-### `POST /ark/tunnel`
+## Browser-facing API (for reference)
 
-The BFF forwards mapped events when users edit the grid or when collab messages are processed. Implement persistence here.
-
-When the browser connected to **`/ws/ark`** with **`?ark_token=…`**, the BFF includes **`Authorization: Bearer <token>`** on tunnel **`POST`s** from that WebSocket. With no token, the tunnel request has no extra auth headers (same as before).
-
-**Shapes Ark sends** (after BFF mapping from WebSocket events):
-
-- `{ "type": "update_cell", "row", "col", "columnId", "value", "meta" }` — cell value committed. When the grid has a **read-only** column (typically the primary key), Ark may also send top-level **`recordId`** (same value as in **`meta`**) so you can run **`UPDATE … WHERE id = ?`** without relying on row index alone.
-- `{ "type": "delete_row", "row", "meta" }` — user removed a row from the grid (context menu **Delete row**). Optional top-level **`recordId`** when a read-only id column exists. Use this to **`DELETE`** the backing record; do not rely on many **`update_cell`** clears for the same action.
-- `{ "type": "new_cell" | "delete_cell", "meta" }` — reserved / legacy; **`delete_row`** is the row-deletion contract.
-- `{ "type": "spreadsheet_event", "payload" }` — fallback.
-
-**Client → BFF WebSocket** (browser sends JSON on `ws://…/ws/ark`):
-
-- `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number, "recordId"?: string | number }` — primary edit event. **`sheetPath`** is the same routing suffix as the current page (e.g. `clients`). **`clientId`** lets the sender ignore its own echo. **`markerHue`** (0–360) drives a **brief tint** on the updated cell for remote peers. **`recordId`** is the current value of the **first read-only** column for that row (when present), for id-based persistence.
-- `{ "type": "row.deleted", "row", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number, "recordId"?: string | number }` — user deleted a grid row (context menu). Broadcast to peers so they clear the same row locally; mapped to tunnel **`delete_row`**. Not emitted for per-cell clears.
-- `{ "type": "cell.presence", "row", "col", "mode": "navigate" | "edit", "sheetPath"?: string, "clientId"?: string, "markerHue"?: number }` — **ephemeral** cursor presence. Other clients draw a **colored border** on that cell (hue from **`markerHue`**). **`mode`** distinguishes focus vs editor-focused for the sender; the grid uses the same border either way. These messages are **not** forwarded to **`POST /ark/tunnel`**.
-- `{ "type": "cell.presence_clear", "sheetPath"?: string, "clientId"?: string }` — optional hint that a tab closed or left the sheet; peers remove that **`clientId`** from presence. Also **not** tunneled.
-
-The BFF **broadcasts** the same JSON to all connected clients. It **`POST`s** the **mapped** body to `{ARK_BACKEND_URL}/ark/tunnel` only for messages that are not ephemeral presence (`cell.presence`, `cell.presence_clear`).
-
-Browsers **must not** send **`{ "type": "sheet.truth" }`** on the WebSocket; the BFF rejects it. That type is reserved for the broadcast endpoint below.
+- **`GET /api/sheets/{path}`** — sheet payload, auto-creating unknown paths. Requires a valid `ark_token` when `ARK_PARTNER_BASE_URL` is set.
+- **WebSocket `/ws/ark`** — collab channel. Browsers send:
+  - `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath", "clientId"?, "markerHue"?, "recordId"? }` — Ark persists the cell, bumps the revision, broadcasts to peers, and enqueues a partner notification. On a persistence failure only the sender receives `{ "type": "cell.persist_status", "ok": false, "row", "col", … }`.
+  - `{ "type": "row.deleted", "row", "sheetPath", … }` — Ark clears the row's cells, broadcasts, and notifies.
+  - `{ "type": "cell.presence" | "cell.presence_clear", … }` — ephemeral cursor presence; broadcast only, never persisted or notified.
+  - Browsers must not send `{ "type": "sheet.truth" }`; that shape is reserved for partner `PUT` pushes.
 
 ### Row index vs. database identity
 
-**`row`** in tunnel payloads is the **1-based grid row** at commit time. It matches the position of that row in the **`rows`** array from the **last** routing response or **last** `sheet.truth` push for this sheet, not a durable database id. If your canonical `ORDER BY` differs from what users see after inserts or reorders, indices can drift until you resync (see broadcast). Prefer **`recordId`** (read-only key column) or an explicit **`display_order`** in your model when you need stable targeting.
-
-### `POST /api/ark/broadcast` (partner → BFF, optional)
-
-When **row order**, **row-to-record mapping**, or **grid shape** changes on the server (new row inserted and sorted elsewhere, delete, bulk import, `rowCount` change, etc.), you can **push** fresh sheet state to every open Ark tab **without** requiring a full page reload.
-
-1. Set **`ARK_BROADCAST_TOKEN`** on the Ark server to a long random secret (separate from user `ark_token`s).
-2. From your partner backend, **`POST`** same-origin to the Ark BFF (e.g. `http://ark-bff:8000/api/ark/broadcast`) with header **`Authorization: Bearer <ARK_BROADCAST_TOKEN>`** and JSON body:
-
-```json
-{
-  "type": "sheet.truth",
-  "sheetPath": "clients",
-  "columns": [ … ],
-  "rows": [ … ],
-  "rowCount": 42,
-  "title": "…",
-  "description": "…",
-  "defaultRowHeightPx": 28,
-  "enabledUiCapabilities": [ "undo", "format-bold" ]
-}
-```
-
-- **`sheetPath`** must match the routing suffix clients have open (same as **`sheetPath`** on cell events).
-- **`rows`** and **`rowCount`** are required. **`columns`** may be omitted if unchanged; Ark then reuses columns from the client’s last successful routing load for that tab.
-- The BFF **broadcasts** this object to all **`/ws/ark`** connections and does **not** call **`/ark/tunnel`** (no loop).
-
-**When to push:** use after structural or ordering changes where clients could disagree on which grid row maps to which record. **When not to push:** routine in-place updates to an existing row where **`recordId`** + collab **`cell.value_committed`** already keep tabs aligned.
+**`row`** in notification events is the **1-based grid row** in Ark's document. Because Ark is now the system of record, indices are stable across clients — but they are still grid positions, not your database keys. Mark your key column **`readOnly: true`** and put record ids in it so notifications carry **`recordId`** and you can sync by id.
 
 ## Browser URLs (SPA)
 
 The Ark server serves `index.html` for paths allowed by **`ARK_UI_ROUTES`**: a comma-separated list where each entry is either a **single segment** (letters, digits, hyphen) or a **prefix wildcard** **`base/*`**.
 
-- **Exact:** `clients` serves the SPA at **`/clients`** and the UI calls **`GET /api/ark/routing/clients`** (proxied to your **`GET /ark/routing/clients`**).
-- **Wildcard:** `user_transactions/*` serves the SPA at **`/user_transactions`**, **`/user_transactions/abc`**, and any deeper path under that prefix. The **browser path without a leading slash** is the routing key: e.g. **`/user_transactions/abc`** → **`GET /api/ark/routing/user_transactions/abc`**.
+- **Exact:** `clients` serves the SPA at **`/clients`** and the UI calls **`GET /api/sheets/clients`**.
+- **Wildcard:** `user_transactions/*` serves the SPA at **`/user_transactions`**, **`/user_transactions/abc`**, and any deeper path under that prefix. The **browser path without a leading slash** is the sheet path: e.g. **`/user_transactions/abc`** → **`GET /api/sheets/user_transactions/abc`**.
 
 Multi-segment bases are allowed (e.g. **`api/v1/*`**). More specific prefixes should be listed before shorter ones in **`ARK_UI_ROUTES`** so overlapping rules resolve predictably (longer bases are registered first).
 
@@ -230,7 +236,7 @@ Multi-segment bases are allowed (e.g. **`api/v1/*`**). More specific prefixes sh
 
 You can load Ark inside a parent page’s **`<iframe>`** when the iframe **`src`** points at your Ark deployment (for example **`https://ark.example.com/clients`**).
 
-Parent and Ark hosts are usually **different origins** (for example **`https://example.com`** vs **`https://ark.example.com`**). The Ark **BFF** ([`server/app/main.py`](https://github.com/valteryde/ark/blob/main/server/app/main.py)) can send framing-related HTTP headers controlled by environment variables (same `.env` as **`ARK_BACKEND_URL`**):
+Parent and Ark hosts are usually **different origins** (for example **`https://example.com`** vs **`https://ark.example.com`**). The Ark server ([`server/app/main.py`](https://github.com/valteryde/ark/blob/main/server/app/main.py)) can send framing-related HTTP headers controlled by environment variables:
 
 | Variable | Purpose |
 | -------- | ------- |
@@ -249,16 +255,14 @@ Full notes and examples live in [`.env.example`](https://github.com/valteryde/ar
 
 ## Local development
 
-1. Run your partner API (e.g. `uvicorn example_api:app --port 9000`).
-2. Set `ARK_BACKEND_URL=http://127.0.0.1:9000` for the Ark BFF.
-3. Open Ark UI via the BFF (`uvicorn` serving `dist/`). No CORS issues: the browser only calls the BFF.
-4. Open **`http://127.0.0.1:8000/clients`** or **`/records`** (add segments to **`ARK_UI_ROUTES`** for each sheet URL you support). The site root **`/`** does not load a sheet by itself.
+1. Run Ark with no partner at all: `uvicorn app.main:app --app-dir server` (serving `dist/`). Open **`http://127.0.0.1:8000/clients`** — the sheet is auto-created blank and edits persist in `ark.db`.
+2. To integrate a partner, run it (e.g. `uvicorn example_api:app --port 9000`) and set `ARK_PARTNER_BASE_URL=http://127.0.0.1:9000` plus `ARK_PARTNER_API_TOKEN=<shared secret>`.
+3. Add each sheet URL segment to **`ARK_UI_ROUTES`**. The site root **`/`** does not load a sheet by itself.
 
 ## Out of scope (v1)
 
-- Authoritative REST `PATCH` per row/cell (tunnel-only persistence is enough for the sample).
-- Formatting-only tunnel events (`mergeCellStyle`) — not tunneled; value commits and **`delete_row`** are.
+- Formatting sync (`mergeCellStyle` stays client-side; the store has a style column reserved for later).
 - Authoritative **locking** or merge conflict resolution (presence outlines are indicative only).
-- Ark-side **validation** of partner tokens (only pass-through; partners validate **`Authorization`**).
+- Sheet history / restore endpoints (mutations are already recorded in the `sheet_events` log for a future version).
 
 See [SPREADSHEET.md](SPREADSHEET.md) for grid behavior, undo, and column types.
