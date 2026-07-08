@@ -6,7 +6,9 @@
   "scripts": {
     "build": "node scripts/build.mjs --production",
     "watch": "node scripts/build.mjs --watch",
-    "dev": "node scripts/build.mjs --watch"
+    "dev": "node scripts/build.mjs --watch",
+    "test": "deno test --allow-read --allow-env --allow-sys tests/",
+    "test:watch": "deno test --allow-read --allow-env --allow-sys --watch tests/"
   },
   "license": "MIT",
   "devDependencies": {

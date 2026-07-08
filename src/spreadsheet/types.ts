@@ -110,7 +110,7 @@ export interface SpreadsheetConfig {
   /**
    * Toolbar features the backend exposes (for chrome binding).
    */
-  enabledUiCapabilities?: ReadonlySet<UiToolbarCapability> | UiToolbarCapability[];
+  enabledUiCapabilities?: ReadonlySet<UiToolbarCapability> | readonly UiToolbarCapability[];
   /**
    * When a paste needs more rows than `rowCount`, the host can remount with a larger `rowCount`
    * and replay the paste. If set, called instead of clipping when the paste grid extends past the bottom.
@@ -159,7 +159,7 @@ export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
 ];
 
 export function resolveEnabledUiCapabilities(
-  enabled?: ReadonlySet<UiToolbarCapability> | UiToolbarCapability[],
+  enabled?: ReadonlySet<UiToolbarCapability> | readonly UiToolbarCapability[],
 ): Set<UiToolbarCapability> {
   if (enabled === undefined) {
     return new Set(ALL_UI_CAPABILITIES);
@@ -263,4 +263,10 @@ export interface SpreadsheetMountHandle {
    * Skips ghost rows/columns. Starts after the active cell and wraps. Empty `query` returns false.
    */
   findInSheet(options: { query: string; forward: boolean }): boolean;
+  /** Current display zoom factor (1 = 100%). */
+  getZoom(): number;
+  /** Set the display zoom factor (clamped to 0.5–2). Returns the applied value. */
+  setZoom(factor: number): number;
+  /** Subscribe to zoom changes (e.g. to sync a toolbar control). */
+  subscribeZoomChange(cb: () => void): () => void;
 }

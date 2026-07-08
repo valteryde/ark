@@ -22,7 +22,7 @@ export function createPartnerNotifyDataStore(
   columns: readonly SpreadsheetColumn[],
   initial: Record<string, InMemoryDataInitValue>,
   onSet: OnCellSetNotify,
-): SpreadsheetDataStore {
+): PartnerNotifyDataStore {
   const inner = createInMemoryDataStore(initial);
   let applyingRemote = false;
 
@@ -30,7 +30,7 @@ export function createPartnerNotifyDataStore(
     get: (row, col) => inner.get(row, col),
     getCellStyle: (row, col) => inner.getCellStyle?.(row, col),
     mergeCellStyle: (row, col, patch) => inner.mergeCellStyle?.(row, col, patch),
-    hasCell: (row, col) => inner.hasCell?.(row, col),
+    hasCell: (row, col) => inner.hasCell?.(row, col) ?? false,
     getStoredCell: (row, col) => inner.getStoredCell?.(row, col),
     replaceCell(row, col, cell) {
       inner.replaceCell?.(row, col, cell);

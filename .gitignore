@@ -31,6 +31,8 @@ deno.lock
 pnpm-lock.yaml
 
 *.pyc
+__pycache__/
+.pytest_cache/
 .venv/
 .venv-docs/
 

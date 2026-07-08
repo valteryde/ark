@@ -52,7 +52,7 @@ export function normalizePartnerChromeActions(raw: unknown): PartnerChromeAction
 
 export function mountPartnerChromeActions(
   host: HTMLElement,
-  actions: PartnerChromeAction[] | undefined,
+  actions: readonly PartnerChromeAction[] | undefined,
 ): void {
   host.replaceChildren();
   if (!actions?.length) return;

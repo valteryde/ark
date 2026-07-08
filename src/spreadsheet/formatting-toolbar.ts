@@ -71,9 +71,33 @@ export function mountFormattingToolbar(
   host.replaceChildren();
   host.classList.add('app-toolbar__dynamic');
 
-  const zoom = document.createElement('span');
+  const ZOOM_STEPS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 2];
+  const zoom = document.createElement('select');
   zoom.className = 'app-toolbar__zoom';
-  zoom.textContent = '100%';
+  zoom.title = 'Zoom';
+  zoom.setAttribute('aria-label', 'Zoom');
+  for (const z of ZOOM_STEPS) {
+    const opt = document.createElement('option');
+    opt.value = String(z);
+    opt.textContent = `${Math.round(z * 100)}%`;
+    zoom.appendChild(opt);
+  }
+  function syncZoomControl(): void {
+    const cur = sheet.getZoom();
+    const curStr = String(cur);
+    if (!ZOOM_STEPS.some((z) => String(z) === curStr)) {
+      const opt = document.createElement('option');
+      opt.value = curStr;
+      opt.textContent = `${Math.round(cur * 100)}%`;
+      zoom.appendChild(opt);
+    }
+    zoom.value = curStr;
+  }
+  zoom.addEventListener('change', () => {
+    sheet.setZoom(Number(zoom.value));
+  });
+  sheet.subscribeZoomChange(syncZoomControl);
+  syncZoomControl();
   host.appendChild(zoom);
   host.appendChild(sep());
 

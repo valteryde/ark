@@ -107,6 +107,24 @@ Import from `./spreadsheet` or paths under `src/spreadsheet/`:
 - `createInMemoryDataStore`, types (`SpreadsheetConfig`, `SpreadsheetDataStore`, …)
 - Example presets: `createRoadmapPreset`, etc. (demos only—build real configs from your API JSON)
 
+## Testing
+
+Two suites cover the pure logic on each side of the app.
+
+**Frontend (TypeScript)** — [Deno](https://deno.com)'s built-in runner. Tests live in [`tests/`](tests/): pure-logic units under `tests/spreadsheet/` and `tests/partner/`, plus DOM-level tests for the grid and toolbar under `tests/dom/` (mounted in [jsdom](https://github.com/jsdom/jsdom), auto-installed on first run).
+
+```bash
+deno task test          # or: npm test
+deno task test:watch    # or: npm run test:watch
+```
+
+**Backend (Python)** — [pytest](https://docs.pytest.org). Tests live in [`server/tests/`](server/tests/):
+
+```bash
+pip install -r server/requirements-dev.txt
+cd server && pytest
+```
+
 ## Manual smoke check
 
 - **Partner mode**: Run [`example_api.py`](example_api.py) on port 9000, set `ARK_BACKEND_URL=http://127.0.0.1:9000`, open **`/clients`** or **`/records`**, edit cells, confirm tunnel hits (see server logs).
