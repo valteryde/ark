@@ -164,6 +164,7 @@ Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `col
 | `header` | yes | Column label in the grid header. |
 | `widthPx` | yes | Width in CSS pixels. |
 | `readOnly` | no | If `true`, the cell cannot be edited (computed / system fields). The **first** read-only column doubles as the record id: its value is sent as `recordId` on notifications. |
+| `hidden` | no | If `true`, the column is read-only and **omitted from the grid** (no header or cells). Row data and `recordId` resolution still use the column; clipboard copy excludes hidden values. Setting `hidden: true` forces `readOnly: true`. |
 | `valueType` | no | **`text`** (default), **`number`**, or **`select`**. Affects validation and editors. |
 | `selectOptions` | no | When `valueType` is **`select`**, list of option objects (see below). |
 | `allowEmpty` | no | On **`select`** columns: if `false`, committing empty uses the first option’s value. Default **`true`**. |

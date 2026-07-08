@@ -47,6 +47,20 @@ Deno.test('normalizePartnerSheetPayload drops invalid columns', () => {
   assertEquals(result?.columns.length, 1);
 });
 
+Deno.test('normalizePartnerSheetPayload parses hidden and forces readOnly', () => {
+  const result = normalizePartnerSheetPayload({
+    columns: [{ id: 'id', header: 'ID', widthPx: 72, hidden: true }],
+    rows: [{ id: 1 }],
+  });
+  assertEquals(result?.columns[0], {
+    id: 'id',
+    header: 'ID',
+    widthPx: 72,
+    hidden: true,
+    readOnly: true,
+  });
+});
+
 Deno.test('rowsToInitialMap keys cells by row:col (1-indexed) and skips blanks', () => {
   const initial = rowsToInitialMap(columns, [
     { name: 'Ada', age: 30 },

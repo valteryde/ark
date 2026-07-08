@@ -45,7 +45,9 @@ Try the in-repo sample: [`example_api.py`](https://github.com/valteryde/ark/blob
 
 The UI turns the sheet document into a grid configuration aligned with TypeScript types in [`src/spreadsheet/types.ts`](https://github.com/valteryde/ark/blob/main/src/spreadsheet/types.ts).
 
-**Minimum concept:** an array of **columns** (id, header, width, optional read-only / value types) and an array of **rows** (plain objects whose keys match column **`id`** values). The same shape is used for `PUT /api/partner/sheets/{path}` bodies and for what `GET` returns.
+**Minimum concept:** an array of **columns** (id, header, width, optional read-only / hidden / value types) and an array of **rows** (plain objects whose keys match column **`id`** values). The same shape is used for `PUT /api/partner/sheets/{path}` bodies and for what `GET` returns.
+
+For **hidden primary keys**, put the id in the first column with **`readOnly: true`** and **`hidden: true`** — the grid omits it but row data and **`recordId`** on notifications still work (see **[PARTNER_API.md](PARTNER_API.md)**).
 
 For **dropdown columns** with colored chips and icons, use **`valueType: "select"`** and put **`color`**, **`backgroundColor`**, and **`icon`** on each **`selectOptions`** entry (see **[PARTNER_API.md](PARTNER_API.md)**).
 

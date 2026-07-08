@@ -90,11 +90,11 @@ def init_db() -> None:
 TEMPLATE_VERSION = 1
 
 CLIENTS_COLUMNS = [
-    {"id": "id", "header": "ID", "widthPx": 72, "readOnly": True},
+    {"id": "id", "header": "ID", "widthPx": 72, "readOnly": True, "hidden": True},
     {"id": "name", "header": "Name", "widthPx": 260},
 ]
 RECORDS_COLUMNS = [
-    {"id": "id", "header": "ID", "widthPx": 72, "readOnly": True},
+    {"id": "id", "header": "ID", "widthPx": 72, "readOnly": True, "hidden": True},
     {"id": "name", "header": "Name", "widthPx": 220},
     {"id": "client_id", "header": "Client", "widthPx": 100, "valueType": "number"},
 ]

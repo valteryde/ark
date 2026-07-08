@@ -42,6 +42,11 @@ export interface SpreadsheetColumn {
    */
   readOnly?: boolean;
   /**
+   * When true, the column is read-only and omitted from the grid (no header or cells).
+   * Values still load from row data and the first read-only column (including hidden) supplies `recordId`.
+   */
+  hidden?: boolean;
+  /**
    * Value kind for commit-time validation and editors. Omitted means `'text'`.
    */
   valueType?: SpreadsheetColumnValueType;

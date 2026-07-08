@@ -39,6 +39,8 @@ function normalizeColumn(c: unknown): SpreadsheetColumn | null {
     if (opts.length) col.selectOptions = opts;
   }
   if (typeof o.allowEmpty === 'boolean') col.allowEmpty = o.allowEmpty;
+  if (typeof o.hidden === 'boolean') col.hidden = o.hidden;
+  if (col.hidden === true) col.readOnly = true;
   return col;
 }
 

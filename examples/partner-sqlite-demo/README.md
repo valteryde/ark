@@ -12,7 +12,7 @@ cd examples/partner-sqlite-demo
 docker compose up --build
 ```
 
-Open **http://localhost:8000/clients** or **http://localhost:8000/records** (each URL is its own spreadsheet; **`/`** alone does not load a sheet). Edit a **Name** or **Client** cell — Ark persists it instantly and notifies the partner, which mirrors the change into its own SQLite. Type a name into the empty staging row: the partner inserts a database record and patches the generated **ID** back into the sheet live.
+Open **http://localhost:8000/clients** or **http://localhost:8000/records** (each URL is its own spreadsheet; **`/`** alone does not load a sheet). Edit a **Name** or **Client** cell — Ark persists it instantly and notifies the partner, which mirrors the change into its own SQLite. Type a name into the empty staging row: the partner inserts a database record and patches the generated **ID** back into the sheet live (the **ID** column is hidden in the grid but still stored on each row).
 
 The Ark image defaults to **`ARK_UI_ROUTES=clients,records`** so those paths serve the SPA. Override to expose more sheet URLs.
 

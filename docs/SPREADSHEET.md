@@ -80,6 +80,10 @@ The grid models two modes per cell, mirroring Google Sheets / Excel:
 
 - When **`columnWidthPersistenceKey`** is set, header resize grips are shown. **Drag** to resize; **double-click** a grip to **autofit** the column to its widest header/cell content. Widths are validated, clamped (48–800px), and persisted to `sessionStorage`.
 
+## Hidden columns
+
+- **`hidden: true`** on a column (partner/template payload) keeps the column in the data model but **omits it from the grid** — no header, no cells, zero layout width. **`hidden` implies `readOnly`**. Row objects still supply values keyed by the column `id`; the first read-only column (including hidden) still drives **`recordId`** on collab/notify events. Keyboard navigation, selection, and clipboard copy skip hidden columns. This is distinct from **ghost columns** (client-only padding columns with no backing data).
+
 ## API entrypoints (TypeScript)
 
 - `mountSpreadsheet(container, config)` — Build the grid once; returns a **`SpreadsheetMountHandle`** (apply CSS patches on selection, subscribe to selection changes, undo/redo when the store supports it) for `mountFormattingToolbar(toolbarEl, handle, resolveEnabledUiCapabilities(config.enabledUiCapabilities))`.

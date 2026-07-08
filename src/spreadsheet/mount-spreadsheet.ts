@@ -20,6 +20,16 @@ import {
   persistColumnWidths,
   readPersistedColumnWidths,
 } from './column-width.ts';
+import {
+  clampToVisibleColumn,
+  firstVisibleColumnIndex,
+  isHiddenColumn,
+  isVisibleColumn,
+  lastVisibleColumnIndex,
+  stepVisibleColumn,
+  sumVisibleColumnWidths,
+  visibleColumnCount,
+} from './column-visibility.ts';
 import { cellKey } from './data-store.ts';
 import { cellMapsEqual, createSpreadsheetHistory, type HistoryCellMap } from './history.ts';
 import { jumpToEdge } from './navigation.ts';
@@ -70,7 +80,7 @@ export function mountSpreadsheet(
       columnWidths[i] = persistedWidths[i]!;
     }
   }
-  let dataSheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
+  let dataSheetTotalWidth = sumVisibleColumnWidths(columns, columnWidths);
 
   const ghostColumnsEnabled =
     dataColumnCount > 0 &&
@@ -89,7 +99,11 @@ export function mountSpreadsheet(
   let mountedSheetCellsWidth = dataSheetTotalWidth;
 
   function widthOfMountedCol1Based(i: number): number {
-    return i <= dataColumnCount ? columnWidths[i - 1]! : ghostColumnWidthPx;
+    if (i <= dataColumnCount) {
+      if (isHiddenColumn(columns, i)) return 0;
+      return columnWidths[i - 1]!;
+    }
+    return ghostColumnWidthPx;
   }
 
   function rebuildCumulativeColumnWidthsAndMountedWidth(): void {
@@ -194,6 +208,10 @@ export function mountSpreadsheet(
     options?: { remoteMarkerHue?: number },
   ): boolean {
     if (row < 1 || row > dataRowCount || col < 1 || col > dataColumnCount) return false;
+    if (isHiddenCol(col)) {
+      data.set(row, col, value);
+      return true;
+    }
     if (!cells.has(cellKey(row, col))) return false;
     data.set(row, col, value);
     hydrateCellFromStore(row, col);
@@ -526,6 +544,34 @@ export function mountSpreadsheet(
     return columns[col - 1];
   }
 
+  function isHiddenCol(col: number): boolean {
+    return isHiddenColumn(columns, col);
+  }
+
+  function isVisibleCol(col: number): boolean {
+    return isVisibleColumn(columns, col);
+  }
+
+  function firstVisibleCol(): number {
+    return firstVisibleColumnIndex(columns);
+  }
+
+  function lastVisibleCol(): number {
+    return lastVisibleColumnIndex(columns);
+  }
+
+  function clampColVisible(col: number): number {
+    return clampToVisibleColumn(columns, clampCol(col));
+  }
+
+  function stepVisibleCol(col: number, delta: number): number {
+    return stepVisibleColumn(columns, clampCol(col), delta);
+  }
+
+  active.col = clampColVisible(active.col);
+  selectArea.col = active.col;
+  selectArea.colEnd = active.col;
+
   function isReadOnlyCol(col: number): boolean {
     if (col > dataColumnCount) return true;
     return columnAt(col)?.readOnly === true;
@@ -825,6 +871,7 @@ export function mountSpreadsheet(
       for (let r = minRow; r <= maxRow; r++) {
         const parts: string[] = [];
         for (let c = minCol; c <= maxCol; c++) {
+          if (isHiddenCol(c)) continue;
           parts.push(escapeTsvField(formatCellValueForClipboard(r, c)));
         }
         lines.push(parts.join('\t'));
@@ -838,6 +885,7 @@ export function mountSpreadsheet(
     const r = clampRow(targetRow);
     const parts: string[] = [];
     for (let c = 1; c <= dataColumnCount; c++) {
+      if (isHiddenCol(c)) continue;
       parts.push(escapeTsvField(formatCellValueForClipboard(r, c)));
     }
     return parts.join('\t');
@@ -983,7 +1031,7 @@ export function mountSpreadsheet(
   viewport.setAttribute('role', 'grid');
   viewport.setAttribute('aria-label', 'Spreadsheet');
   viewport.setAttribute('aria-rowcount', String(dataRowCount + 1));
-  viewport.setAttribute('aria-colcount', String(dataColumnCount));
+  viewport.setAttribute('aria-colcount', String(visibleColumnCount(columns)));
 
   srAnnounceEl = document.createElement('div');
   srAnnounceEl.className = 'sheet-sr-live';
@@ -1249,9 +1297,13 @@ export function mountSpreadsheet(
   headerCorner.setAttribute('aria-hidden', 'true');
   headerRow.appendChild(headerCorner);
 
-  const dataColumnHeaderEls: HTMLDivElement[] = [];
+  const dataColumnHeaderEls: (HTMLDivElement | undefined)[] = [];
   const columnResizeEnabled = columnWidthPersistenceKey !== undefined;
   for (let c = 0; c < columns.length; c++) {
+    if (columns[c]!.hidden) {
+      dataColumnHeaderEls[c] = undefined;
+      continue;
+    }
     const h = document.createElement('div');
     h.className = 'sheet-column-header';
     if (columns[c]!.readOnly) h.classList.add('sheet-column-header--readonly');
@@ -1274,7 +1326,7 @@ export function mountSpreadsheet(
     }
 
     headerRow.appendChild(h);
-    dataColumnHeaderEls.push(h);
+    dataColumnHeaderEls[c] = h;
   }
 
   const gridBody = document.createElement('div');
@@ -1313,6 +1365,7 @@ export function mountSpreadsheet(
     const ghost = isGhostRow(row);
 
     for (let col = 1; col <= dataColumnCount; col++) {
+      if (isHiddenCol(col)) continue;
       const cell = document.createElement('div');
       cell.className = 'sheet-cell';
       cell.dataset.row = String(row);
@@ -1493,7 +1546,7 @@ export function mountSpreadsheet(
    * gesture settles.
    */
   function applyColumnLayout(opts?: { persist?: boolean }): void {
-    dataSheetTotalWidth = columnWidths.reduce((a, b) => a + b, 0);
+    dataSheetTotalWidth = sumVisibleColumnWidths(columns, columnWidths);
     rebuildCumulativeColumnWidthsAndMountedWidth();
     gridInner.style.width = `${rowHeaderWidthPx + mountedSheetCellsWidth}px`;
     for (let c = 0; c < dataColumnCount; c++) {
@@ -1531,7 +1584,7 @@ export function mountSpreadsheet(
 
   /** Fit a column's width to the widest rendered content (header + data cells). */
   function autofitColumn(col: number): void {
-    if (col < 1 || col > dataColumnCount) return;
+    if (col < 1 || col > dataColumnCount || isHiddenCol(col)) return;
     let max = 0;
     const headerLabel = dataColumnHeaderEls[col - 1]?.querySelector<HTMLElement>(
       '.sheet-column-header-label',
@@ -1619,6 +1672,7 @@ export function mountSpreadsheet(
     };
 
     for (const h of dataColumnHeaderEls) {
+      if (!h) continue;
       const grip = h.querySelector<HTMLElement>('.sheet-column-resize-handle');
       if (!grip) continue;
       grip.addEventListener('pointerdown', onGripPointerDown);
@@ -2157,7 +2211,7 @@ export function mountSpreadsheet(
 
   function setActive(row: number, col: number): void {
     row = clampRow(row);
-    col = clampCol(col);
+    col = clampColVisible(col);
 
     if (active.row === row && active.col === col && !selectArea.active) {
       queueMicrotask(() => {
@@ -2236,19 +2290,22 @@ export function mountSpreadsheet(
     editMode = false;
     cells.get(cellKey(active.row, active.col))?.classList.remove('sheet-cell-active', 'sheet-cell-editing');
     const anchorRow = extend && selectArea.active ? selectArea.row : row;
-    active = { row, col: 1 };
-    const next = cells.get(cellKey(row, 1));
+    active = { row, col: firstVisibleCol() };
+    const next = cells.get(cellKey(row, firstVisibleCol()));
     next?.classList.add('sheet-cell-active');
     const inp = next ? getCellEditor(next) : null;
     if (inp) {
-      const stored = data.get(row, 1);
+      const stored = data.get(row, firstVisibleCol());
       inp.value = stored !== undefined ? String(stored) : '';
     }
     selectArea.row = anchorRow;
-    selectArea.col = 1;
+    selectArea.col = firstVisibleCol();
     selectArea.rowEnd = row;
-    selectArea.colEnd = dataColumnCount;
-    selectArea.active = dataColumnCount > 1 || anchorRow !== row;
+    selectArea.colEnd = lastVisibleCol();
+    selectArea.active =
+      dataRowCount > 1 ||
+      firstVisibleCol() !== lastVisibleCol() ||
+      anchorRow !== row;
     syncSelectionHighlight();
     if (selectArea.active) {
       enterRangeSelectionUi();
@@ -2302,7 +2359,12 @@ export function mountSpreadsheet(
       persistActiveInput();
       const text = buildRowPlainText(row);
       void navigator.clipboard?.writeText(text);
-      setCopyMarquee({ minRow: row, maxRow: row, minCol: 1, maxCol: dataColumnCount });
+      setCopyMarquee({
+        minRow: row,
+        maxRow: row,
+        minCol: firstVisibleCol(),
+        maxCol: lastVisibleCol(),
+      });
     },
   });
 
@@ -2547,11 +2609,15 @@ export function mountSpreadsheet(
 
   function jumpCol(r: number, c: number, directionRight: boolean): number {
     const row = clampRow(r);
+    const start = clampColVisible(c);
+    const first = firstVisibleCol();
+    const last = lastVisibleCol();
+    if (first > last) return start;
     return jumpToEdge(
-      clampCol(c),
-      directionRight ? dataColumnCount : 1,
+      start,
+      directionRight ? last : first,
       directionRight ? 1 : -1,
-      (col) => isOccupied(row, col),
+      (col) => isVisibleCol(col) && isOccupied(row, col),
     );
   }
 
@@ -2690,13 +2756,14 @@ export function mountSpreadsheet(
       e.preventDefault();
       e.stopPropagation();
       tabAnchorCol = null;
-      if (dataRowCount > 0 && dataColumnCount > 0) {
+      if (dataRowCount > 0 && visibleColumnCount(columns) > 0) {
         persistActiveInput();
         selectArea.row = 1;
-        selectArea.col = 1;
+        selectArea.col = firstVisibleCol();
         selectArea.rowEnd = dataRowCount;
-        selectArea.colEnd = dataColumnCount;
-        selectArea.active = dataRowCount > 1 || dataColumnCount > 1;
+        selectArea.colEnd = lastVisibleCol();
+        selectArea.active =
+          dataRowCount > 1 || firstVisibleCol() !== lastVisibleCol();
         syncSelectionHighlight();
         if (selectArea.active) enterRangeSelectionUi();
       }
@@ -2733,7 +2800,7 @@ export function mountSpreadsheet(
     if (e.key === 'Enter') {
       e.preventDefault();
       hideSuggestions();
-      const targetCol = tabAnchorCol ?? col;
+      const targetCol = clampColVisible(tabAnchorCol ?? col);
       tabAnchorCol = null;
       const dir = e.shiftKey ? -1 : 1;
       setActive(row + dir, targetCol);
@@ -2743,14 +2810,14 @@ export function mountSpreadsheet(
     if (e.key === 'Home' && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       tabAnchorCol = null;
-      setActive(sheetMod ? 1 : row, 1);
+      setActive(sheetMod ? 1 : row, firstVisibleCol());
       return;
     }
 
     if (e.key === 'End' && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       tabAnchorCol = null;
-      setActive(sheetMod ? dataRowCount : row, dataColumnCount);
+      setActive(sheetMod ? dataRowCount : row, lastVisibleCol());
       return;
     }
 
@@ -2909,8 +2976,8 @@ export function mountSpreadsheet(
       selectArea.active = true;
       if (e.key === 'ArrowUp') selectArea.rowEnd = clampRow(selectArea.rowEnd - 1);
       else if (e.key === 'ArrowDown') selectArea.rowEnd = clampRow(selectArea.rowEnd + 1);
-      else if (e.key === 'ArrowLeft') selectArea.colEnd = clampCol(selectArea.colEnd - 1);
-      else if (e.key === 'ArrowRight') selectArea.colEnd = clampCol(selectArea.colEnd + 1);
+      else if (e.key === 'ArrowLeft') selectArea.colEnd = stepVisibleCol(selectArea.colEnd, -1);
+      else if (e.key === 'ArrowRight') selectArea.colEnd = stepVisibleCol(selectArea.colEnd, 1);
 
       const minRow = Math.min(selectArea.row, selectArea.rowEnd);
       const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
@@ -3048,6 +3115,7 @@ export function mountSpreadsheet(
         : ((activeFlat - step) % total + total) % total;
       const row = Math.floor(flat / dataColumnCount) + 1;
       const col = (flat % dataColumnCount) + 1;
+      if (isHiddenCol(col)) continue;
       const colDef = columnAt(col);
       const raw = data.get(row, col);
       const text = cellPlainTextForSearch(colDef, raw).toLowerCase();

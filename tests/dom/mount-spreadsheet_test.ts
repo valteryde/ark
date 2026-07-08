@@ -270,3 +270,24 @@ domTest('read-only column cells are marked and not style targets', (env) => {
   assertEquals(handle.canUndo(), false);
   assertEquals(handle.getCellStyleAt(1, 1), undefined);
 });
+
+domTest('hidden columns are omitted from the grid but kept in the store', (env) => {
+  const container = env.makeContainer();
+  const cols: SpreadsheetColumn[] = [
+    { id: 'id', header: 'ID', widthPx: 72, readOnly: true, hidden: true },
+    { id: 'name', header: 'Name', widthPx: 160 },
+  ];
+  const cfg = config({ '1:1': 42, '1:2': 'Ada' }, { columns: cols });
+  const handle = mountSpreadsheet(container, cfg);
+
+  const headers = container.querySelectorAll('.sheet-column-header-label');
+  assertEquals([...headers].map((h) => h.textContent), ['Name']);
+
+  const cells = container.querySelectorAll('.sheet-cell');
+  assertEquals(cells.length, 4 * 1);
+
+  assertEquals(cfg.data.get(1, 1), 42);
+  assertEquals(handle.applyExternalValue(1, 1, 99), true);
+  assertEquals(cfg.data.get(1, 1), 99);
+  assertEquals(container.querySelector('.sheet-cell[data-col="1"]'), null);
+});
