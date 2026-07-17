@@ -240,16 +240,26 @@ domTest('Cmd+C copies the active cell when the viewport has focus (navigation mo
 
   const written: string[] = [];
   const prevClipboard = globalThis.navigator.clipboard;
+  const prevExecCommand = env.document.execCommand;
   Object.defineProperty(globalThis.navigator, 'clipboard', {
     configurable: true,
     value: {
       writeText: (text: string) => {
-        written.push(text);
+        written.push(`api:${text}`);
         return Promise.resolve();
       },
       readText: () => Promise.resolve(''),
     },
   });
+  // Prefer the sync execCommand path (needed in Chrome iframes).
+  env.document.execCommand = (commandId: string) => {
+    if (commandId === 'copy') {
+      const ta = env.document.querySelector<HTMLTextAreaElement>('textarea[data-ark-clipboard="1"]');
+      if (ta) written.push(ta.value);
+      return true;
+    }
+    return false;
+  };
   try {
     viewport.focus();
     viewport.dispatchEvent(
@@ -262,6 +272,8 @@ domTest('Cmd+C copies the active cell when the viewport has focus (navigation mo
     );
     assertEquals(written, ['Alpha']);
   } finally {
+    if (prevExecCommand) env.document.execCommand = prevExecCommand;
+    else delete (env.document as { execCommand?: unknown }).execCommand;
     Object.defineProperty(globalThis.navigator, 'clipboard', {
       configurable: true,
       value: prevClipboard,
@@ -302,6 +314,61 @@ domTest('Cmd+V pastes into the active cell when the viewport has focus (navigati
       'Pasted value',
     );
   } finally {
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: prevClipboard,
+    });
+  }
+});
+
+domTest('Cmd+C/Cmd+V use the in-app clipboard when system clipboard access is denied', async (env) => {
+  const container = env.makeContainer();
+  const cfg = config({ '1:1': 'Alpha' }, { initialSelection: { row: 1, col: 1 } });
+  mountSpreadsheet(container, cfg);
+  const viewport = container.querySelector('.sheet-viewport') as HTMLElement;
+
+  const prevClipboard = globalThis.navigator.clipboard;
+  const prevExecCommand = env.document.execCommand;
+  Object.defineProperty(globalThis.navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: () => Promise.reject(new Error('denied')),
+      readText: () => Promise.reject(new Error('denied')),
+      read: () => Promise.reject(new Error('denied')),
+    },
+  });
+  env.document.execCommand = () => false;
+  try {
+    viewport.focus();
+    viewport.dispatchEvent(
+      new env.window.KeyboardEvent('keydown', {
+        key: 'c',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    viewport.dispatchEvent(
+      new env.window.KeyboardEvent('keydown', {
+        key: 'ArrowDown',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    viewport.dispatchEvent(
+      new env.window.KeyboardEvent('keydown', {
+        key: 'v',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assertEquals(cfg.data.get(2, 1), 'Alpha');
+  } finally {
+    if (prevExecCommand) env.document.execCommand = prevExecCommand;
+    else delete (env.document as { execCommand?: unknown }).execCommand;
     Object.defineProperty(globalThis.navigator, 'clipboard', {
       configurable: true,
       value: prevClipboard,

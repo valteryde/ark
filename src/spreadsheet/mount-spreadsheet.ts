@@ -12,8 +12,10 @@ import {
 } from './cell-value.ts';
 import {
   escapeTsvField,
+  getInternalClipboardPlain,
   parseClipboardRows,
   parseHtmlClipboardTable,
+  setInternalClipboardPlain,
 } from './clipboard.ts';
 import {
   clampColumnWidth,
@@ -1160,7 +1162,9 @@ export function mountSpreadsheet(
     if (shouldLetInputHandleCopy(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
-    e.clipboardData?.setData('text/plain', buildCopyPlainText());
+    const text = buildCopyPlainText();
+    e.clipboardData?.setData('text/plain', text);
+    setInternalClipboardPlain(text);
     setCopyMarqueeFromSelection();
   }
 
@@ -1174,6 +1178,7 @@ export function mountSpreadsheet(
       const fromHtml = parseHtmlClipboardTable(html);
       if (fromHtml) payload = fromHtml;
     }
+    if (payload === '') payload = getInternalClipboardPlain();
     if (payload === '') return;
     e.preventDefault();
     e.stopPropagation();
@@ -1225,28 +1230,50 @@ export function mountSpreadsheet(
     e.stopPropagation();
     const text = buildCopyPlainText();
     e.clipboardData?.setData('text/plain', text);
+    setInternalClipboardPlain(text);
     setCopyMarqueeFromSelection();
     clearWritableCellsInActiveRange();
     syncSelectionHighlight();
   }
 
   function writeClipboardText(text: string): void {
-    if (navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(text).catch(() => {});
-      return;
-    }
+    // Always keep an in-app buffer so copy/paste still works when the system
+    // clipboard is blocked (permission denied, iframe policy, etc.).
+    setInternalClipboardPlain(text);
+    // Prefer a synchronous execCommand copy while we still have the user gesture.
+    // Chrome often exposes clipboard.writeText but rejects it (cross-origin iframes
+    // without allow="clipboard-write", Permissions-Policy, etc.); Firefox is more
+    // permissive. Falling back after a rejected Promise is too late — the gesture
+    // is already gone — so try the sync path first.
+    const previouslyFocused = document.activeElement as HTMLElement | null;
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.setAttribute('readonly', 'true');
+    ta.setAttribute('aria-hidden', 'true');
+    ta.dataset.arkClipboard = '1';
     ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
     document.body.appendChild(ta);
+    ta.focus({ preventScroll: true });
     ta.select();
+    ta.setSelectionRange(0, text.length);
+    let copied = false;
     try {
-      document.execCommand('copy');
+      copied = document.execCommand('copy');
     } catch {
       /* unsupported */
     }
     ta.remove();
+    if (previouslyFocused && previouslyFocused.isConnected) {
+      try {
+        previouslyFocused.focus({ preventScroll: true });
+      } catch {
+        previouslyFocused.focus();
+      }
+    }
+    if (copied) return;
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(text).catch(() => {});
+    }
   }
 
   async function readClipboardPayloadForPaste(): Promise<string> {
@@ -1273,12 +1300,13 @@ export function mountSpreadsheet(
     }
     if (clip?.readText) {
       try {
-        return await clip.readText();
+        const plain = await clip.readText();
+        if (plain) return plain;
       } catch {
         /* unsupported or denied */
       }
     }
-    return '';
+    return getInternalClipboardPlain();
   }
 
   const gridInner = document.createElement('div');
@@ -2357,8 +2385,7 @@ export function mountSpreadsheet(
     onSelectRow: (row) => selectSheetRow(row),
     onCopyRow: (row) => {
       persistActiveInput();
-      const text = buildRowPlainText(row);
-      void navigator.clipboard?.writeText(text);
+      writeClipboardText(buildRowPlainText(row));
       setCopyMarquee({
         minRow: row,
         maxRow: row,

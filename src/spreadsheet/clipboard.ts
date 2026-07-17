@@ -1,5 +1,22 @@
 /** TSV/HTML clipboard parsing + serialization helpers (pure). */
 
+/**
+ * In-app clipboard used when the system clipboard is unavailable (permission
+ * denied, cross-origin iframe without clipboard allow, etc.). Survives sheet
+ * remounts within the same page. Prefer the system clipboard when it works.
+ */
+let internalClipboardPlain = '';
+
+/** Store plain text for in-app paste fallback (always called on copy/cut). */
+export function setInternalClipboardPlain(text: string): void {
+  internalClipboardPlain = text;
+}
+
+/** Last in-app copy/cut payload, or `''` if none. */
+export function getInternalClipboardPlain(): string {
+  return internalClipboardPlain;
+}
+
 /** Quote a field for TSV when it contains tab/newline/quote characters. */
 export function escapeTsvField(value: string): string {
   if (/[\t\n\r"]/.test(value)) {
