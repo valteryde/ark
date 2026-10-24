@@ -17,6 +17,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -1490,6 +1494,10 @@ a.app-sheet-tabs__tab {
   background: #ffffff;
   box-shadow: 0 4px 20px rgb(0 0 0 / 6%);
   color: var(--app-text, #111111);
+}
+
+.app-partner-error[hidden] {
+  display: none !important;
 }
 
 .app-partner-error__icon {
