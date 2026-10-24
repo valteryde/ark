@@ -333,3 +333,30 @@ def test_cross_sheet_broadcast_isolation(client):
         msg = ws_b.receive_json()
         assert msg["sheetPath"] == "sheet-b"
         assert msg["value"] == "public"
+
+
+def test_ws_cross_sheet_authorization_rejected(client, monkeypatch):
+    """When partner auth is enabled, sending messages for an unauthorized sheet must be rejected."""
+    async def mock_verify(token, path=None):
+        return path == "sheet-allowed"
+
+    monkeypatch.setattr("app.main.verify_browser_token", mock_verify)
+
+    with client.websocket_connect("/ws/ark?path=sheet-allowed") as ws:
+        # Sending a commit for sheet-forbidden should be rejected with unauthorized
+        ws.send_json(
+            {
+                "type": "cell.value_committed",
+                "row": 1,
+                "col": 1,
+                "value": "hack",
+                "sheetPath": "sheet-forbidden",
+            }
+        )
+        msg = ws.receive_json()
+        assert msg == {"error": "unauthorized", "sheetPath": "sheet-forbidden"}
+
+        # Subscribing to sheet-forbidden should also be rejected
+        ws.send_json({"type": "sheet.subscribe", "sheetPath": "sheet-forbidden"})
+        msg2 = ws.receive_json()
+        assert msg2 == {"error": "unauthorized", "sheetPath": "sheet-forbidden"}

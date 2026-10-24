@@ -351,10 +351,17 @@ class SheetStore:
         path = normalize_sheet_path(path)
         with self._lock:
             sheet = self._conn.execute(
-                "SELECT id, revision, row_count FROM sheets WHERE path = ?", (path,)
+                "SELECT id, revision, row_count, columns FROM sheets WHERE path = ?", (path,)
             ).fetchone()
             if sheet is None:
                 raise SheetValidationError(f"sheet not found: {path}")
+            columns = _parse_json(sheet["columns"])
+            if isinstance(columns, list) and 1 <= col <= len(columns):
+                col_def = columns[col - 1]
+                if isinstance(col_def, dict) and col_def.get("readOnly") is True:
+                    raise SheetValidationError(
+                        f"column '{col_def.get('id', col)}' is read-only"
+                    )
             revision = sheet["revision"] + 1
             if value == "":
                 self._conn.execute(

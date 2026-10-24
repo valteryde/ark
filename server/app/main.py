@@ -253,10 +253,12 @@ async def collab_ws(websocket: WebSocket) -> None:
         await websocket.close(code=4403)
         return
     await hub.connect(websocket)
+    authorized_paths: set[str] = set()
     if sheet_param:
         try:
             norm_param = normalize_sheet_path(sheet_param)
             hub.subscribe(websocket, norm_param)
+            authorized_paths.add(norm_param)
         except SheetValidationError:
             pass
     try:
@@ -274,7 +276,7 @@ async def collab_ws(websocket: WebSocket) -> None:
             if msg_type in _FORBIDDEN_WS_TYPES:
                 await websocket.send_json({"error": "forbidden_message_type"})
                 continue
-            # Resolve sheet path and auto-subscribe for room-scoped broadcast.
+            # Resolve sheet path and verify authorization before subscribing
             sheet_path: str | None = None
             sp_raw = data.get("sheetPath")
             if isinstance(sp_raw, str) and sp_raw.strip():
@@ -282,11 +284,19 @@ async def collab_ws(websocket: WebSocket) -> None:
                     sheet_path = normalize_sheet_path(sp_raw)
                 except SheetValidationError:
                     continue
+
+            if sheet_path:
+                if sheet_path not in authorized_paths:
+                    if not await _verify_browser_token_safe(token, sheet_path):
+                        await websocket.send_json(
+                            {"error": "unauthorized", "sheetPath": sheet_path}
+                        )
+                        continue
+                    authorized_paths.add(sheet_path)
                 hub.subscribe(websocket, sheet_path)
 
             if msg_type in ("sheet.subscribe", "subscribe"):
                 if sheet_path:
-                    hub.subscribe(websocket, sheet_path)
                     await websocket.send_json({"type": "subscribed", "sheetPath": sheet_path})
                 continue
 

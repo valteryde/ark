@@ -274,3 +274,25 @@ def test_path_normalization(fresh_store):
     assert payload["path"] == "clients/21"
     _, created_again = fresh_store.get_or_create_sheet("clients/21")
     assert created_again is False
+
+
+def test_apply_cell_rejects_readonly_columns(fresh_store):
+    fresh_store.replace_sheet(
+        "grades",
+        {
+            "columns": [
+                {"id": "student_id", "header": "Student ID", "widthPx": 120, "readOnly": True},
+                {"id": "grade", "header": "Grade", "widthPx": 80},
+            ],
+            "rows": [{"student_id": "S101", "grade": "B"}],
+        },
+    )
+    # Writing to read-only column 1 must raise SheetValidationError
+    with pytest.raises(SheetValidationError, match="column 'student_id' is read-only"):
+        fresh_store.apply_cell("grades", 1, 1, "Hacked")
+
+    # Writing to writable column 2 must succeed
+    fresh_store.apply_cell("grades", 1, 2, "A")
+    payload = fresh_store.get_sheet_payload("grades")
+    assert payload["rows"][0]["student_id"] == "S101"
+    assert payload["rows"][0]["grade"] == "A"

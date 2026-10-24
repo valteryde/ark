@@ -1475,29 +1475,69 @@ a.app-sheet-tabs__tab {
   outline: none;
 }
 
-/* Partner sheet load error */
+/* Partner sheet load error / Access Denied screen */
 .app-partner-error {
-  margin: 0 1.25rem 0.75rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--app-border);
-  border-radius: 6px;
-  background: #fff8f0;
-  color: var(--app-text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  margin: 4rem auto;
+  max-width: 460px;
+  padding: 2.5rem 2rem;
+  border: 1px solid var(--app-border, #e5e5e5);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 4px 20px rgb(0 0 0 / 6%);
+  color: var(--app-text, #111111);
 }
 
-.app-partner-error__text {
+.app-partner-error__icon {
+  font-size: 2.5rem;
+  color: #6b7280;
+  margin-bottom: 1rem;
+}
+
+.app-partner-error__icon--danger {
+  color: #dc2626;
+}
+
+.app-partner-error__icon--warning {
+  color: #d97706;
+}
+
+.app-partner-error__title {
   margin: 0 0 0.5rem;
-  font-weight: 500;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--app-text, #111111);
 }
 
-.app-partner-error__hint {
-  margin: 0 0 0.65rem;
-  font-size: 0.8125rem;
-  color: var(--app-text-muted);
-  line-height: 1.45;
-}
-
-.app-partner-error__demo-link {
+.app-partner-error__message {
+  margin: 0 0 1.5rem;
   font-size: 0.875rem;
-  color: var(--app-text);
+  color: var(--app-text-muted, #6b7280);
+  line-height: 1.5;
+  max-width: 380px;
 }
+
+.app-partner-error__retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--app-border, #d1d5db);
+  background: #ffffff;
+  color: var(--app-text, #111111);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.app-partner-error__retry-btn:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+

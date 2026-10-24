@@ -16,9 +16,6 @@ import {
   type PartnerNotifyDataStore,
 } from './partner/wrap-data-store.ts';
 import {
-  createRoadmapArchivePreset,
-  createRoadmapBacklogPreset,
-  createRoadmapPreset,
   mountFormattingToolbar,
   mountSpreadsheet,
   resolveEnabledUiCapabilities,
@@ -61,15 +58,6 @@ const sheetPanel: HTMLElement = sheetPanelEl;
 
 /** Disconnect ghost-column ResizeObserver before clearing #sheet-mount. */
 let disconnectSheetLayout: (() => void) | null = null;
-
-const SHEET_VIEWS = [
-  { id: 'quarterly', label: 'Quarterly plan', create: createRoadmapPreset },
-  { id: 'backlog', label: 'Backlog', create: createRoadmapBacklogPreset },
-  { id: 'archive', label: 'Archive', create: createRoadmapArchivePreset },
-] as const;
-
-let tabButtons: HTMLElement[] = [];
-let activeViewIndex = -1;
 
 function hidePartnerError(): void {
   if (partnerErrorEl) {
@@ -154,26 +142,60 @@ function wireAboutToggle(): void {
 function showPartnerError(err: unknown): void {
   if (!partnerErrorEl) return;
   partnerErrorEl.replaceChildren();
-  const p = document.createElement('p');
-  p.className = 'app-partner-error__text';
-  p.textContent =
-    err instanceof PartnerFetchError
-      ? err.message
-      : err instanceof Error
-        ? err.message
-        : 'Could not load partner app.';
-  partnerErrorEl.appendChild(p);
-  const hint = document.createElement('p');
-  hint.className = 'app-partner-error__hint';
-  hint.textContent =
-    'Open this UI at a sheet URL (e.g. /clients) — Ark creates the sheet automatically on first visit. The path must be allowed by ARK_UI_ROUTES on the Ark server (exact segment or prefix/*) so the SPA is served. If ARK_PARTNER_BASE_URL is set, requests need a valid ark_token.';
-  partnerErrorEl.appendChild(hint);
-  const a = document.createElement('a');
-  a.className = 'app-partner-error__demo-link';
-  a.href = `${window.location.pathname}?demo=1`;
-  a.textContent = 'Run demo mode (local presets, no partner)';
-  partnerErrorEl.appendChild(a);
+
+  let iconClass = 'ph-warning-circle';
+  let iconModifier = '';
+  let title = 'Unable to Load Spreadsheet';
+  let message =
+    'An unexpected error occurred while loading the spreadsheet. Please verify your connection or try again.';
+
+  if (err instanceof PartnerFetchError) {
+    if (err.status === 401) {
+      iconClass = 'ph-lock-key';
+      iconModifier = 'app-partner-error__icon--warning';
+      title = 'Authentication Required';
+      message =
+        'Your session has expired or you are not authenticated. Please log in through your institution’s portal to access this sheet.';
+    } else if (err.status === 403) {
+      iconClass = 'ph-shield-warning';
+      iconModifier = 'app-partner-error__icon--danger';
+      title = 'Access Denied';
+      message =
+        'You do not have permission to access this spreadsheet. If you require access, please contact your administrator or instructor.';
+    } else if (err.status === 404) {
+      iconClass = 'ph-file-dashed';
+      title = 'Sheet Not Found';
+      message = 'The requested spreadsheet does not exist or has been removed.';
+    } else if (err.status === 502 || err.status === 503) {
+      iconClass = 'ph-plugs-connected';
+      title = 'Service Unavailable';
+      message = 'The spreadsheet service is temporarily unavailable. Please try again shortly.';
+    }
+  }
+
+  const icon = document.createElement('i');
+  icon.className = `ph ${iconClass} app-partner-error__icon ${iconModifier}`.trim();
+  icon.setAttribute('aria-hidden', 'true');
+
+  const titleEl = document.createElement('h2');
+  titleEl.className = 'app-partner-error__title';
+  titleEl.textContent = title;
+
+  const messageEl = document.createElement('p');
+  messageEl.className = 'app-partner-error__message';
+  messageEl.textContent = message;
+
+  const retryBtn = document.createElement('button');
+  retryBtn.type = 'button';
+  retryBtn.className = 'app-partner-error__retry-btn';
+  retryBtn.innerHTML = '<i class="ph ph-arrow-clockwise" aria-hidden="true"></i> Try Again';
+  retryBtn.addEventListener('click', () => {
+    window.location.reload();
+  });
+
+  partnerErrorEl.append(icon, titleEl, messageEl, retryBtn);
   partnerErrorEl.hidden = false;
+
   currentSheetHandle = null;
   disconnectSheetLayout?.();
   disconnectSheetLayout = null;
@@ -185,7 +207,7 @@ function showPartnerError(err: unknown): void {
   setAboutDescription(null);
   clearConnectionChip();
   sheetTabList.replaceChildren();
-  tabButtons = [];
+  sheetTabList.hidden = true;
 }
 
 function runFindInSheet(
@@ -276,106 +298,7 @@ function mountSheetFindChrome(): void {
   );
 }
 
-function wireTabKeyboard(onSelect: (index: number) => void): void {
-  sheetTabList.addEventListener('keydown', (e) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') {
-      return;
-    }
-    const current = tabButtons.findIndex((el) => el.classList.contains('app-sheet-tabs__tab--active'));
-    if (current < 0) return;
 
-    let next = current;
-    if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = tabButtons.length - 1;
-    else if (e.key === 'ArrowLeft') next = current <= 0 ? tabButtons.length - 1 : current - 1;
-    else if (e.key === 'ArrowRight') next = current >= tabButtons.length - 1 ? 0 : current + 1;
-
-    if (next !== current) {
-      e.preventDefault();
-      onSelect(next);
-      tabButtons[next]?.focus();
-    }
-  });
-}
-
-function setTabVisuals(index: number): void {
-  tabButtons.forEach((el, i) => {
-    const on = i === index;
-    el.classList.toggle('app-sheet-tabs__tab--active', on);
-    el.setAttribute('aria-selected', on ? 'true' : 'false');
-    el.tabIndex = on ? 0 : -1;
-    if (on) {
-      sheetPanel.setAttribute('aria-labelledby', el.id);
-    }
-  });
-}
-
-function initDemoMode(): void {
-  hidePartnerError();
-  if (chromeActionsEl) {
-    mountPartnerChromeActions(chromeActionsEl, undefined);
-  }
-  setAboutDescription(null);
-  clearConnectionChip();
-  sheetTabList.hidden = false;
-  sheetPanel.setAttribute('role', 'tabpanel');
-  if (chromeTitleEl) {
-    chromeTitleEl.textContent = 'Product Roadmap 2026';
-  }
-  document.title = 'Product Roadmap 2026 — Ark';
-
-  sheetTabList.replaceChildren();
-  tabButtons = SHEET_VIEWS.map((v, i) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'app-sheet-tabs__tab';
-    btn.id = `sheet-tab-${v.id}`;
-    btn.role = 'tab';
-    btn.setAttribute('aria-controls', 'sheet-panel');
-    btn.dataset.sheetView = v.id;
-    btn.textContent = v.label;
-    btn.addEventListener('click', () => setActiveDemoTab(i));
-    sheetTabList.appendChild(btn);
-    return btn;
-  });
-
-  const addBtn = document.createElement('button');
-  addBtn.type = 'button';
-  addBtn.className = 'app-sheet-tabs__tab app-sheet-tabs__tab--add app-sheet-tabs__tab--with-icon';
-  addBtn.title = 'Coming soon';
-  addBtn.innerHTML = '<i class="ph ph-plus" aria-hidden="true"></i> Add new';
-  addBtn.disabled = true;
-  sheetTabList.appendChild(addBtn);
-
-  wireTabKeyboard(setActiveDemoTab);
-
-  function remountDemoSheet(viewIndex: number): void {
-    const view = SHEET_VIEWS[viewIndex];
-    if (!view) return;
-    const config = view.create();
-    disconnectSheetLayout?.();
-    disconnectSheetLayout = null;
-    sheetHost.replaceChildren();
-    const sheet = mountSpreadsheet(sheetHost, config);
-    currentSheetHandle = sheet;
-    disconnectSheetLayout = sheet.disconnectLayout ?? null;
-    toolbarHost.replaceChildren();
-    mountFormattingToolbar(
-      toolbarHost,
-      sheet,
-      resolveEnabledUiCapabilities(config.enabledUiCapabilities),
-    );
-  }
-
-  function setActiveDemoTab(index: number): void {
-    if (index === activeViewIndex) return;
-    activeViewIndex = index;
-    setTabVisuals(index);
-    remountDemoSheet(index);
-  }
-
-  setActiveDemoTab(0);
-}
 
 /** Path after leading slash, segments joined (partner routing key). */
 function routingPathFromLocation(): string {
@@ -387,7 +310,6 @@ function initPartnerMode(): void {
   hidePartnerError();
   sheetTabList.hidden = true;
   sheetTabList.replaceChildren();
-  tabButtons = [];
   sheetPanel.setAttribute('role', 'region');
   sheetPanel.setAttribute('aria-label', 'Spreadsheet');
   sheetPanel.removeAttribute('aria-labelledby');
@@ -465,6 +387,15 @@ function initPartnerMode(): void {
     localClientId: collabIdentity.clientId,
     onConnectionState(state) {
       renderConnectionChip(state);
+    },
+    onAuthError(code) {
+      collab.close();
+      showPartnerError(
+        new PartnerFetchError(
+          'Access denied',
+          code === 4403 ? 403 : 401,
+        ),
+      );
     },
     onRemoteCommitted(row, col, value, meta) {
       if (!liveHandle || !liveStore) return;
@@ -724,7 +655,7 @@ function initPartnerMode(): void {
       collab.close();
       showPartnerError(
         new PartnerFetchError(
-          'No sheet in the URL. Open a path such as /clients — one spreadsheet per URL; there is no app-wide navigation.',
+          'No spreadsheet specified.',
           404,
         ),
       );
@@ -739,7 +670,7 @@ function initPartnerMode(): void {
       loadedRoutingPath = null;
       showPartnerError(
         new PartnerFetchError(
-          'No sheet in the URL. Open a path such as /clients — one spreadsheet per URL.',
+          'No spreadsheet specified.',
           404,
         ),
       );
@@ -754,11 +685,6 @@ function initPartnerMode(): void {
 function init(): void {
   mountSheetFindChrome();
   wireAboutToggle();
-  const demo = new URLSearchParams(window.location.search).has('demo');
-  if (demo) {
-    initDemoMode();
-    return;
-  }
 
   try {
     initPartnerMode();

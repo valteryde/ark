@@ -8,13 +8,15 @@ import { normalizeSheetTruthPayload, type SheetTruthNormalized } from './map-she
 import { PARTNER_TOKEN_PARAM, getPartnerToken } from './partner-token.ts';
 import type { SpreadsheetColumn } from '../spreadsheet/types.ts';
 
-export function collabWsUrl(): string {
+export function collabWsUrl(sheetPath?: string | null): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const base = `${proto}//${window.location.host}/ws/ark`;
   const token = getPartnerToken();
-  if (!token) return base;
-  const q = new URLSearchParams({ [PARTNER_TOKEN_PARAM]: token });
-  return `${base}?${q}`;
+  const q = new URLSearchParams();
+  if (token) q.set(PARTNER_TOKEN_PARAM, token);
+  if (sheetPath) q.set('path', sheetPath);
+  const qs = q.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 function parseCommitted(
@@ -172,6 +174,8 @@ export function openCollabWs(opts: {
   onRemoteRowDeleted?: (row: number) => void;
   /** Connection lifecycle; fired on every state transition (including initial `connecting`). */
   onConnectionState?: (state: CollabConnectionState) => void;
+  /** Authentication or authorization failed (e.g. 4401/4403 or server unauthorized error). */
+  onAuthError?: (code: number) => void;
 }): CollabConnection {
   let ws: WebSocket | null = null;
   let state: CollabConnectionState = 'connecting';
@@ -195,6 +199,11 @@ export function openCollabWs(opts: {
     }
     if (!data || typeof data !== 'object') return;
     const rec = data as Record<string, unknown>;
+
+    if (rec.error === 'unauthorized') {
+      opts.onAuthError?.(4401);
+      return;
+    }
 
     const persistFailed = parsePersistFailed(rec);
     if (persistFailed) {
@@ -284,14 +293,14 @@ export function openCollabWs(opts: {
   function connect(): void {
     if (intentionalClose) return;
     setState('connecting');
-    const sock = new WebSocket(collabWsUrl());
+    const active = opts.getActiveSheetPath();
+    const sock = new WebSocket(collabWsUrl(active));
     ws = sock;
 
     sock.addEventListener('open', () => {
       if (sock !== ws) return;
       reconnectAttempts = 0;
       setState('open');
-      const active = opts.getActiveSheetPath();
       if (active) {
         try {
           sock.send(JSON.stringify({ type: 'sheet.subscribe', sheetPath: active }));
@@ -312,11 +321,15 @@ export function openCollabWs(opts: {
 
     sock.addEventListener('message', handleMessage);
 
-    sock.addEventListener('close', () => {
+    sock.addEventListener('close', (event: CloseEvent) => {
       if (sock !== ws) return;
       ws = null;
       if (intentionalClose) return;
       setState('disconnected');
+      if (event.code === 4401 || event.code === 4403) {
+        opts.onAuthError?.(event.code);
+        return;
+      }
       reconnectAttempts += 1;
       const delay = computeBackoffMs(reconnectAttempts);
       reconnectTimer = setTimeout(() => {
