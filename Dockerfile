@@ -21,4 +21,8 @@ ENV STATIC_ROOT=/app/dist
 # Listen port (override at runtime, e.g. docker run -e PORT=8080 -p 8080:8080)
 ENV PORT=8000
 EXPOSE 8000
+# Run as non-root for least-privilege security.
+RUN useradd --system --no-create-home --uid 10001 arkuser && \
+    mkdir -p /data && chown arkuser:arkuser /data
+USER arkuser
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --app-dir server"]

@@ -58,6 +58,9 @@ _BLANK_COLUMN_HEADERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
 _BLANK_ROW_COUNT = 100
 _BLANK_COLUMN_WIDTH_PX = 160
 
+MAX_ROWS = 50_000
+MAX_COLS = 500
+
 
 def blank_sheet_columns() -> list[dict[str, Any]]:
     return [
@@ -103,6 +106,8 @@ class SheetValidationError(ValueError):
 
 def normalize_sheet_path(path: str) -> str:
     segments = [s for s in path.split("/") if s]
+    if any(s in (".", "..") for s in segments):
+        raise SheetValidationError("path traversal sequences are not permitted")
     return "/".join(segments)
 
 
@@ -117,6 +122,8 @@ def validate_cell_value(value: Any) -> str | int | float:
 def _validate_columns(columns: Any) -> list[dict[str, Any]]:
     if not isinstance(columns, list) or not columns:
         raise SheetValidationError("columns must be a non-empty array")
+    if len(columns) > MAX_COLS:
+        raise SheetValidationError(f"columns must not exceed {MAX_COLS}")
     out: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for c in columns:
@@ -218,6 +225,8 @@ class SheetStore:
             raw_rows = template.get("rows") or []
             if not isinstance(raw_rows, list):
                 raise SheetValidationError("template rows must be an array")
+            if len(raw_rows) > MAX_ROWS:
+                raise SheetValidationError(f"template rows must not exceed {MAX_ROWS}")
             for r in raw_rows:
                 if not isinstance(r, dict):
                     raise SheetValidationError("each template row must be an object")
@@ -225,6 +234,8 @@ class SheetStore:
             rc = template.get("rowCount")
             if rc is not None and (not isinstance(rc, int) or rc < 1):
                 raise SheetValidationError("template rowCount must be an integer >= 1")
+            if rc is not None and rc > MAX_ROWS:
+                raise SheetValidationError(f"template rowCount must not exceed {MAX_ROWS}")
             # Documents always start with at least the blank-sheet room (same
             # floor as replace_sheet): templates seed data, they don't cap the
             # grid — Ark should feel like a spreadsheet, not a fixed form.
@@ -332,6 +343,10 @@ class SheetStore:
         """
         if not isinstance(row, int) or not isinstance(col, int) or row < 1 or col < 1:
             raise SheetValidationError("row and col must be integers >= 1")
+        if row > MAX_ROWS:
+            raise SheetValidationError(f"row must not exceed {MAX_ROWS}")
+        if col > MAX_COLS:
+            raise SheetValidationError(f"col must not exceed {MAX_COLS}")
         value = validate_cell_value(value)
         path = normalize_sheet_path(path)
         with self._lock:
@@ -397,12 +412,16 @@ class SheetStore:
         rows = payload.get("rows", [])
         if not isinstance(rows, list):
             raise SheetValidationError("rows must be an array")
+        if len(rows) > MAX_ROWS:
+            raise SheetValidationError(f"rows must not exceed {MAX_ROWS}")
         for r in rows:
             if not isinstance(r, dict):
                 raise SheetValidationError("each row must be an object")
         row_count = payload.get("rowCount")
         if row_count is not None and (not isinstance(row_count, int) or row_count < 1):
             raise SheetValidationError("rowCount must be an integer >= 1")
+        if row_count is not None and row_count > MAX_ROWS:
+            raise SheetValidationError(f"rowCount must not exceed {MAX_ROWS}")
         effective_row_count = max(row_count or 0, len(rows), _BLANK_ROW_COUNT)
         col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
         now = _now()
@@ -519,6 +538,8 @@ class SheetStore:
                         rc = patch[key]
                         if not isinstance(rc, int) or rc < 1:
                             raise SheetValidationError("rowCount must be an integer >= 1")
+                        if rc > MAX_ROWS:
+                            raise SheetValidationError(f"rowCount must not exceed {MAX_ROWS}")
                         params[2] = max(rc, row_count)
                     else:
                         sets.append(f"{column} = ?")
@@ -570,6 +591,10 @@ class SheetStore:
                 raise SheetValidationError(f"recordId not found: {record_id}")
         if not isinstance(row, int) or row < 1:
             raise SheetValidationError("cell update needs row (integer >= 1) or a known recordId")
+        if row > MAX_ROWS:
+            raise SheetValidationError(f"row must not exceed {MAX_ROWS}")
+        if isinstance(col, int) and col > MAX_COLS:
+            raise SheetValidationError(f"col must not exceed {MAX_COLS}")
         return row, col, column_id
 
     def _find_row_by_record_id(

@@ -708,6 +708,7 @@ function initPartnerMode(): void {
       remountPartnerSheetFromPayload(routingPath, payload, true);
       activeSheetPath = routingPath;
       loadedRoutingPath = routingPath;
+      collab.subscribeSheet(routingPath);
     } catch (e) {
       if (seq !== loadSeq) return;
       loadedRoutingPath = null;

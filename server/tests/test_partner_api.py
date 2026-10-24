@@ -261,7 +261,7 @@ def test_ws_forbidden_and_presence_types(client):
 
 
 def test_put_sheet_broadcasts_sheet_truth_to_ws_clients(client):
-    with client.websocket_connect("/ws/ark") as ws:
+    with client.websocket_connect("/ws/ark?path=clients") as ws:
         client.put(
             "/api/partner/sheets/clients",
             json={
@@ -287,7 +287,7 @@ def test_patch_sheet_broadcasts_cell_commits(client):
         },
         headers=AUTH,
     )
-    with client.websocket_connect("/ws/ark") as ws:
+    with client.websocket_connect("/ws/ark?path=clients") as ws:
         client.patch(
             "/api/partner/sheets/clients",
             json={"cells": [{"row": 1, "columnId": "name", "value": "Acme Corp"}]},
@@ -302,3 +302,34 @@ def test_patch_sheet_broadcasts_cell_commits(client):
             "value": "Acme Corp",
             "sheetPath": "clients",
         }
+
+
+def test_cross_sheet_broadcast_isolation(client):
+    """Ensures broadcasts for one sheet are not leaked to clients subscribed to another sheet."""
+    client.put(
+        "/api/partner/sheets/sheet-a",
+        json={"columns": [{"id": "x", "header": "X", "widthPx": 100}], "rows": [{"x": "1"}]},
+        headers=AUTH,
+    )
+    client.put(
+        "/api/partner/sheets/sheet-b",
+        json={"columns": [{"id": "y", "header": "Y", "widthPx": 100}], "rows": [{"y": "2"}]},
+        headers=AUTH,
+    )
+    with client.websocket_connect("/ws/ark?path=sheet-b") as ws_b:
+        # Patch sheet-a
+        client.patch(
+            "/api/partner/sheets/sheet-a",
+            json={"cells": [{"row": 1, "columnId": "x", "value": "secret"}]},
+            headers=AUTH,
+        )
+        # Patch sheet-b
+        client.patch(
+            "/api/partner/sheets/sheet-b",
+            json={"cells": [{"row": 1, "columnId": "y", "value": "public"}]},
+            headers=AUTH,
+        )
+        # ws_b should only receive the sheet-b commit, never the sheet-a commit
+        msg = ws_b.receive_json()
+        assert msg["sheetPath"] == "sheet-b"
+        assert msg["value"] == "public"

@@ -39,23 +39,24 @@ def clear_auth_cache() -> None:
     _cache.clear()
 
 
-async def verify_browser_token(token: str | None) -> bool:
+async def verify_browser_token(token: str | None, path: str | None = None) -> bool:
     """True when the token is valid for browser access (or no partner is configured)."""
     base = partner_base_url()
     if not base:
         return True
 
-    cache_key = token or ""
+    cache_key = f"{token or ''}:{path or ''}"
     now = time.monotonic()
     cached = _cache.get(cache_key)
     if cached is not None and cached[1] > now:
         return cached[0]
 
     headers = {"authorization": f"Bearer {token}"} if token else {}
+    params = {"path": path} if path else {}
     valid = False
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(f"{base}/ark/auth", headers=headers)
+            r = await client.get(f"{base}/ark/auth", headers=headers, params=params)
         valid = 200 <= r.status_code < 300
     except Exception as e:
         logger.warning("partner auth check failed: %s", e)

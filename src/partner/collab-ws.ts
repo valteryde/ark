@@ -91,6 +91,7 @@ export interface CollabConnection {
   sendRowDeleted(ev: RowDeletedEvent): void;
   sendPresence(ev: CellPresenceEvent): void;
   sendPresenceClear(ev: CellPresenceClearEvent): void;
+  subscribeSheet(sheetPath: string): void;
   close(): void;
   getConnectionState(): CollabConnectionState;
 }
@@ -290,6 +291,14 @@ export function openCollabWs(opts: {
       if (sock !== ws) return;
       reconnectAttempts = 0;
       setState('open');
+      const active = opts.getActiveSheetPath();
+      if (active) {
+        try {
+          sock.send(JSON.stringify({ type: 'sheet.subscribe', sheetPath: active }));
+        } catch {
+          /* ignore */
+        }
+      }
       while (outbound.length > 0) {
         const s = outbound.shift()!;
         try {
@@ -353,6 +362,10 @@ export function openCollabWs(opts: {
     queueSend(JSON.stringify(ev));
   }
 
+  function subscribeSheet(sheetPath: string): void {
+    queueSend(JSON.stringify({ type: 'sheet.subscribe', sheetPath }));
+  }
+
   connect();
   opts.onConnectionState?.(state);
 
@@ -361,6 +374,7 @@ export function openCollabWs(opts: {
     sendRowDeleted,
     sendPresence,
     sendPresenceClear,
+    subscribeSheet,
     getConnectionState: () => state,
     close: () => {
       intentionalClose = true;

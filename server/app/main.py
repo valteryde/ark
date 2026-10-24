@@ -55,15 +55,53 @@ _IFRAME_X_FRAME_OPTIONS = os.environ.get("ARK_IFRAME_X_FRAME_OPTIONS", "").strip
 _IFRAME_FRAME_ANCESTORS = os.environ.get("ARK_IFRAME_FRAME_ANCESTORS", "").strip()
 
 
+def _parse_allowed_ws_origins() -> frozenset[str]:
+    """Build the set of origins allowed to open WebSocket connections."""
+    raw = os.environ.get("ARK_ALLOWED_WS_ORIGINS", "").strip()
+    origins: set[str] = set()
+    if raw:
+        for o in raw.split(","):
+            o = o.strip().rstrip("/")
+            if o:
+                origins.add(o)
+    if _IFRAME_FRAME_ANCESTORS:
+        for o in _IFRAME_FRAME_ANCESTORS.split():
+            o = o.strip().rstrip("/")
+            if o and o != "'self'" and o.startswith("http"):
+                origins.add(o)
+    return frozenset(origins)
+
+
+_ALLOWED_WS_ORIGINS = _parse_allowed_ws_origins()
+
+
+def _is_valid_ws_origin(websocket: WebSocket) -> bool:
+    """Validate the WebSocket Origin header against same-origin or an explicit allowlist."""
+    origin = websocket.headers.get("origin")
+    if origin is None:
+        return True  # Non-browser clients; auth token is the access gate.
+    origin = origin.rstrip("/")
+    if _ALLOWED_WS_ORIGINS:
+        return origin in _ALLOWED_WS_ORIGINS
+    # No explicit allowlist: enforce same-origin.
+    host = websocket.headers.get("host", "")
+    return origin in (f"http://{host}", f"https://{host}")
+
+
 @app.middleware("http")
 async def ark_iframe_embed_headers(request: Request, call_next):
     response = await call_next(request)
     if _IFRAME_X_FRAME_OPTIONS:
         response.headers["X-Frame-Options"] = _IFRAME_X_FRAME_OPTIONS
+    elif not _IFRAME_FRAME_ANCESTORS:
+        # Secure default: deny framing unless explicitly configured.
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
     if _IFRAME_FRAME_ANCESTORS:
         response.headers["Content-Security-Policy"] = (
             f"frame-ancestors {_IFRAME_FRAME_ANCESTORS}"
         )
+    elif not _IFRAME_X_FRAME_OPTIONS:
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
     return response
 
 
@@ -81,6 +119,13 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+async def _verify_browser_token_safe(token: str | None, path: str | None = None) -> bool:
+    try:
+        return await verify_browser_token(token, path)
+    except TypeError:
+        return await verify_browser_token(token)
+
+
 @app.get("/api/sheets/{path:path}")
 async def get_sheet(path: str, request: Request) -> JSONResponse:
     """Sheet payload for the browser.
@@ -92,11 +137,14 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
     outage never creates a wrongly-blank document.
     """
     token = _bearer_token(request.headers.get("authorization"))
-    if not await verify_browser_token(token):
-        return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    normalized = normalize_sheet_path(path)
+    try:
+        normalized = normalize_sheet_path(path)
+    except SheetValidationError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
     if not normalized:
         return JSONResponse({"detail": "sheet path must not be empty"}, status_code=400)
+    if not await _verify_browser_token_safe(token, normalized):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
     store = get_store()
     existing = store.get_sheet_payload(normalized)
     if existing is not None:
@@ -130,7 +178,10 @@ def _persist_ws_event(
     sheet_path = data.get("sheetPath")
     if not isinstance(sheet_path, str) or not sheet_path.strip():
         return (False, "missing sheetPath", None, 0)
-    sheet_path = normalize_sheet_path(sheet_path)
+    try:
+        sheet_path = normalize_sheet_path(sheet_path)
+    except SheetValidationError as e:
+        return (False, str(e), None, 0)
     store = get_store()
 
     if msg_type == "cell.value_committed":
@@ -193,11 +244,21 @@ async def _send_persist_status(
 @app.websocket("/ws/ark")
 async def collab_ws(websocket: WebSocket) -> None:
     token = websocket.query_params.get(_PARTNER_TOKEN_QUERY)
-    if not await verify_browser_token(token):
+    sheet_param = websocket.query_params.get("path") or websocket.query_params.get("sheetPath")
+    if not await _verify_browser_token_safe(token, sheet_param):
         # Policy violation close; browser shows the reconnect state.
         await websocket.close(code=4401)
         return
+    if not _is_valid_ws_origin(websocket):
+        await websocket.close(code=4403)
+        return
     await hub.connect(websocket)
+    if sheet_param:
+        try:
+            norm_param = normalize_sheet_path(sheet_param)
+            hub.subscribe(websocket, norm_param)
+        except SheetValidationError:
+            pass
     try:
         while True:
             raw = await websocket.receive_text()
@@ -213,8 +274,27 @@ async def collab_ws(websocket: WebSocket) -> None:
             if msg_type in _FORBIDDEN_WS_TYPES:
                 await websocket.send_json({"error": "forbidden_message_type"})
                 continue
+            # Resolve sheet path and auto-subscribe for room-scoped broadcast.
+            sheet_path: str | None = None
+            sp_raw = data.get("sheetPath")
+            if isinstance(sp_raw, str) and sp_raw.strip():
+                try:
+                    sheet_path = normalize_sheet_path(sp_raw)
+                except SheetValidationError:
+                    continue
+                hub.subscribe(websocket, sheet_path)
+
+            if msg_type in ("sheet.subscribe", "subscribe"):
+                if sheet_path:
+                    hub.subscribe(websocket, sheet_path)
+                    await websocket.send_json({"type": "subscribed", "sheetPath": sheet_path})
+                continue
+
             if msg_type in _PRESENCE_TYPES:
-                await hub.broadcast(data)
+                if sheet_path:
+                    await hub.broadcast(data, sheet_path)
+                else:
+                    await websocket.send_json(data)
                 continue
             # Persist first: Ark is authoritative, peers only see stored state.
             ok, err, partner_event, revision = await asyncio.to_thread(
@@ -224,10 +304,10 @@ async def collab_ws(websocket: WebSocket) -> None:
                 if msg_type == "cell.value_committed":
                     await _send_persist_status(websocket, data, err)
                 continue
-            if partner_event is not None:
-                sheet_path = normalize_sheet_path(data["sheetPath"])
+            if partner_event is not None and sheet_path:
                 notifier.enqueue(sheet_path, partner_event, revision, token)
-            await hub.broadcast(data)
+            if sheet_path:
+                await hub.broadcast(data, sheet_path)
     except WebSocketDisconnect:
         hub.disconnect(websocket)
 

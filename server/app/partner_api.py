@@ -14,6 +14,7 @@ partner_template.py).
 from __future__ import annotations
 
 import os
+import secrets
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -36,7 +37,8 @@ def _auth_error(request: Request) -> JSONResponse | None:
             {"detail": "ARK_PARTNER_API_TOKEN is not set on the Ark server"},
             status_code=503,
         )
-    if (request.headers.get("authorization") or "").strip() != f"Bearer {token}":
+    auth = (request.headers.get("authorization") or "").strip()
+    if not secrets.compare_digest(auth.encode(), f"Bearer {token}".encode()):
         return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return None
 
@@ -65,7 +67,10 @@ async def list_sheets(request: Request) -> JSONResponse:
 async def get_sheet(path: str, request: Request) -> JSONResponse:
     if err := _auth_error(request):
         return err
-    payload = get_store().get_sheet_payload(path)
+    try:
+        payload = get_store().get_sheet_payload(path)
+    except SheetValidationError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
     if payload is None:
         return JSONResponse({"detail": "sheet not found"}, status_code=404)
     return JSONResponse(payload)
@@ -83,9 +88,10 @@ async def put_sheet(path: str, request: Request) -> JSONResponse:
         payload = get_store().replace_sheet(path, body)
     except SheetValidationError as e:
         return JSONResponse({"detail": str(e)}, status_code=400)
+    normalized = normalize_sheet_path(path)
     truth: dict[str, Any] = {
         "type": "sheet.truth",
-        "sheetPath": normalize_sheet_path(path),
+        "sheetPath": normalized,
         "rows": payload["rows"],
         "rowCount": payload["rowCount"],
         "columns": payload["columns"],
@@ -94,7 +100,7 @@ async def put_sheet(path: str, request: Request) -> JSONResponse:
               "enabledUiCapabilities", "chromeActions"):
         if k in payload:
             truth[k] = payload[k]
-    await hub.broadcast(truth)
+    await hub.broadcast(truth, normalized)
     return JSONResponse(payload)
 
 
@@ -106,7 +112,10 @@ async def patch_sheet(path: str, request: Request) -> JSONResponse:
     body = await _json_object(request)
     if isinstance(body, JSONResponse):
         return body
-    normalized = normalize_sheet_path(path)
+    try:
+        normalized = normalize_sheet_path(path)
+    except SheetValidationError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
     try:
         result = get_store().patch_sheet(normalized, body)
     except SheetValidationError as e:
@@ -121,7 +130,8 @@ async def patch_sheet(path: str, request: Request) -> JSONResponse:
                 "columnId": cell["columnId"],
                 "value": cell["value"],
                 "sheetPath": normalized,
-            }
+            },
+            normalized,
         )
     return JSONResponse({"status": "ok", "revision": result["revision"]})
 
@@ -130,6 +140,10 @@ async def patch_sheet(path: str, request: Request) -> JSONResponse:
 async def delete_sheet(path: str, request: Request) -> JSONResponse:
     if err := _auth_error(request):
         return err
-    if not get_store().delete_sheet(path):
+    try:
+        deleted = get_store().delete_sheet(path)
+    except SheetValidationError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
+    if not deleted:
         return JSONResponse({"detail": "sheet not found"}, status_code=404)
     return JSONResponse({"status": "ok"})
