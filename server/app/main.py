@@ -114,6 +114,24 @@ def _bearer_token(value: str | None) -> str | None:
     return None
 
 
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return None
+
+
+def _ws_client_ip(websocket: WebSocket) -> str | None:
+    forwarded = websocket.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if websocket.client:
+        return websocket.client.host
+    return None
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -137,6 +155,8 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
     outage never creates a wrongly-blank document.
     """
     token = _bearer_token(request.headers.get("authorization"))
+    ip = _client_ip(request)
+    store = get_store()
     try:
         normalized = normalize_sheet_path(path)
     except SheetValidationError as e:
@@ -144,17 +164,39 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
     if not normalized:
         return JSONResponse({"detail": "sheet path must not be empty"}, status_code=400)
     if not await _verify_browser_token_safe(token, normalized):
+        store.log_audit_event(
+            sheet_path=normalized,
+            action="auth.failed",
+            actor_type="user",
+            actor_id=token,
+            ip_address=ip,
+            details={"reason": "unauthorized", "path": normalized},
+        )
         return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    store = get_store()
     existing = store.get_sheet_payload(normalized)
     if existing is not None:
+        store.log_audit_event(
+            sheet_path=normalized,
+            action="sheet.read",
+            actor_type="user",
+            actor_id=token,
+            ip_address=ip,
+            revision=existing.get("revision"),
+            details={"client": "browser"},
+        )
         return JSONResponse(existing)
     try:
         template = await fetch_partner_template(normalized, token)
     except PartnerTemplateError as e:
         return JSONResponse({"detail": str(e)}, status_code=502)
     try:
-        payload, created = store.get_or_create_sheet(normalized, template)
+        payload, created = store.get_or_create_sheet(
+            normalized,
+            template,
+            actor_type="user",
+            actor_id=token,
+            ip_address=ip,
+        )
     except SheetValidationError as e:
         return JSONResponse({"detail": str(e)}, status_code=400)
     if created:
@@ -162,11 +204,20 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
         if payload.get("template") is not None:
             event["template"] = payload["template"]
         notifier.enqueue(normalized, event, payload.get("revision", 1), token)
+    store.log_audit_event(
+        sheet_path=normalized,
+        action="sheet.read",
+        actor_type="user",
+        actor_id=token,
+        ip_address=ip,
+        revision=payload.get("revision"),
+        details={"client": "browser", "initial": True},
+    )
     return JSONResponse(payload)
 
 
 def _persist_ws_event(
-    data: dict[str, Any], token: str | None
+    data: dict[str, Any], token: str | None, client_ip: str | None = None
 ) -> tuple[bool, str | None, dict[str, Any] | None, int]:
     """Apply a browser WS event to the store (runs in a worker thread).
 
@@ -191,8 +242,26 @@ def _persist_ws_event(
                 data.get("row"),
                 data.get("col"),
                 data.get("value"),
+                actor_type="user",
+                actor_id=token,
+                ip_address=client_ip,
+                column_id=data.get("columnId"),
             )
         except SheetValidationError as e:
+            store.log_audit_event(
+                sheet_path=sheet_path,
+                action="cell.rejected",
+                actor_type="user",
+                actor_id=token,
+                ip_address=client_ip,
+                details={
+                    "row": data.get("row"),
+                    "col": data.get("col"),
+                    "columnId": data.get("columnId"),
+                    "attemptedValue": data.get("value"),
+                    "reason": str(e),
+                },
+            )
             return (False, str(e), None, 0)
         event: dict[str, Any] = {
             "kind": "cell",
@@ -207,8 +276,22 @@ def _persist_ws_event(
 
     if msg_type == "row.deleted":
         try:
-            revision = store.apply_row_delete(sheet_path, data.get("row"))
+            revision = store.apply_row_delete(
+                sheet_path,
+                data.get("row"),
+                actor_type="user",
+                actor_id=token,
+                ip_address=client_ip,
+            )
         except SheetValidationError as e:
+            store.log_audit_event(
+                sheet_path=sheet_path,
+                action="row.delete_rejected",
+                actor_type="user",
+                actor_id=token,
+                ip_address=client_ip,
+                details={"row": data.get("row"), "reason": str(e)},
+            )
             return (False, str(e), None, 0)
         event = {"kind": "row_deleted", "row": data.get("row")}
         if data.get("recordId") is not None:
@@ -245,11 +328,30 @@ async def _send_persist_status(
 async def collab_ws(websocket: WebSocket) -> None:
     token = websocket.query_params.get(_PARTNER_TOKEN_QUERY)
     sheet_param = websocket.query_params.get("path") or websocket.query_params.get("sheetPath")
+    client_ip = _ws_client_ip(websocket)
     if not await _verify_browser_token_safe(token, sheet_param):
+        if sheet_param:
+            get_store().log_audit_event(
+                sheet_path=sheet_param,
+                action="auth.failed",
+                actor_type="user",
+                actor_id=token,
+                ip_address=client_ip,
+                details={"reason": "unauthorized_ws_connection"},
+            )
         # Policy violation close; browser shows the reconnect state.
         await websocket.close(code=4401)
         return
     if not _is_valid_ws_origin(websocket):
+        if sheet_param:
+            get_store().log_audit_event(
+                sheet_path=sheet_param,
+                action="auth.failed",
+                actor_type="user",
+                actor_id=token,
+                ip_address=client_ip,
+                details={"reason": "forbidden_origin", "origin": websocket.headers.get("origin")},
+            )
         await websocket.close(code=4403)
         return
     await hub.connect(websocket)
@@ -259,6 +361,13 @@ async def collab_ws(websocket: WebSocket) -> None:
             norm_param = normalize_sheet_path(sheet_param)
             hub.subscribe(websocket, norm_param)
             authorized_paths.add(norm_param)
+            get_store().log_audit_event(
+                sheet_path=norm_param,
+                action="sheet.subscribe",
+                actor_type="user",
+                actor_id=token,
+                ip_address=client_ip,
+            )
         except SheetValidationError:
             pass
     try:
@@ -288,6 +397,14 @@ async def collab_ws(websocket: WebSocket) -> None:
             if sheet_path:
                 if sheet_path not in authorized_paths:
                     if not await _verify_browser_token_safe(token, sheet_path):
+                        get_store().log_audit_event(
+                            sheet_path=sheet_path,
+                            action="auth.failed",
+                            actor_type="user",
+                            actor_id=token,
+                            ip_address=client_ip,
+                            details={"reason": "unauthorized_cross_sheet_access"},
+                        )
                         await websocket.send_json(
                             {"error": "unauthorized", "sheetPath": sheet_path}
                         )
@@ -297,6 +414,13 @@ async def collab_ws(websocket: WebSocket) -> None:
 
             if msg_type in ("sheet.subscribe", "subscribe"):
                 if sheet_path:
+                    get_store().log_audit_event(
+                        sheet_path=sheet_path,
+                        action="sheet.subscribe",
+                        actor_type="user",
+                        actor_id=token,
+                        ip_address=client_ip,
+                    )
                     await websocket.send_json({"type": "subscribed", "sheetPath": sheet_path})
                 continue
 
@@ -308,7 +432,7 @@ async def collab_ws(websocket: WebSocket) -> None:
                 continue
             # Persist first: Ark is authoritative, peers only see stored state.
             ok, err, partner_event, revision = await asyncio.to_thread(
-                _persist_ws_event, data, token
+                _persist_ws_event, data, token, client_ip
             )
             if not ok:
                 if msg_type == "cell.value_committed":

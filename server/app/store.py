@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS sheet_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sheet_events_sheet ON sheet_events(sheet_id, revision);
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sheet_path TEXT NOT NULL,
+    sheet_id INTEGER,
+    action TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_id TEXT,
+    ip_address TEXT,
+    revision INTEGER,
+    details TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_sheet_path ON audit_logs(sheet_path, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 """
 
 _BLANK_COLUMN_HEADERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
@@ -193,7 +209,13 @@ class SheetStore:
         return self._serialize(sheet, cells)
 
     def get_or_create_sheet(
-        self, path: str, template: dict[str, Any] | None = None
+        self,
+        path: str,
+        template: dict[str, Any] | None = None,
+        *,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Return (payload, created).
 
@@ -319,6 +341,31 @@ class SheetStore:
                         ),
                     },
                 )
+                self._conn.execute(
+                    """
+                    INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        path,
+                        sheet_id,
+                        "sheet.create",
+                        actor_type,
+                        actor_id,
+                        ip_address,
+                        1,
+                        json.dumps({
+                            "title": fields["title"],
+                            "rowCount": fields["row_count"],
+                            **(
+                                {"template": {"name": template_name, "version": template_version}}
+                                if template_version is not None
+                                else {}
+                            ),
+                        }),
+                        now,
+                    ),
+                )
                 self._conn.commit()
             except sqlite3.IntegrityError:
                 # Concurrent create for the same path; the other writer won.
@@ -335,6 +382,11 @@ class SheetStore:
         row: int,
         col: int,
         value: str | int | float,
+        *,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+        column_id: str | None = None,
     ) -> int:
         """Write one cell on an existing sheet. Returns new revision.
 
@@ -362,7 +414,22 @@ class SheetStore:
                     raise SheetValidationError(
                         f"column '{col_def.get('id', col)}' is read-only"
                     )
+
+            existing_cell = self._conn.execute(
+                "SELECT value FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
+                (sheet["id"], row, col),
+            ).fetchone()
+            old_value = _load_value(existing_cell["value"]) if existing_cell else None
+
+            resolved_col_id = column_id
+            if not resolved_col_id and isinstance(columns, list) and 1 <= col <= len(columns):
+                col_def = columns[col - 1]
+                if isinstance(col_def, dict):
+                    resolved_col_id = col_def.get("id")
+
             revision = sheet["revision"] + 1
+            now = _now()
+            action = "cell.clear" if value == "" else "cell.update"
             if value == "":
                 self._conn.execute(
                     "DELETE FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
@@ -379,15 +446,47 @@ class SheetStore:
             new_row_count = max(sheet["row_count"], row)
             self._conn.execute(
                 "UPDATE sheets SET revision = ?, row_count = ?, updated_at = ? WHERE id = ?",
-                (revision, new_row_count, _now(), sheet["id"]),
+                (revision, new_row_count, now, sheet["id"]),
             )
             self._log_event(
                 sheet["id"], revision, "cell", {"row": row, "col": col, "value": value}
             )
+            details = {
+                "row": row,
+                "col": col,
+                "columnId": resolved_col_id,
+                "oldValue": old_value,
+                "newValue": value,
+            }
+            self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path,
+                    sheet["id"],
+                    action,
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    json.dumps(details),
+                    now,
+                ),
+            )
             self._conn.commit()
         return revision
 
-    def apply_row_delete(self, path: str, row: int) -> int:
+    def apply_row_delete(
+        self,
+        path: str,
+        row: int,
+        *,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> int:
         """Clear all cells in a row (grid semantics: no shift). Returns new revision."""
         if not isinstance(row, int) or row < 1:
             raise SheetValidationError("row must be an integer >= 1")
@@ -398,19 +497,53 @@ class SheetStore:
             ).fetchone()
             if sheet is None:
                 raise SheetValidationError(f"sheet not found: {path}")
+            old_cells = self._conn.execute(
+                "SELECT col, value FROM cells WHERE sheet_id = ? AND row = ?",
+                (sheet["id"], row),
+            ).fetchall()
+            cleared = [
+                {"col": r["col"], "value": _load_value(r["value"])}
+                for r in old_cells
+            ]
             revision = sheet["revision"] + 1
+            now = _now()
             self._conn.execute(
                 "DELETE FROM cells WHERE sheet_id = ? AND row = ?", (sheet["id"], row)
             )
             self._conn.execute(
                 "UPDATE sheets SET revision = ?, updated_at = ? WHERE id = ?",
-                (revision, _now(), sheet["id"]),
+                (revision, now, sheet["id"]),
             )
             self._log_event(sheet["id"], revision, "row_deleted", {"row": row})
+            self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path,
+                    sheet["id"],
+                    "row.delete",
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    json.dumps({"row": row, "clearedCells": cleared}),
+                    now,
+                ),
+            )
             self._conn.commit()
         return revision
 
-    def replace_sheet(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def replace_sheet(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        actor_type: str = "partner",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
         """Create or fully replace a sheet from a partner payload. Returns new payload."""
         path = normalize_sheet_path(path)
         if not path:
@@ -446,9 +579,11 @@ class SheetStore:
                 )
                 sheet_id = cur.lastrowid
                 revision = 1
+                action = "sheet.create"
             else:
                 sheet_id = sheet["id"]
                 revision = sheet["revision"] + 1
+                action = "sheet.replace"
             self._conn.execute("DELETE FROM cells WHERE sheet_id = ?", (sheet_id,))
             for r_idx, row_obj in enumerate(rows):
                 for cid, v in row_obj.items():
@@ -485,12 +620,42 @@ class SheetStore:
                 ),
             )
             self._log_event(sheet_id, revision, "sheet_replaced", {"path": path})
+            self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path,
+                    sheet_id,
+                    action,
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    json.dumps({
+                        "title": payload.get("title"),
+                        "rowCount": effective_row_count,
+                        "columnCount": len(columns),
+                        "seededRows": len(rows),
+                    }),
+                    now,
+                ),
+            )
             self._conn.commit()
         result = self.get_sheet_payload(path)
         assert result is not None
         return result
 
-    def patch_sheet(self, path: str, patch: dict[str, Any]) -> dict[str, Any]:
+    def patch_sheet(
+        self,
+        path: str,
+        patch: dict[str, Any],
+        *,
+        actor_type: str = "partner",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
         """Partial update: metadata fields and/or a list of cell updates.
 
         Returns dict with `revision` and `appliedCells` (resolved row/col/columnId/value
@@ -498,6 +663,7 @@ class SheetStore:
         """
         path = normalize_sheet_path(path)
         applied: list[dict[str, Any]] = []
+        audit_cells: list[dict[str, Any]] = []
         with self._lock:
             sheet = self._conn.execute("SELECT * FROM sheets WHERE path = ?", (path,)).fetchone()
             if sheet is None:
@@ -517,6 +683,11 @@ class SheetStore:
                 row, col, column_id = self._resolve_cell_address(
                     sheet["id"], columns, col_index_by_id, upd
                 )
+                existing_cell = self._conn.execute(
+                    "SELECT value FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
+                    (sheet["id"], row, col),
+                ).fetchone()
+                old_val = _load_value(existing_cell["value"]) if existing_cell else None
                 if value == "":
                     self._conn.execute(
                         "DELETE FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
@@ -532,6 +703,7 @@ class SheetStore:
                     )
                 row_count = max(row_count, row)
                 applied.append({"row": row, "col": col, "columnId": column_id, "value": value})
+                audit_cells.append({"row": row, "col": col, "columnId": column_id, "oldValue": old_val, "newValue": value})
 
             sets: list[str] = ["revision = ?", "updated_at = ?", "row_count = ?"]
             params: list[Any] = [revision, _now(), row_count]
@@ -559,13 +731,66 @@ class SheetStore:
                 "sheet_patched",
                 {"cells": len(applied), "fields": [k for k in ("title", "description", "rowCount") if k in patch]},
             )
+            self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path,
+                    sheet["id"],
+                    "sheet.patch",
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    json.dumps({
+                        "appliedCells": audit_cells,
+                        "fields": [k for k in ("title", "description", "rowCount") if k in patch],
+                    }),
+                    _now(),
+                ),
+            )
             self._conn.commit()
         return {"revision": revision, "appliedCells": applied}
 
-    def delete_sheet(self, path: str) -> bool:
+    def delete_sheet(
+        self,
+        path: str,
+        *,
+        actor_type: str = "partner",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> bool:
         path = normalize_sheet_path(path)
         with self._lock:
+            sheet = self._conn.execute(
+                "SELECT id, revision, title FROM sheets WHERE path = ?", (path,)
+            ).fetchone()
+            if sheet is None:
+                return False
+            sheet_id = sheet["id"]
+            revision = sheet["revision"]
+            title = sheet["title"]
+            now = _now()
             cur = self._conn.execute("DELETE FROM sheets WHERE path = ?", (path,))
+            self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path,
+                    sheet_id,
+                    "sheet.delete",
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    json.dumps({"title": title, "lastRevision": revision}),
+                    now,
+                ),
+            )
             self._conn.commit()
         return cur.rowcount > 0
 
@@ -684,6 +909,174 @@ class SheetStore:
         if sparse:
             payload["cells"] = sparse
         return payload
+
+    # ------------------------------------------------------------ audit logs
+
+    def log_audit_event(
+        self,
+        sheet_path: str,
+        action: str,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+        revision: int | None = None,
+        details: dict[str, Any] | None = None,
+        sheet_id: int | None = None,
+    ) -> int:
+        norm_path = normalize_sheet_path(sheet_path) if sheet_path else ""
+        now = _now()
+        details_json = json.dumps(details) if details is not None else None
+        with self._lock:
+            if sheet_id is None and norm_path:
+                row = self._conn.execute(
+                    "SELECT id, revision FROM sheets WHERE path = ?", (norm_path,)
+                ).fetchone()
+                if row is not None:
+                    sheet_id = row["id"]
+                    if revision is None:
+                        revision = row["revision"]
+            cur = self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    norm_path,
+                    sheet_id,
+                    action,
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    details_json,
+                    now,
+                ),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def get_audit_logs(
+        self,
+        sheet_path: str | None = None,
+        action: str | None = None,
+        actor_type: str | None = None,
+        actor_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+        prefix: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        limit = max(1, min(int(limit), 1000))
+        offset = max(0, int(offset))
+        sort_order = "ASC" if str(order).lower() == "asc" else "DESC"
+
+        clauses: list[str] = ["1=1"]
+        params: list[Any] = []
+
+        if sheet_path:
+            norm_path = normalize_sheet_path(sheet_path)
+            clauses.append("sheet_path = ?")
+            params.append(norm_path)
+        elif prefix:
+            norm_prefix = normalize_sheet_path(prefix)
+            clauses.append("(sheet_path = ? OR sheet_path LIKE ?)")
+            params.extend([norm_prefix, f"{norm_prefix}/%"])
+
+        if action:
+            actions = [a.strip() for a in action.split(",") if a.strip()]
+            if len(actions) == 1:
+                clauses.append("action = ?")
+                params.append(actions[0])
+            elif len(actions) > 1:
+                placeholders = ",".join("?" for _ in actions)
+                clauses.append(f"action IN ({placeholders})")
+                params.extend(actions)
+
+        if actor_type:
+            clauses.append("actor_type = ?")
+            params.append(actor_type)
+
+        if actor_id:
+            clauses.append("actor_id = ?")
+            params.append(actor_id)
+
+        if since:
+            clauses.append("created_at >= ?")
+            params.append(since)
+
+        if until:
+            clauses.append("created_at <= ?")
+            params.append(until)
+
+        where_sql = " AND ".join(clauses)
+
+        with self._lock:
+            total = self._conn.execute(
+                f"SELECT COUNT(*) AS total FROM audit_logs WHERE {where_sql}", params
+            ).fetchone()["total"]
+
+            query_sql = f"""
+                SELECT * FROM audit_logs
+                WHERE {where_sql}
+                ORDER BY created_at {sort_order}, id {sort_order}
+                LIMIT ? OFFSET ?
+            """
+            rows = self._conn.execute(query_sql, params + [limit, offset]).fetchall()
+
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            details = _parse_json(r["details"]) if r["details"] is not None else None
+            item = {
+                "id": r["id"],
+                "sheetPath": r["sheet_path"],
+                "sheet_path": r["sheet_path"],
+                "action": r["action"],
+                "actorType": r["actor_type"],
+                "actor_type": r["actor_type"],
+                "actorId": r["actor_id"],
+                "actor_id": r["actor_id"],
+                "ipAddress": r["ip_address"],
+                "ip_address": r["ip_address"],
+                "revision": r["revision"],
+                "details": details,
+                "createdAt": r["created_at"],
+                "created_at": r["created_at"],
+            }
+            if r["sheet_id"] is not None:
+                item["sheetId"] = r["sheet_id"]
+                item["sheet_id"] = r["sheet_id"]
+            items.append(item)
+
+        return items, total
+
+    def get_audit_log_by_id(self, log_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            r = self._conn.execute("SELECT * FROM audit_logs WHERE id = ?", (log_id,)).fetchone()
+            if r is None:
+                return None
+            details = _parse_json(r["details"]) if r["details"] is not None else None
+            item = {
+                "id": r["id"],
+                "sheetPath": r["sheet_path"],
+                "sheet_path": r["sheet_path"],
+                "action": r["action"],
+                "actorType": r["actor_type"],
+                "actor_type": r["actor_type"],
+                "actorId": r["actor_id"],
+                "actor_id": r["actor_id"],
+                "ipAddress": r["ip_address"],
+                "ip_address": r["ip_address"],
+                "revision": r["revision"],
+                "details": details,
+                "createdAt": r["created_at"],
+                "created_at": r["created_at"],
+            }
+            if r["sheet_id"] is not None:
+                item["sheetId"] = r["sheet_id"]
+                item["sheet_id"] = r["sheet_id"]
+            return item
 
 
 _store: SheetStore | None = None

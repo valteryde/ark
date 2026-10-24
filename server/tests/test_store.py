@@ -296,3 +296,88 @@ def test_apply_cell_rejects_readonly_columns(fresh_store):
     payload = fresh_store.get_sheet_payload("grades")
     assert payload["rows"][0]["student_id"] == "S101"
     assert payload["rows"][0]["grade"] == "A"
+
+
+def test_audit_logs_lifecycle_and_diffs(fresh_store):
+    fresh_store.get_or_create_sheet("classes/math", actor_type="user", actor_id="alice")
+    fresh_store.apply_cell("classes/math", 1, 1, "Alice", actor_type="user", actor_id="alice")
+    fresh_store.apply_cell("classes/math", 1, 1, "Alice Smith", actor_type="user", actor_id="alice")
+    fresh_store.apply_cell("classes/math", 1, 1, "", actor_type="user", actor_id="alice")
+
+    logs, total = fresh_store.get_audit_logs(sheet_path="classes/math", order="asc")
+    assert total == 4
+    assert len(logs) == 4
+
+    assert logs[0]["action"] == "sheet.create"
+    assert logs[0]["actorId"] == "alice"
+    assert logs[0]["revision"] == 1
+
+    assert logs[1]["action"] == "cell.update"
+    assert logs[1]["details"]["oldValue"] is None
+    assert logs[1]["details"]["newValue"] == "Alice"
+
+    assert logs[2]["action"] == "cell.update"
+    assert logs[2]["details"]["oldValue"] == "Alice"
+    assert logs[2]["details"]["newValue"] == "Alice Smith"
+
+    assert logs[3]["action"] == "cell.clear"
+    assert logs[3]["details"]["oldValue"] == "Alice Smith"
+    assert logs[3]["details"]["newValue"] == ""
+
+
+def test_audit_logs_row_delete_records_cleared_cells(fresh_store):
+    fresh_store.get_or_create_sheet("classes/bio")
+    fresh_store.apply_cell("classes/bio", 2, 1, "Test Cell")
+    fresh_store.apply_row_delete("classes/bio", 2, actor_type="user", actor_id="teacher_1")
+
+    logs, total = fresh_store.get_audit_logs(sheet_path="classes/bio", action="row.delete")
+    assert total == 1
+    entry = logs[0]
+    assert entry["action"] == "row.delete"
+    assert entry["actorId"] == "teacher_1"
+    assert entry["details"]["row"] == 2
+    assert entry["details"]["clearedCells"] == [{"col": 1, "value": "Test Cell"}]
+
+
+def test_audit_logs_survive_sheet_deletion(fresh_store):
+    fresh_store.get_or_create_sheet("ephemeral/sheet")
+    fresh_store.apply_cell("ephemeral/sheet", 1, 1, "data")
+    assert fresh_store.delete_sheet("ephemeral/sheet", actor_id="admin") is True
+
+    # After deleting sheet, audit logs are preserved and include sheet.delete
+    logs, total = fresh_store.get_audit_logs(sheet_path="ephemeral/sheet", order="asc")
+    assert total == 3
+    actions = [l["action"] for l in logs]
+    assert actions == ["sheet.create", "cell.update", "sheet.delete"]
+    assert logs[2]["actorId"] == "admin"
+
+    # get_audit_log_by_id
+    entry = fresh_store.get_audit_log_by_id(logs[2]["id"])
+    assert entry is not None
+    assert entry["action"] == "sheet.delete"
+    assert fresh_store.get_audit_log_by_id(999999) is None
+
+
+def test_audit_logs_filtering_and_pagination(fresh_store):
+    fresh_store.get_or_create_sheet("org/team1/sheetA")
+    fresh_store.get_or_create_sheet("org/team1/sheetB")
+    fresh_store.get_or_create_sheet("org/team2/sheetC")
+
+    # Prefix filter
+    logs, total = fresh_store.get_audit_logs(prefix="org/team1")
+    assert total == 2
+    paths = {l["sheetPath"] for l in logs}
+    assert paths == {"org/team1/sheetA", "org/team1/sheetB"}
+
+    # Action filter
+    logs, total = fresh_store.get_audit_logs(action="sheet.create")
+    assert total == 3
+
+    # Pagination
+    page1, total = fresh_store.get_audit_logs(limit=2, offset=0, order="asc")
+    assert total == 3
+    assert len(page1) == 2
+    page2, total = fresh_store.get_audit_logs(limit=2, offset=2, order="asc")
+    assert len(page2) == 1
+    assert page1[0]["id"] != page2[0]["id"]
+

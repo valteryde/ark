@@ -360,3 +360,124 @@ def test_ws_cross_sheet_authorization_rejected(client, monkeypatch):
         ws.send_json({"type": "sheet.subscribe", "sheetPath": "sheet-forbidden"})
         msg2 = ws.receive_json()
         assert msg2 == {"error": "unauthorized", "sheetPath": "sheet-forbidden"}
+
+
+def test_partner_audit_logs_auth_enforced(client, monkeypatch):
+    assert client.get("/api/partner/audit-logs").status_code == 401
+    assert client.get("/api/partner/audit-logs", headers={"Authorization": "Bearer bad"}).status_code == 401
+    assert client.get("/api/partner/sheets/clients/audit-logs").status_code == 401
+
+    monkeypatch.delenv("ARK_PARTNER_API_TOKEN", raising=False)
+    assert client.get("/api/partner/audit-logs", headers=AUTH).status_code == 503
+
+
+def test_partner_audit_logs_api_and_sheet_filter(client):
+    # 1. Partner creates sheet with custom actor header
+    custom_actor = {"Authorization": "Bearer secret-token", "X-Actor-Id": "admin_clara"}
+    put_body = {
+        "title": "Math 101",
+        "columns": [
+            {"id": "id", "header": "ID", "widthPx": 80, "readOnly": True},
+            {"id": "grade", "header": "Grade", "widthPx": 100},
+        ],
+        "rows": [{"id": 1, "grade": "B"}],
+    }
+    r = client.put("/api/partner/sheets/math", json=put_body, headers=custom_actor)
+    assert r.status_code == 200
+
+    # 2. Browser reads sheet
+    r = client.get("/api/sheets/math", headers={"Authorization": "Bearer student_token_42"})
+    assert r.status_code == 200
+
+    # 3. Partner patches sheet
+    patch_body = {"cells": [{"recordId": 1, "columnId": "grade", "value": "A"}]}
+    r = client.patch("/api/partner/sheets/math", json=patch_body, headers=AUTH)
+    assert r.status_code == 200
+
+    # 4. Partner queries all audit logs
+    r = client.get("/api/partner/audit-logs", headers=AUTH)
+    assert r.status_code == 200
+    data = r.json()
+    assert "auditLogs" in data
+    assert "audit_logs" in data
+    assert data["total"] >= 3
+
+    # Check the create event has custom actor
+    create_events = [l for l in data["auditLogs"] if l["action"] == "sheet.create" and l["sheetPath"] == "math"]
+    assert len(create_events) == 1
+    assert create_events[0]["actorType"] == "partner"
+    assert create_events[0]["actorId"] == "admin_clara"
+
+    # Check the read event has student token
+    read_events = [l for l in data["auditLogs"] if l["action"] == "sheet.read" and l["sheetPath"] == "math"]
+    assert len(read_events) >= 1
+    assert read_events[0]["actorType"] == "user"
+    assert read_events[0]["actorId"] == "student_token_42"
+
+    # Check the patch event has oldValue "B" and newValue "A"
+    patch_events = [l for l in data["auditLogs"] if l["action"] == "sheet.patch" and l["sheetPath"] == "math"]
+    assert len(patch_events) == 1
+    cell_info = patch_events[0]["details"]["appliedCells"][0]
+    assert cell_info["oldValue"] == "B"
+    assert cell_info["newValue"] == "A"
+
+    # 5. Query sheet-scoped audit logs via dedicated endpoint
+    r_sheet = client.get("/api/partner/sheets/math/audit-logs", headers=AUTH)
+    assert r_sheet.status_code == 200
+    assert all(l["sheetPath"] == "math" for l in r_sheet.json()["auditLogs"])
+
+    # Test alias route /sheets/{path}/audit_logs
+    r_alias = client.get("/api/partner/sheets/math/audit_logs", headers=AUTH)
+    assert r_alias.status_code == 200
+    assert len(r_alias.json()["auditLogs"]) == len(r_sheet.json()["auditLogs"])
+
+    # 6. Fetch single audit log by ID
+    log_id = create_events[0]["id"]
+    r_single = client.get(f"/api/partner/audit-logs/{log_id}", headers=AUTH)
+    assert r_single.status_code == 200
+    assert r_single.json()["id"] == log_id
+    assert r_single.json()["action"] == "sheet.create"
+
+    # Missing ID returns 404
+    assert client.get("/api/partner/audit-logs/999999", headers=AUTH).status_code == 404
+
+
+def test_partner_audit_logs_ws_events_and_sheet_deletion(client):
+    # Create sheet
+    client.get("/api/sheets/science")
+
+    # WS edit
+    with client.websocket_connect("/ws/ark?path=science&ark_token=sci_student_1") as ws:
+        ws.send_json(
+            {
+                "type": "cell.value_committed",
+                "row": 1,
+                "col": 1,
+                "columnId": "a",
+                "value": "Atom",
+                "sheetPath": "science",
+            }
+        )
+        ws.receive_json()
+
+    # Verify WS edit is audited with user token
+    r = client.get("/api/partner/sheets/science/audit-logs?action=cell.update", headers=AUTH)
+    assert r.status_code == 200
+    update_logs = r.json()["auditLogs"]
+    assert len(update_logs) == 1
+    assert update_logs[0]["actorType"] == "user"
+    assert update_logs[0]["actorId"] == "sci_student_1"
+    assert update_logs[0]["details"]["newValue"] == "Atom"
+
+    # Partner deletes the sheet
+    del_r = client.delete("/api/partner/sheets/science", headers=AUTH)
+    assert del_r.status_code == 200
+
+    # Audit logs for science sheet still exist and include sheet.delete
+    r_after = client.get("/api/partner/sheets/science/audit-logs", headers=AUTH)
+    assert r_after.status_code == 200
+    logs = r_after.json()["auditLogs"]
+    actions = [l["action"] for l in logs]
+    assert "sheet.delete" in actions
+    assert "cell.update" in actions
+

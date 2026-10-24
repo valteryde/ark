@@ -106,6 +106,58 @@ All routes require **`Authorization: Bearer <ARK_PARTNER_API_TOKEN>`**.
 | `PUT` | `/api/partner/sheets/{path}` | Create or fully replace a sheet. Open tabs remount live (`sheet.truth` push). |
 | `PATCH` | `/api/partner/sheets/{path}` | Partial update: cells and/or metadata. Open tabs apply cell updates live without remounting. |
 | `DELETE` | `/api/partner/sheets/{path}` | Delete the document. |
+| `GET` | `/api/partner/audit-logs` | Query system audit logs across all sheets (filterable & paginated). |
+| `GET` | `/api/partner/sheets/{path}/audit-logs` | Query audit logs for a specific sheet. |
+| `GET` | `/api/partner/audit-logs/{id}` | Fetch a single audit log entry by ID. |
+
+### `GET /api/partner/audit-logs` (audit log query)
+
+Ark maintains an immutable, tamper-evident audit log of every event across sheet documents, recording who accessed or mutated each sheet, timestamps, IP addresses, and detailed diffs (`oldValue` vs `newValue` for cell commits, cleared cells on row delete, etc.).
+
+**Query Parameters:**
+- `path` or `sheet_path` — filter by sheet path (e.g. `clients/21`).
+- `prefix` — filter by sheet path prefix (e.g. `clients` matches `clients` and `clients/*`).
+- `action` — filter by action type (`cell.update`, `cell.clear`, `row.delete`, `sheet.create`, `sheet.replace`, `sheet.patch`, `sheet.delete`, `sheet.read`, `sheet.subscribe`, `auth.failed`, `cell.rejected`). Supports comma-separated list (e.g. `action=cell.update,row.delete`).
+- `actor_type` — filter by actor category (`user`, `partner`, `system`).
+- `actor_id` — filter by actor identity (e.g. browser `ark_token` or partner user ID).
+- `since` / `from` — ISO 8601 timestamp floor (e.g. `2026-10-24T00:00:00Z`).
+- `until` / `to` — ISO 8601 timestamp ceiling.
+- `limit` — max items to return (1 to 1000, default 100).
+- `offset` — pagination offset (default 0).
+- `order` — sort order by creation time (`desc` or `asc`, default `desc`).
+
+**Response format:**
+```json
+{
+  "auditLogs": [
+    {
+      "id": 1,
+      "sheetPath": "grades/math",
+      "sheetId": 4,
+      "action": "cell.update",
+      "actorType": "user",
+      "actorId": "student_token_123",
+      "ipAddress": "192.168.1.50",
+      "revision": 2,
+      "details": {
+        "row": 1,
+        "col": 2,
+        "columnId": "grade",
+        "oldValue": "B",
+        "newValue": "A"
+      },
+      "createdAt": "2026-10-24T08:30:00+00:00"
+    }
+  ],
+  "total": 1,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+Optional partner request header:
+- **`X-Actor-Id`** / **`X-Audit-Actor`** — When the partner app performs mutations via the CRUD API (`PUT`, `PATCH`, `DELETE`) on behalf of a specific user or admin, sending this header records their identity as the `actorId` in the audit trail.
+
 
 ### `PUT /api/partner/sheets/{path}` (create / replace)
 
