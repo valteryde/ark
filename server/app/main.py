@@ -12,10 +12,13 @@ notifications. Partners manage sheets through the CRUD API under /api/partner
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
+import hashlib
 import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -81,16 +84,21 @@ def _is_valid_ws_origin(websocket: WebSocket) -> bool:
     if origin is None:
         return True  # Non-browser clients; auth token is the access gate.
     origin = origin.rstrip("/")
-    if _ALLOWED_WS_ORIGINS:
-        return origin in _ALLOWED_WS_ORIGINS
-    # No explicit allowlist: enforce same-origin.
+    if _ALLOWED_WS_ORIGINS and origin in _ALLOWED_WS_ORIGINS:
+        return True
+    # Allow same-origin
     host = websocket.headers.get("host", "")
-    return origin in (f"http://{host}", f"https://{host}")
+    if host and origin in (f"http://{host}", f"https://{host}"):
+        return True
+    return False
 
 
 @app.middleware("http")
 async def ark_iframe_embed_headers(request: Request, call_next):
     response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-XSS-Protection"] = "0"
     if _IFRAME_X_FRAME_OPTIONS:
         response.headers["X-Frame-Options"] = _IFRAME_X_FRAME_OPTIONS
     elif not _IFRAME_FRAME_ANCESTORS:
@@ -114,22 +122,70 @@ def _bearer_token(value: str | None) -> str | None:
     return None
 
 
+def _user_actor_id(token: str | None) -> str | None:
+    """Convert bearer token to a hashed actor ID to prevent credential exposure in audit trails."""
+    if not token:
+        return "anonymous"
+    return f"token:{hashlib.sha256(token.encode()).hexdigest()[:12]}"
+
+
+_IP_RE = re.compile(r"^[0-9a-fA-F.:]{1,45}$")
+
+
+def _sanitize_ip(ip: str | None) -> str | None:
+    if not ip:
+        return None
+    cleaned = ip.strip()
+    return cleaned if _IP_RE.fullmatch(cleaned) else None
+
+
 def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    trust_proxy = os.environ.get("ARK_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
+    if trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            return _sanitize_ip(first)
     if request.client:
-        return request.client.host
+        return _sanitize_ip(request.client.host)
     return None
 
 
 def _ws_client_ip(websocket: WebSocket) -> str | None:
-    forwarded = websocket.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    trust_proxy = os.environ.get("ARK_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
+    if trust_proxy:
+        forwarded = websocket.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            return _sanitize_ip(first)
     if websocket.client:
-        return websocket.client.host
+        return _sanitize_ip(websocket.client.host)
     return None
+
+
+_AUTH_FAIL_BURST = 5
+_AUTH_FAIL_WINDOW = 60.0  # seconds
+_auth_fail_records: OrderedDict[str, list[float]] = OrderedDict()
+
+
+def _should_audit_auth_failure(key: str) -> bool:
+    """Throttle SQLite audit log inserts on authentication failures to prevent DoS."""
+    now = time.monotonic()
+    while _auth_fail_records:
+        oldest_key, timestamps = next(iter(_auth_fail_records.items()))
+        if timestamps and timestamps[-1] < now - _AUTH_FAIL_WINDOW:
+            _auth_fail_records.pop(oldest_key)
+        else:
+            break
+    timestamps = _auth_fail_records.get(key, [])
+    timestamps = [t for t in timestamps if t > now - _AUTH_FAIL_WINDOW]
+    if len(timestamps) >= _AUTH_FAIL_BURST:
+        return False
+    timestamps.append(now)
+    _auth_fail_records[key] = timestamps
+    if len(_auth_fail_records) > 5000:
+        _auth_fail_records.popitem(last=False)
+    return True
 
 
 @app.get("/api/health")
@@ -157,6 +213,7 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
     token = _bearer_token(request.headers.get("authorization"))
     ip = _client_ip(request)
     store = get_store()
+    actor_id = _user_actor_id(token)
     try:
         normalized = normalize_sheet_path(path)
     except SheetValidationError as e:
@@ -164,14 +221,17 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
     if not normalized:
         return JSONResponse({"detail": "sheet path must not be empty"}, status_code=400)
     if not await _verify_browser_token_safe(token, normalized):
-        store.log_audit_event(
-            sheet_path=normalized,
-            action="auth.failed",
-            actor_type="user",
-            actor_id=token,
-            ip_address=ip,
-            details={"reason": "unauthorized", "path": normalized},
-        )
+        logger.warning("unauthorized sheet read attempt for '%s' from IP %s", normalized, ip)
+        fail_key = f"{ip or ''}:{normalized}"
+        if _should_audit_auth_failure(fail_key):
+            store.log_audit_event(
+                sheet_path=normalized,
+                action="auth.failed",
+                actor_type="user",
+                actor_id=actor_id,
+                ip_address=ip,
+                details={"reason": "unauthorized", "path": normalized},
+            )
         return JSONResponse({"detail": "unauthorized"}, status_code=401)
     existing = store.get_sheet_payload(normalized)
     if existing is not None:
@@ -179,7 +239,7 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
             sheet_path=normalized,
             action="sheet.read",
             actor_type="user",
-            actor_id=token,
+            actor_id=actor_id,
             ip_address=ip,
             revision=existing.get("revision"),
             details={"client": "browser"},
@@ -194,7 +254,7 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
             normalized,
             template,
             actor_type="user",
-            actor_id=token,
+            actor_id=actor_id,
             ip_address=ip,
         )
     except SheetValidationError as e:
@@ -208,7 +268,7 @@ async def get_sheet(path: str, request: Request) -> JSONResponse:
         sheet_path=normalized,
         action="sheet.read",
         actor_type="user",
-        actor_id=token,
+        actor_id=actor_id,
         ip_address=ip,
         revision=payload.get("revision"),
         details={"client": "browser", "initial": True},
@@ -234,6 +294,7 @@ def _persist_ws_event(
     except SheetValidationError as e:
         return (False, str(e), None, 0)
     store = get_store()
+    actor_id = _user_actor_id(token)
 
     if msg_type == "cell.value_committed":
         try:
@@ -243,7 +304,7 @@ def _persist_ws_event(
                 data.get("col"),
                 data.get("value"),
                 actor_type="user",
-                actor_id=token,
+                actor_id=actor_id,
                 ip_address=client_ip,
                 column_id=data.get("columnId"),
             )
@@ -252,7 +313,7 @@ def _persist_ws_event(
                 sheet_path=sheet_path,
                 action="cell.rejected",
                 actor_type="user",
-                actor_id=token,
+                actor_id=actor_id,
                 ip_address=client_ip,
                 details={
                     "row": data.get("row"),
@@ -280,7 +341,7 @@ def _persist_ws_event(
                 sheet_path,
                 data.get("row"),
                 actor_type="user",
-                actor_id=token,
+                actor_id=actor_id,
                 ip_address=client_ip,
             )
         except SheetValidationError as e:
@@ -288,7 +349,7 @@ def _persist_ws_event(
                 sheet_path=sheet_path,
                 action="row.delete_rejected",
                 actor_type="user",
-                actor_id=token,
+                actor_id=actor_id,
                 ip_address=client_ip,
                 details={"row": data.get("row"), "reason": str(e)},
             )
@@ -329,29 +390,34 @@ async def collab_ws(websocket: WebSocket) -> None:
     token = websocket.query_params.get(_PARTNER_TOKEN_QUERY)
     sheet_param = websocket.query_params.get("path") or websocket.query_params.get("sheetPath")
     client_ip = _ws_client_ip(websocket)
+    actor_id = _user_actor_id(token)
     if not await _verify_browser_token_safe(token, sheet_param):
         if sheet_param:
-            get_store().log_audit_event(
-                sheet_path=sheet_param,
-                action="auth.failed",
-                actor_type="user",
-                actor_id=token,
-                ip_address=client_ip,
-                details={"reason": "unauthorized_ws_connection"},
-            )
+            fail_key = f"{client_ip or ''}:{sheet_param}"
+            if _should_audit_auth_failure(fail_key):
+                get_store().log_audit_event(
+                    sheet_path=sheet_param,
+                    action="auth.failed",
+                    actor_type="user",
+                    actor_id=actor_id,
+                    ip_address=client_ip,
+                    details={"reason": "unauthorized_ws_connection"},
+                )
         # Policy violation close; browser shows the reconnect state.
         await websocket.close(code=4401)
         return
     if not _is_valid_ws_origin(websocket):
         if sheet_param:
-            get_store().log_audit_event(
-                sheet_path=sheet_param,
-                action="auth.failed",
-                actor_type="user",
-                actor_id=token,
-                ip_address=client_ip,
-                details={"reason": "forbidden_origin", "origin": websocket.headers.get("origin")},
-            )
+            fail_key = f"{client_ip or ''}:{sheet_param}"
+            if _should_audit_auth_failure(fail_key):
+                get_store().log_audit_event(
+                    sheet_path=sheet_param,
+                    action="auth.failed",
+                    actor_type="user",
+                    actor_id=actor_id,
+                    ip_address=client_ip,
+                    details={"reason": "forbidden_origin", "origin": websocket.headers.get("origin")},
+                )
         await websocket.close(code=4403)
         return
     await hub.connect(websocket)
@@ -365,7 +431,7 @@ async def collab_ws(websocket: WebSocket) -> None:
                 sheet_path=norm_param,
                 action="sheet.subscribe",
                 actor_type="user",
-                actor_id=token,
+                actor_id=actor_id,
                 ip_address=client_ip,
             )
         except SheetValidationError:
@@ -397,14 +463,16 @@ async def collab_ws(websocket: WebSocket) -> None:
             if sheet_path:
                 if sheet_path not in authorized_paths:
                     if not await _verify_browser_token_safe(token, sheet_path):
-                        get_store().log_audit_event(
-                            sheet_path=sheet_path,
-                            action="auth.failed",
-                            actor_type="user",
-                            actor_id=token,
-                            ip_address=client_ip,
-                            details={"reason": "unauthorized_cross_sheet_access"},
-                        )
+                        fail_key = f"{client_ip or ''}:{sheet_path}"
+                        if _should_audit_auth_failure(fail_key):
+                            get_store().log_audit_event(
+                                sheet_path=sheet_path,
+                                action="auth.failed",
+                                actor_type="user",
+                                actor_id=actor_id,
+                                ip_address=client_ip,
+                                details={"reason": "unauthorized_cross_sheet_access"},
+                            )
                         await websocket.send_json(
                             {"error": "unauthorized", "sheetPath": sheet_path}
                         )
@@ -414,14 +482,26 @@ async def collab_ws(websocket: WebSocket) -> None:
 
             if msg_type in ("sheet.subscribe", "subscribe"):
                 if sheet_path:
+                    # Clear prior rooms to prevent room leaks when switching sheets
+                    hub.unsubscribe_all(websocket)
+                    hub.subscribe(websocket, sheet_path)
+                    authorized_paths.clear()
+                    authorized_paths.add(sheet_path)
                     get_store().log_audit_event(
                         sheet_path=sheet_path,
                         action="sheet.subscribe",
                         actor_type="user",
-                        actor_id=token,
+                        actor_id=actor_id,
                         ip_address=client_ip,
                     )
                     await websocket.send_json({"type": "subscribed", "sheetPath": sheet_path})
+                continue
+
+            if msg_type in ("sheet.unsubscribe", "unsubscribe"):
+                if sheet_path:
+                    hub.unsubscribe(websocket, sheet_path)
+                    authorized_paths.discard(sheet_path)
+                    await websocket.send_json({"type": "unsubscribed", "sheetPath": sheet_path})
                 continue
 
             if msg_type in _PRESENCE_TYPES:

@@ -40,6 +40,28 @@ class CollabHub:
         self._rooms.setdefault(sheet_path, set()).add(ws)
         self._client_paths.setdefault(id(ws), set()).add(sheet_path)
 
+    def unsubscribe(self, ws: WebSocket, sheet_path: str) -> None:
+        """Unsubscribe a connected client from *sheet_path*."""
+        room = self._rooms.get(sheet_path)
+        if room:
+            room.discard(ws)
+            if not room:
+                del self._rooms[sheet_path]
+        paths = self._client_paths.get(id(ws))
+        if paths:
+            paths.discard(sheet_path)
+
+    def unsubscribe_all(self, ws: WebSocket) -> None:
+        """Unsubscribe a connected client from all subscribed sheet rooms."""
+        paths = self._client_paths.pop(id(ws), set())
+        for path in paths:
+            room = self._rooms.get(path)
+            if room:
+                room.discard(ws)
+                if not room:
+                    del self._rooms[path]
+        self._client_paths[id(ws)] = set()
+
     async def broadcast(self, message: dict[str, Any], sheet_path: str) -> None:
         """Send *message* only to clients subscribed to *sheet_path*."""
         targets = list(self._rooms.get(sheet_path, set()))

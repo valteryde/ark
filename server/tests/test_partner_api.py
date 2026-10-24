@@ -408,11 +408,12 @@ def test_partner_audit_logs_api_and_sheet_filter(client):
     assert create_events[0]["actorType"] == "partner"
     assert create_events[0]["actorId"] == "admin_clara"
 
-    # Check the read event has student token
+    # Check the read event has hashed student token fingerprint (not raw token)
     read_events = [l for l in data["auditLogs"] if l["action"] == "sheet.read" and l["sheetPath"] == "math"]
     assert len(read_events) >= 1
     assert read_events[0]["actorType"] == "user"
-    assert read_events[0]["actorId"] == "student_token_42"
+    assert read_events[0]["actorId"].startswith("token:")
+    assert "student_token_42" not in read_events[0]["actorId"]
 
     # Check the patch event has oldValue "B" and newValue "A"
     patch_events = [l for l in data["auditLogs"] if l["action"] == "sheet.patch" and l["sheetPath"] == "math"]
@@ -460,13 +461,14 @@ def test_partner_audit_logs_ws_events_and_sheet_deletion(client):
         )
         ws.receive_json()
 
-    # Verify WS edit is audited with user token
+    # Verify WS edit is audited with user token fingerprint (not raw token)
     r = client.get("/api/partner/sheets/science/audit-logs?action=cell.update", headers=AUTH)
     assert r.status_code == 200
     update_logs = r.json()["auditLogs"]
     assert len(update_logs) == 1
     assert update_logs[0]["actorType"] == "user"
-    assert update_logs[0]["actorId"] == "sci_student_1"
+    assert update_logs[0]["actorId"].startswith("token:")
+    assert "sci_student_1" not in update_logs[0]["actorId"]
     assert update_logs[0]["details"]["newValue"] == "Atom"
 
     # Partner deletes the sheet

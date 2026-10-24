@@ -14,6 +14,7 @@ partner_template.py).
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from typing import Any
 
@@ -25,17 +26,29 @@ from .store import SheetValidationError, get_store, normalize_sheet_path
 
 router = APIRouter(prefix="/api/partner")
 
+_IP_RE = re.compile(r"^[0-9a-fA-F.:]{1,45}$")
+
+
+def _sanitize_ip(ip: str | None) -> str | None:
+    if not ip:
+        return None
+    cleaned = ip.strip()
+    return cleaned if _IP_RE.fullmatch(cleaned) else None
+
 
 def _api_token() -> str:
     return os.environ.get("ARK_PARTNER_API_TOKEN", "").strip()
 
 
 def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    trust_proxy = os.environ.get("ARK_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
+    if trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            return _sanitize_ip(first)
     if request.client:
-        return request.client.host
+        return _sanitize_ip(request.client.host)
     return None
 
 
@@ -151,6 +164,19 @@ async def get_audit_log(log_id: int, request: Request) -> JSONResponse:
 @router.get("/sheets/{path:path}/audit-logs")
 @router.get("/sheets/{path:path}/audit_logs")
 async def get_sheet_audit_logs(path: str, request: Request) -> JSONResponse:
+    if err := _auth_error(request):
+        return err
+    # If a sheet actually exists with a path matching the full route, return the sheet document
+    full_path = request.url.path
+    route_prefix = "/api/partner/sheets/"
+    if full_path.startswith(route_prefix):
+        raw_sheet = full_path[len(route_prefix):]
+        try:
+            norm_sheet = normalize_sheet_path(raw_sheet)
+            if get_store().sheet_exists(norm_sheet):
+                return await get_sheet(norm_sheet, request)
+        except SheetValidationError:
+            pass
     return await _handle_audit_logs(request, path=path)
 
 
@@ -158,28 +184,35 @@ async def get_sheet_audit_logs(path: str, request: Request) -> JSONResponse:
 async def get_sheet(path: str, request: Request) -> JSONResponse:
     if err := _auth_error(request):
         return err
+
+    try:
+        norm_path = normalize_sheet_path(path)
+    except SheetValidationError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
+
+    # Return the sheet directly if it exists under this exact normalized path
+    payload = get_store().get_sheet_payload(norm_path)
+    if payload is not None:
+        get_store().log_audit_event(
+            sheet_path=norm_path,
+            action="sheet.read",
+            actor_type="partner",
+            actor_id=_partner_actor_id(request),
+            ip_address=_client_ip(request),
+            revision=payload.get("revision"),
+            details={"client": "partner_api"},
+        )
+        return JSONResponse(payload)
+
+    # Suffix alias fallback for audit logs if sheet not found
     if path.endswith("/audit-logs"):
         target_path = path[:-len("/audit-logs")]
         return await _handle_audit_logs(request, path=target_path)
     if path.endswith("/audit_logs"):
         target_path = path[:-len("/audit_logs")]
         return await _handle_audit_logs(request, path=target_path)
-    try:
-        payload = get_store().get_sheet_payload(path)
-    except SheetValidationError as e:
-        return JSONResponse({"detail": str(e)}, status_code=400)
-    if payload is None:
-        return JSONResponse({"detail": "sheet not found"}, status_code=404)
-    get_store().log_audit_event(
-        sheet_path=path,
-        action="sheet.read",
-        actor_type="partner",
-        actor_id=_partner_actor_id(request),
-        ip_address=_client_ip(request),
-        revision=payload.get("revision"),
-        details={"client": "partner_api"},
-    )
-    return JSONResponse(payload)
+
+    return JSONResponse({"detail": "sheet not found"}, status_code=404)
 
 
 @router.put("/sheets/{path:path}")

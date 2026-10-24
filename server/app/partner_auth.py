@@ -10,6 +10,7 @@ no partner base URL configured (local dev), all requests are accepted.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import logging
 import os
 import time
@@ -17,6 +18,8 @@ import time
 import httpx
 
 logger = logging.getLogger("ark")
+
+_MAX_CACHE_SIZE = 10_000
 
 
 def partner_base_url() -> str:
@@ -31,8 +34,8 @@ def _cache_ttl_seconds() -> float:
         return 300.0
 
 
-# token -> (valid, expires_at_monotonic)
-_cache: dict[str, tuple[bool, float]] = {}
+# token\0path -> (valid, expires_at_monotonic)
+_cache: OrderedDict[str, tuple[bool, float]] = OrderedDict()
 
 
 def clear_auth_cache() -> None:
@@ -45,11 +48,16 @@ async def verify_browser_token(token: str | None, path: str | None = None) -> bo
     if not base:
         return True
 
-    cache_key = f"{token or ''}:{path or ''}"
+    cache_key = f"{token or ''}\x00{path or ''}"
     now = time.monotonic()
     cached = _cache.get(cache_key)
-    if cached is not None and cached[1] > now:
-        return cached[0]
+    if cached is not None:
+        valid, exp = cached
+        if exp > now:
+            _cache.move_to_end(cache_key)
+            return valid
+        else:
+            del _cache[cache_key]
 
     headers = {"authorization": f"Bearer {token}"} if token else {}
     params = {"path": path} if path else {}
@@ -63,5 +71,9 @@ async def verify_browser_token(token: str | None, path: str | None = None) -> bo
         # Partner unreachable: fail closed, but do not cache so recovery is immediate.
         return False
 
-    _cache[cache_key] = (valid, now + _cache_ttl_seconds())
+    # Negative responses cached for shorter TTL (max 30s) to throttle partner flood
+    ttl = _cache_ttl_seconds() if valid else min(_cache_ttl_seconds(), 30.0)
+    if len(_cache) >= _MAX_CACHE_SIZE:
+        _cache.popitem(last=False)
+    _cache[cache_key] = (valid, now + ttl)
     return valid

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -76,6 +77,13 @@ _BLANK_COLUMN_WIDTH_PX = 160
 
 MAX_ROWS = 50_000
 MAX_COLS = 500
+MAX_CELL_STRING_LENGTH = 32_768  # 32 KB per cell
+MAX_COLUMN_ID_LENGTH = 128
+MAX_COLUMN_HEADER_LENGTH = 500
+MAX_TITLE_LENGTH = 1_000
+MAX_DESCRIPTION_LENGTH = 10_000
+
+_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
 
 def blank_sheet_columns() -> list[dict[str, Any]]:
@@ -121,18 +129,48 @@ class SheetValidationError(ValueError):
 
 
 def normalize_sheet_path(path: str) -> str:
-    segments = [s for s in path.split("/") if s]
-    if any(s in (".", "..") for s in segments):
-        raise SheetValidationError("path traversal sequences are not permitted")
+    if not isinstance(path, str):
+        raise SheetValidationError("sheet path must be a string")
+    clean = path.strip().strip("/")
+    if not clean:
+        raise SheetValidationError("sheet path must not be empty")
+    segments = [s for s in clean.split("/") if s]
+    if not segments:
+        raise SheetValidationError("sheet path must not be empty")
+    for s in segments:
+        if not _SEGMENT_RE.fullmatch(s):
+            raise SheetValidationError(
+                f"invalid path segment: '{s}'. Segments must contain only alphanumeric characters, dashes, and underscores."
+            )
     return "/".join(segments)
 
 
 def validate_cell_value(value: Any) -> str | int | float:
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         raise SheetValidationError("value must be a string or a number")
+    if isinstance(value, str) and len(value) > MAX_CELL_STRING_LENGTH:
+        raise SheetValidationError(
+            f"cell value exceeds maximum length of {MAX_CELL_STRING_LENGTH} characters"
+        )
     if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
         raise SheetValidationError("value must be a finite number")
     return value
+
+
+def _validate_title(title: Any) -> str | None:
+    if title is None:
+        return None
+    if not isinstance(title, str) or len(title) > MAX_TITLE_LENGTH:
+        raise SheetValidationError(f"title must be a string up to {MAX_TITLE_LENGTH} characters")
+    return title
+
+
+def _validate_description(description: Any) -> str | None:
+    if description is None:
+        return None
+    if not isinstance(description, str) or len(description) > MAX_DESCRIPTION_LENGTH:
+        raise SheetValidationError(f"description must be a string up to {MAX_DESCRIPTION_LENGTH} characters")
+    return description
 
 
 def _validate_columns(columns: Any) -> list[dict[str, Any]]:
@@ -149,11 +187,15 @@ def _validate_columns(columns: Any) -> list[dict[str, Any]]:
         header = c.get("header")
         if not isinstance(cid, str) or not cid:
             raise SheetValidationError("column id must be a non-empty string")
+        if len(cid) > MAX_COLUMN_ID_LENGTH:
+            raise SheetValidationError(f"column id exceeds maximum length of {MAX_COLUMN_ID_LENGTH} characters")
         if cid in seen_ids:
             raise SheetValidationError(f"duplicate column id: {cid}")
         seen_ids.add(cid)
         if not isinstance(header, str):
             raise SheetValidationError("column header must be a string")
+        if len(header) > MAX_COLUMN_HEADER_LENGTH:
+            raise SheetValidationError(f"column header exceeds maximum length of {MAX_COLUMN_HEADER_LENGTH} characters")
         out.append(dict(c))
     return out
 
@@ -166,6 +208,10 @@ class SheetStore:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        if db_path != ":memory:":
+            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA synchronous = NORMAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -263,8 +309,8 @@ class SheetStore:
             # grid — Ark should feel like a spreadsheet, not a fixed form.
             row_count = max(rc or 0, len(rows), _BLANK_ROW_COUNT)
             fields = {
-                "title": template.get("title"),
-                "description": template.get("description"),
+                "title": _validate_title(template.get("title")),
+                "description": _validate_description(template.get("description")),
                 "columns": json.dumps(columns),
                 "row_count": row_count,
                 "ghost_row_count": template.get("ghostRowCount"),
@@ -564,6 +610,8 @@ class SheetStore:
             raise SheetValidationError(f"rowCount must not exceed {MAX_ROWS}")
         effective_row_count = max(row_count or 0, len(rows), _BLANK_ROW_COUNT)
         col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
+        title = _validate_title(payload.get("title"))
+        description = _validate_description(payload.get("description"))
         now = _now()
         with self._lock:
             sheet = self._conn.execute(
@@ -606,8 +654,8 @@ class SheetStore:
                 WHERE id = ?
                 """,
                 (
-                    payload.get("title"),
-                    payload.get("description"),
+                    title,
+                    description,
                     json.dumps(columns),
                     effective_row_count,
                     payload.get("ghostRowCount"),
@@ -634,7 +682,7 @@ class SheetStore:
                     ip_address,
                     revision,
                     json.dumps({
-                        "title": payload.get("title"),
+                        "title": title,
                         "rowCount": effective_row_count,
                         "columnCount": len(columns),
                         "seededRows": len(rows),
@@ -720,9 +768,12 @@ class SheetStore:
                         if rc > MAX_ROWS:
                             raise SheetValidationError(f"rowCount must not exceed {MAX_ROWS}")
                         params[2] = max(rc, row_count)
-                    else:
-                        sets.append(f"{column} = ?")
-                        params.append(patch[key])
+                    elif key == "title":
+                        sets.append("title = ?")
+                        params.append(_validate_title(patch["title"]))
+                    elif key == "description":
+                        sets.append("description = ?")
+                        params.append(_validate_description(patch["description"]))
             params.append(sheet["id"])
             self._conn.execute(f"UPDATE sheets SET {', '.join(sets)} WHERE id = ?", params)
             self._log_event(
@@ -981,8 +1032,11 @@ class SheetStore:
             params.append(norm_path)
         elif prefix:
             norm_prefix = normalize_sheet_path(prefix)
-            clauses.append("(sheet_path = ? OR sheet_path LIKE ?)")
-            params.extend([norm_prefix, f"{norm_prefix}/%"])
+            escaped_prefix = (
+                norm_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            clauses.append("(sheet_path = ? OR sheet_path LIKE ? ESCAPE '\\')")
+            params.extend([norm_prefix, f"{escaped_prefix}/%"])
 
         if action:
             actions = [a.strip() for a in action.split(",") if a.strip()]
