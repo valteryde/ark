@@ -47,6 +47,39 @@ Deno.test('normalizePartnerSheetPayload drops invalid columns', () => {
   assertEquals(result?.columns.length, 1);
 });
 
+Deno.test('normalizePartnerSheetPayload keeps link columns and drops a bad icon', () => {
+  const result = normalizePartnerSheetPayload({
+    columns: [
+      {
+        id: 'open',
+        header: 'Open',
+        widthPx: 56,
+        valueType: 'link',
+        icon: 'arrow-square-out',
+        label: ' Open ',
+        openInNewTab: false,
+      },
+      { id: 'bad', header: 'Bad', valueType: 'link', icon: 'Not An Icon' },
+    ],
+    rows: [{ open: 'https://example.com' }],
+  });
+  assertEquals(result?.columns[0], {
+    id: 'open',
+    header: 'Open',
+    widthPx: 56,
+    valueType: 'link',
+    icon: 'arrow-square-out',
+    label: 'Open',
+    openInNewTab: false,
+  });
+  assertEquals(result?.columns[1], {
+    id: 'bad',
+    header: 'Bad',
+    widthPx: 120,
+    valueType: 'link',
+  });
+});
+
 Deno.test('normalizePartnerSheetPayload parses hidden and forces readOnly', () => {
   const result = normalizePartnerSheetPayload({
     columns: [{ id: 'id', header: 'ID', widthPx: 72, hidden: true }],

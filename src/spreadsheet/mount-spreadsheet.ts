@@ -1,11 +1,12 @@
 import '../sheet.css';
 
 import { applyCellDisplay, applyCellInlineStyleRecord, getCellEditor } from './cell-dom.ts';
-import { formatSelectOptionMarkup } from './cell-display.ts';
+import { formatSelectOptionMarkup, linkButtonLabel } from './cell-display.ts';
 import {
   cellPlainTextForSearch,
   columnValueType,
   filterSelectOptions,
+  isLinkColumn,
   isSelectColumn,
   parseCommittedCellValue,
   resolveSelectLabel,
@@ -579,6 +580,20 @@ export function mountSpreadsheet(
     return columnAt(col)?.readOnly === true;
   }
 
+  /** Link columns are action buttons: the grid never edits their URL. */
+  function isEditableCol(col: number): boolean {
+    if (isReadOnlyCol(col)) return false;
+    return !isLinkColumn(columnAt(col));
+  }
+
+  function activateLinkCell(row: number, col: number): boolean {
+    if (isGhostRow(row) || !isLinkColumn(columnAt(col))) return false;
+    const link = cells.get(cellKey(row, col))?.querySelector<HTMLElement>('a.sheet-cell-link');
+    if (!link) return false;
+    link.click();
+    return true;
+  }
+
   function persistActiveInput(): void {
     if (!editMode) return;
     if (isGhostRow(active.row) || isReadOnlyCol(active.col)) return;
@@ -596,7 +611,7 @@ export function mountSpreadsheet(
       showInputRejectedHint(
         active.row,
         active.col,
-        vt === 'number' ? 'Enter a number' : 'Pick a value from the list',
+        vt === 'number' ? 'Enter a number' : vt === 'link' ? 'Enter a valid link' : 'Pick a value from the list',
       );
       return;
     }
@@ -975,7 +990,7 @@ export function mountSpreadsheet(
         const r = anchorRow + dr;
         const c = anchorCol + dc;
         if (r < 1 || r > dataRowCount || c < 1 || c > dataColumnCount) continue;
-        if (isReadOnlyCol(c)) continue;
+        if (!isEditableCol(c)) continue;
         keys.push(cellKey(r, c));
       }
     }
@@ -1006,7 +1021,7 @@ export function mountSpreadsheet(
         const r = anchor.row + dr;
         const c = anchor.col + dc;
         if (r < 1 || r > dataRowCount || c < 1 || c > dataColumnCount) continue;
-        if (isReadOnlyCol(c)) continue;
+        if (!isEditableCol(c)) continue;
         const raw = row[dc] ?? '';
         const colDef = columnAt(c);
         const parsed = parseCommittedCellValue(colDef, raw);
@@ -1196,11 +1211,11 @@ export function mountSpreadsheet(
         if (r < 1 || r > dataRowCount) continue;
         for (let c = minCol; c <= maxCol; c++) {
           if (c < 1 || c > dataColumnCount) continue;
-          if (isReadOnlyCol(c)) continue;
+          if (!isEditableCol(c)) continue;
           keys.push(cellKey(r, c));
         }
       }
-    } else if (!isReadOnlyCol(active.col) && !isGhostRow(active.row)) {
+    } else if (isEditableCol(active.col) && !isGhostRow(active.row)) {
       keys.push(cellKey(active.row, active.col));
     }
     if (keys.length === 0) return;
@@ -1426,6 +1441,10 @@ export function mountSpreadsheet(
       if (isSelectColumn(colDef)) {
         input.dataset.sheetValueType = 'select';
         cell.classList.add('sheet-cell--select');
+      }
+      if (isLinkColumn(colDef)) {
+        cell.classList.add('sheet-cell--link');
+        if (!linkButtonLabel(colDef)) cell.classList.add('sheet-cell--link-icon');
       }
       input.value = display;
       if (ghost || colDef?.readOnly) {
@@ -2129,7 +2148,7 @@ export function mountSpreadsheet(
   }
 
   function enterEditMode(opts?: { seed?: string }): void {
-    if (isReadOnlyCol(active.col) || isGhostRow(active.row)) return;
+    if (!isEditableCol(active.col) || isGhostRow(active.row)) return;
     const cell = cells.get(cellKey(active.row, active.col));
     const inp = cell ? getCellEditor(cell) : null;
     if (!inp || !cell) return;
@@ -2410,9 +2429,30 @@ export function mountSpreadsheet(
     }
   }
 
+  viewport.addEventListener('click', (e) => {
+    const linkHit = (e.target as HTMLElement | null)?.closest?.('a.sheet-cell-link');
+    if (!linkHit || !viewport.contains(linkHit)) return;
+    if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey || e.button !== 0) return;
+    const linkCell = linkHit.closest('.sheet-cell') as HTMLElement | null;
+    if (!linkCell) return;
+    const cr = clampRow(Number(linkCell.dataset.row));
+    const cc = clampCol(Number(linkCell.dataset.col));
+    if (isGhostRow(cr)) return;
+    // After the browser follows the link, so focusing the grid does not cancel it.
+    setTimeout(() => {
+      if (cr === active.row && cc === active.col) return;
+      setActive(cr, cc);
+    }, 0);
+  });
+
   viewport.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
+
+    // Leave the click intact so the browser follows the URL. Selecting here
+    // would focus the grid during pointerdown and cancel that navigation.
+    const linkHit = target.closest('a.sheet-cell-link');
+    if (linkHit && viewport.contains(linkHit)) return;
 
     const caretHit = target.closest('.sheet-cell-select-caret') as HTMLElement | null;
     if (caretHit && viewport.contains(caretHit)) {
@@ -2530,7 +2570,7 @@ export function mountSpreadsheet(
 
     // Second click of a double-click: enter edit mode here because
     // preventDefault() on pointerdown suppresses the dblclick event in most browsers.
-    if (e.detail === 2 && !isReadOnlyCol(col) && !isGhostRow(row)) {
+    if (e.detail === 2 && isEditableCol(col) && !isGhostRow(row)) {
       enterEditMode();
     }
   });
@@ -2845,6 +2885,9 @@ export function mountSpreadsheet(
     if (e.key === 'Enter') {
       e.preventDefault();
       hideSuggestions();
+      if (!e.shiftKey && !editMode && !selectArea.active && !sheetMod && !e.altKey) {
+        if (activateLinkCell(row, col)) return;
+      }
       const targetCol = clampColVisible(tabAnchorCol ?? col);
       tabAnchorCol = null;
       const dir = e.shiftKey ? -1 : 1;
@@ -2888,13 +2931,13 @@ export function mountSpreadsheet(
       doOnEverySelectedCell((cell) => {
         const r = clampRow(Number(cell.dataset.row));
         const c = clampCol(Number(cell.dataset.col));
-        if (!isReadOnlyCol(c)) keys.push(cellKey(r, c));
+        if (isEditableCol(c)) keys.push(cellKey(r, c));
       });
       const before = history && keys.length > 0 ? captureSnapshot(keys) : null;
       doOnEverySelectedCell((cell) => {
         const r = clampRow(Number(cell.dataset.row));
         const c = clampCol(Number(cell.dataset.col));
-        if (isReadOnlyCol(c)) return;
+        if (!isEditableCol(c)) return;
         data.set(r, c, '');
         const contentEl = cell.querySelector<HTMLDivElement>('.sheet-cell-content')!;
         applyCellDisplay(contentEl, columnAt(c), '');
@@ -2915,7 +2958,7 @@ export function mountSpreadsheet(
       !sheetMod &&
       !e.altKey &&
       e.key.length === 1 &&
-      !isReadOnlyCol(active.col) &&
+      isEditableCol(active.col) &&
       !isGhostRow(active.row)
     ) {
       e.preventDefault();
@@ -2928,7 +2971,7 @@ export function mountSpreadsheet(
       (e.key === 'Backspace' || e.key === 'Delete') &&
       !selectArea.active &&
       !editMode &&
-      !isReadOnlyCol(active.col) &&
+      isEditableCol(active.col) &&
       !isGhostRow(active.row)
     ) {
       e.preventDefault();
@@ -3112,7 +3155,7 @@ export function mountSpreadsheet(
     const cell = hit as HTMLElement;
     const row = clampRow(Number(cell.dataset.row));
     const col = clampCol(Number(cell.dataset.col));
-    if (isReadOnlyCol(col) || isGhostRow(row)) return;
+    if (!isEditableCol(col) || isGhostRow(row)) return;
     e.preventDefault();
     if (row !== active.row || col !== active.col) {
       setActive(row, col);

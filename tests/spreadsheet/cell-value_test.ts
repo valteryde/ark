@@ -3,6 +3,8 @@ import {
   cellPlainTextForSearch,
   columnValueType,
   filterSelectOptions,
+  isLinkColumn,
+  isSafeLinkHref,
   isSelectColumn,
   parseCommittedCellValue,
   resolveSelectLabel,
@@ -26,6 +28,21 @@ Deno.test('columnValueType defaults to text', () => {
   assertEquals(columnValueType(undefined), 'text');
   assertEquals(columnValueType(col()), 'text');
   assertEquals(columnValueType(col({ valueType: 'number' })), 'number');
+  assertEquals(columnValueType(col({ valueType: 'link' })), 'link');
+});
+
+Deno.test('isLinkColumn matches valueType link', () => {
+  assertEquals(isLinkColumn(col({ valueType: 'link' })), true);
+  assertEquals(isLinkColumn(col()), false);
+});
+
+Deno.test('isSafeLinkHref allows http(s), mailto, and same-origin paths', () => {
+  assertEquals(isSafeLinkHref('https://example.com/a'), true);
+  assertEquals(isSafeLinkHref('mailto:a@b.com'), true);
+  assertEquals(isSafeLinkHref('/records/12'), true);
+  assertEquals(isSafeLinkHref('javascript:alert(1)'), false);
+  assertEquals(isSafeLinkHref('//evil.example'), false);
+  assertEquals(isSafeLinkHref(''), false);
 });
 
 Deno.test('isSelectColumn requires select type and options', () => {
@@ -55,6 +72,16 @@ Deno.test('parseCommittedCellValue: select matches by value or label (case-insen
   assertEquals(parseCommittedCellValue(selectCol, 'nope'), { ok: false });
 });
 
+Deno.test('parseCommittedCellValue: link keeps safe URLs and rejects the rest', () => {
+  const c = col({ valueType: 'link' });
+  assertEquals(parseCommittedCellValue(c, ' https://example.com/x '), {
+    ok: true,
+    value: 'https://example.com/x',
+  });
+  assertEquals(parseCommittedCellValue(c, ''), { ok: true, value: '' });
+  assertEquals(parseCommittedCellValue(c, 'javascript:alert(1)'), { ok: false });
+});
+
 Deno.test('parseCommittedCellValue: select empty respects allowEmpty', () => {
   assertEquals(parseCommittedCellValue(selectCol, ''), { ok: true, value: '' });
   const strict = col({
@@ -76,6 +103,10 @@ Deno.test('cellPlainTextForSearch formats by column type', () => {
   assertEquals(cellPlainTextForSearch(col({ valueType: 'number' }), 7), '7');
   assertEquals(cellPlainTextForSearch(col(), '  hi '), 'hi');
   assertEquals(cellPlainTextForSearch(selectCol, 'done'), 'Done');
+  assertEquals(
+    cellPlainTextForSearch(col({ valueType: 'link' }), ' https://example.com '),
+    'https://example.com',
+  );
 });
 
 Deno.test('filterSelectOptions ranks prefix before substring', () => {

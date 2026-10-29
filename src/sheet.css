@@ -902,6 +902,55 @@ a.app-sheet-tabs__tab {
   text-align: right;
 }
 
+/* Link columns: icon with optional text beside it. No filled button chrome. */
+.sheet-cell--link .sheet-cell-content {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sheet-cell--link-icon {
+  justify-content: center;
+}
+
+.sheet-cell--link-icon .sheet-cell-content {
+  justify-content: center;
+  overflow: visible;
+}
+
+.sheet-cell-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 1.5rem;
+  color: inherit;
+  text-decoration: none;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.sheet-cell-link .ph {
+  flex-shrink: 0;
+  font-size: 1.05rem;
+}
+
+.sheet-cell-link__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-cell-link:hover,
+.sheet-cell-link:focus-visible {
+  color: var(--sheet-accent);
+}
+
 /* Dropdown affordance on editable select cells (revealed on hover / active). */
 .sheet-cell--select .sheet-cell-content {
   padding-right: 14px;

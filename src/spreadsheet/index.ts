@@ -19,6 +19,8 @@ export {
   cellPlainTextForSearch,
   columnValueType,
   filterSelectOptions,
+  isLinkColumn,
+  isSafeLinkHref,
   isSelectColumn,
   parseCommittedCellValue,
   resolveSelectLabel,
@@ -26,6 +28,7 @@ export {
 export {
   formatCellHtml,
   formatSelectOptionMarkup,
+  linkButtonLabel,
   sanitizeCssColor,
   sanitizePhosphorIconName,
 } from './cell-display.ts';

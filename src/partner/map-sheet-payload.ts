@@ -1,4 +1,5 @@
 import { cellKey, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
+import { sanitizePhosphorIconName } from '../spreadsheet/cell-display.ts';
 import type {
   SpreadsheetColumn,
   SpreadsheetConfig,
@@ -27,8 +28,24 @@ function normalizeColumn(c: unknown): SpreadsheetColumn | null {
   const widthPx = typeof o.widthPx === 'number' && Number.isFinite(o.widthPx) && o.widthPx > 0 ? o.widthPx : 120;
   const col: SpreadsheetColumn = { id: o.id, header: o.header, widthPx };
   if (typeof o.readOnly === 'boolean') col.readOnly = o.readOnly;
-  if (o.valueType === 'text' || o.valueType === 'number' || o.valueType === 'select') {
+  if (
+    o.valueType === 'text' ||
+    o.valueType === 'number' ||
+    o.valueType === 'select' ||
+    o.valueType === 'link'
+  ) {
     col.valueType = o.valueType;
+  }
+  if (col.valueType === 'link') {
+    if (typeof o.icon === 'string') {
+      const icon = sanitizePhosphorIconName(o.icon);
+      if (icon) col.icon = icon;
+    }
+    if (typeof o.openInNewTab === 'boolean') col.openInNewTab = o.openInNewTab;
+    if (typeof o.label === 'string') {
+      const label = o.label.trim().slice(0, 500);
+      if (label) col.label = label;
+    }
   }
   if (Array.isArray(o.selectOptions)) {
     const opts: SpreadsheetSelectOption[] = [];

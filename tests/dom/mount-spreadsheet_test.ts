@@ -376,6 +376,83 @@ domTest('Cmd+C/Cmd+V use the in-app clipboard when system clipboard access is de
   }
 });
 
+domTest('link column renders an icon button and ignores typing, delete, and paste', async (env) => {
+  const container = env.makeContainer();
+  const cols: SpreadsheetColumn[] = [
+    { id: 'name', header: 'Name', widthPx: 160 },
+    {
+      id: 'open',
+      header: 'Open',
+      widthPx: 56,
+      valueType: 'link',
+      icon: 'eye',
+    },
+  ];
+  const cfg = config(
+    { '1:1': 'Ada', '1:2': 'https://example.com/ada' },
+    { columns: cols, initialSelection: { row: 1, col: 2 } },
+  );
+  mountSpreadsheet(container, cfg);
+  const viewport = container.querySelector('.sheet-viewport') as HTMLElement;
+  const link = container.querySelector(
+    '.sheet-cell[data-row="1"][data-col="2"] a.sheet-cell-link',
+  ) as HTMLAnchorElement;
+  assertExists(link);
+  assertEquals(link.getAttribute('href'), 'https://example.com/ada');
+  assertEquals(link.getAttribute('target'), '_blank');
+  assertEquals(link.querySelector('i')?.className, 'ph ph-eye');
+  assertEquals(
+    container.querySelector('.sheet-cell[data-col="2"]')?.classList.contains('sheet-cell--link'),
+    true,
+  );
+
+  let opened = 0;
+  link.click = () => {
+    opened += 1;
+  };
+  viewport.focus();
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+  );
+  assertEquals(opened, 1);
+  assertEquals(cfg.data.get(1, 2), 'https://example.com/ada');
+
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true }),
+  );
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', {
+      key: 'Backspace',
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assertEquals(cfg.data.get(1, 2), 'https://example.com/ada');
+
+  const prevClipboard = globalThis.navigator.clipboard;
+  Object.defineProperty(globalThis.navigator, 'clipboard', {
+    configurable: true,
+    value: { readText: () => Promise.resolve('https://evil.example') },
+  });
+  try {
+    viewport.dispatchEvent(
+      new env.window.KeyboardEvent('keydown', {
+        key: 'v',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assertEquals(cfg.data.get(1, 2), 'https://example.com/ada');
+  } finally {
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: prevClipboard,
+    });
+  }
+});
+
 domTest('read-only column cells are marked and not style targets', (env) => {
   const container = env.makeContainer();
   const readOnlyCols: SpreadsheetColumn[] = [

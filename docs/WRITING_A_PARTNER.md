@@ -51,6 +51,8 @@ For **hidden primary keys**, put the id in the first column with **`readOnly: tr
 
 For **dropdown columns** with colored chips and icons, use **`valueType: "select"`** and put **`color`**, **`backgroundColor`**, and **`icon`** on each **`selectOptions`** entry (see **[PARTNER_API.md](PARTNER_API.md)**).
 
+For an **icon button that opens a URL**, use **`valueType: "link"`**. Put the URL on the row. Text beside the icon is **`label`**, or the column header if you omit it. The icon is open-in-new unless you set **`icon`** (see **[PARTNER_API.md](PARTNER_API.md)**).
+
 **Full field list and UI flags** — see **[PARTNER_API.md](PARTNER_API.md)** (payload reference).
 
 ## Syncing: `POST /ark/notify`

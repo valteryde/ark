@@ -31,6 +31,7 @@ The demo app shell (tabs, header) is **not** part of the spreadsheet package; on
 - **`text`** (default) — Free text; commit stores the string as entered (no extra validation in v1).
 - **`number`** — Commit accepts a trimmed string that parses to a finite number; empty string is allowed; invalid input is rejected and the editor reverts to the last stored value. Number cells are **right-aligned by default** (an explicit toolbar alignment overrides this per cell). A rejected commit shows a brief inline hint near the cell.
 - **`select`** — Constrained to **`selectOptions`**: each entry is `{ "value": string, "label"?: string, "color"?: string, "backgroundColor"?: string, "icon"?: string }` (see PARTNER_API for chip fields). The store always holds the canonical **`value`**. The cell editor is still a text field; a **suggestion list** filters options as the user types (prefix then substring, case-insensitive). Editable select cells show a **dropdown caret** on hover/active; clicking it opens the full list. **Alt+ArrowDown** opens the full list. With the list open, **ArrowUp/ArrowDown** move the highlight, **Enter** applies the highlight (or commits the typed value if none), **Tab** applies the highlight or the first match, **Escape** closes the list. On commit, paste, or grid paste, a cell is accepted if it **exactly** matches an option’s **`value`**, or if it case-insensitively matches that option’s display string (`label`, or `value` when `label` is absent); otherwise the input is rejected and the editor reverts. **Copy** (cell, range, or copy row) puts the **display** string on the clipboard for select cells. If **`allowEmpty`** is `false`, an empty cell commits as the first option’s value (default `allowEmpty` is true).
+- **`link`** — The cell value is a URL, drawn as an icon with text beside it (no in-cell editor). The text is column **`label`**, or the column **`header`** when **`label`** is omitted. A blank header and label leave an icon-only button. Click the button, or press **Enter** on the cell, to open it. The default icon is Phosphor **`arrow-square-out`** (open in a new tab). Set column **`icon`** to another Phosphor regular name to replace it. **`openInNewTab`** defaults to **`true`**; set **`false`** to stay in the same tab. Allowed values are **`http:`**, **`https:`**, **`mailto:`**, or a same-origin path starting with **`/`**. Empty or unsafe values show no button. Typing, paste, and Delete skip these cells; the partner supplies the URL. Copy and Find use the URL string. A link column is not the record-id column unless you also set **`readOnly`**.
 
 Chip styling uses the canonical **`value`** to find the option; **`label`** is for display text when set.
 
@@ -42,7 +43,7 @@ Chip styling uses the canonical **`value`** to find the option; **`label`** is f
 
 ## Security note
 
-Rich cell HTML for select chips is built from **sanitized** `color` / `backgroundColor` strings, a restricted **`icon`** name, and **escaped** labels. Do not pipe arbitrary server HTML into cells without a separate, explicit escape hatch and sanitization policy.
+Rich cell HTML for select chips is built from **sanitized** `color` / `backgroundColor` strings, a restricted **`icon`** name, and **escaped** labels. Link-column buttons use the same icon sanitizer and only **`http:`**, **`https:`**, **`mailto:`**, or same-origin **`/`** paths. Do not pipe arbitrary server HTML into cells without a separate, explicit escape hatch and sanitization policy.
 
 ## Keyboard / selection
 
@@ -63,7 +64,7 @@ The grid models two modes per cell, mirroring Google Sheets / Excel:
 
 ## Find in sheet
 
-- **Behavior**: Search scans **data cells only** (`rowCount` × column count; not ghost rows/columns). Matching is **case-insensitive substring** on plain text as the user sees it: **select** columns use the same display string as the grid (**label** when present); **number** and **text** use trimmed string forms.
+- **Behavior**: Search scans **data cells only** (`rowCount` × column count; not ghost rows/columns). Matching is **case-insensitive substring** on plain text as the user sees it: **select** columns use the same display string as the grid (**label** when present); **link** columns use the URL; **number** and **text** use trimmed string forms.
 - **Navigation**: **Next** starts at the cell **after** the current selection in row-major order and **wraps**. **Previous** scans backward with wrap.
 - **Bundled Ark app**: Header **Find in sheet** field, **Enter** = next match, **Shift+Enter** = previous, **Cmd+F** / **Ctrl+F** focuses the field. Browser page find is not used for cell values.
 - **Embeds**: Use **`findInSheet({ query, forward })`** on the mount handle to drive your own UI; it returns whether a match was found and moves the selection + scrolls the match into view.

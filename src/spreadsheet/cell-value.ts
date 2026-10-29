@@ -1,11 +1,39 @@
-import type { SpreadsheetColumn, SpreadsheetSelectOption } from './types.ts';
+import type {
+  SpreadsheetColumn,
+  SpreadsheetColumnValueType,
+  SpreadsheetSelectOption,
+} from './types.ts';
 
 const MAX_SUGGEST = 50;
+const MAX_LINK_HREF = 2048;
 
 export function columnValueType(
   column: SpreadsheetColumn | undefined,
-): 'text' | 'number' | 'select' {
+): SpreadsheetColumnValueType {
   return column?.valueType ?? 'text';
+}
+
+export function isLinkColumn(column: SpreadsheetColumn | undefined): boolean {
+  return columnValueType(column) === 'link';
+}
+
+/**
+ * URLs a link-column button may open. Same rules as partner chrome actions:
+ * `http:`, `https:`, `mailto:`, or a same-origin path starting with `/`.
+ */
+export function isSafeLinkHref(href: string): boolean {
+  const t = href.trim();
+  if (!t || t.length > MAX_LINK_HREF) return false;
+  if (/[\u0000-\u001f\u007f]/.test(t)) return false;
+  if (t.startsWith('/')) {
+    return !t.startsWith('//') && !t.includes('\\');
+  }
+  try {
+    const u = new URL(t);
+    return u.protocol === 'https:' || u.protocol === 'http:' || u.protocol === 'mailto:';
+  } catch {
+    return false;
+  }
 }
 
 export function isSelectColumn(column: SpreadsheetColumn | undefined): boolean {
@@ -29,6 +57,12 @@ export function parseCommittedCellValue(
     const n = Number(t);
     if (!Number.isFinite(n)) return { ok: false };
     return { ok: true, value: n };
+  }
+  if (vt === 'link') {
+    const t = raw.trim();
+    if (t === '') return { ok: true, value: '' };
+    if (!isSafeLinkHref(t)) return { ok: false };
+    return { ok: true, value: t };
   }
   const options = column?.selectOptions ?? [];
   const t = raw.trim();

@@ -1,5 +1,8 @@
-import { columnValueType, resolveSelectLabel } from './cell-value.ts';
+import { columnValueType, isSafeLinkHref, resolveSelectLabel } from './cell-value.ts';
 import type { SpreadsheetColumn, SpreadsheetSelectOption } from './types.ts';
+
+/** Phosphor “open in new” icon used when a link column does not set `icon`. */
+const DEFAULT_LINK_ICON = 'arrow-square-out';
 
 function escapeHtml(s: string): string {
   return s
@@ -61,6 +64,33 @@ export function formatSelectOptionMarkup(opt: SpreadsheetSelectOption, displayLa
   return `<span class="sheet-select-pill"${styleAttr}>${iconHtml}<span class="sheet-select-pill__text">${label}</span></span>`;
 }
 
+function linkIconName(column: SpreadsheetColumn | undefined): string {
+  const raw = column?.icon ? sanitizePhosphorIconName(column.icon) : null;
+  return raw ?? DEFAULT_LINK_ICON;
+}
+
+/** Visible button text for a link column. Explicit `label`, otherwise the header. */
+export function linkButtonLabel(column: SpreadsheetColumn | undefined): string {
+  const explicit = column?.label?.trim() ?? '';
+  if (explicit) return explicit;
+  return column?.header?.trim() ?? '';
+}
+
+/** Icon button for a link column. Empty when the stored value is not a safe URL. */
+function formatLinkCellHtml(column: SpreadsheetColumn | undefined, href: string): string {
+  const safeHref = href.trim();
+  if (!isSafeLinkHref(safeHref)) return '';
+  const icon = linkIconName(column);
+  const visible = linkButtonLabel(column);
+  const aria = visible || 'Open';
+  const newTab = column?.openInNewTab !== false;
+  const targetAttr = newTab ? ' target="_blank" rel="noopener noreferrer"' : '';
+  const textHtml = visible
+    ? `<span class="sheet-cell-link__text">${escapeHtml(visible)}</span>`
+    : '';
+  return `<a class="sheet-cell-link" href="${escapeHtml(safeHref)}"${targetAttr} draggable="false" aria-label="${escapeHtml(aria)}" title="${escapeHtml(safeHref)}"><i class="ph ph-${escapeHtml(icon)}" aria-hidden="true"></i>${textHtml}</a>`;
+}
+
 /**
  * Build safe HTML for a cell from column metadata and raw string value.
  */
@@ -69,6 +99,7 @@ export function formatCellHtml(column: SpreadsheetColumn | undefined, value: str
   if (!canonical) return '';
 
   const vt = columnValueType(column);
+  if (vt === 'link') return formatLinkCellHtml(column, canonical);
   if (vt === 'select' && column?.selectOptions?.length) {
     const opt = column.selectOptions.find((o) => o.value === canonical);
     if (opt) {

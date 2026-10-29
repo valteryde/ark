@@ -30,7 +30,7 @@ export interface SpreadsheetSelectOption {
   backgroundColor?: string;
 }
 
-export type SpreadsheetColumnValueType = 'text' | 'number' | 'select';
+export type SpreadsheetColumnValueType = 'text' | 'number' | 'select' | 'link';
 
 export interface SpreadsheetColumn {
   /** Stable id for CRUD mapping (e.g. API field name). */
@@ -58,6 +58,21 @@ export interface SpreadsheetColumn {
    * When false on a select column, empty input commits as the first option’s value. Default true.
    */
   allowEmpty?: boolean;
+  /**
+   * Phosphor icon for a `link` column (lowercase, hyphens), e.g. `arrow-square-out`.
+   * Omitted or invalid names use the open-in-new icon. Ignored for other value types.
+   */
+  icon?: string;
+  /**
+   * Button text shown beside the icon when `valueType === 'link'`.
+   * Omitted means the column `header` is shown. Blank header and label leave an icon-only button.
+   */
+  label?: string;
+  /**
+   * When `valueType === 'link'`, open the cell URL in a new tab. Default true.
+   * Set false to navigate in the same tab (for example another Ark sheet path).
+   */
+  openInNewTab?: boolean;
 }
 
 /**

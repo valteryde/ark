@@ -217,9 +217,12 @@ Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `col
 | `widthPx` | yes | Width in CSS pixels. |
 | `readOnly` | no | If `true`, the cell cannot be edited (computed / system fields). The **first** read-only column doubles as the record id: its value is sent as `recordId` on notifications. |
 | `hidden` | no | If `true`, the column is read-only and **omitted from the grid** (no header or cells). Row data and `recordId` resolution still use the column; clipboard copy excludes hidden values. Setting `hidden: true` forces `readOnly: true`. |
-| `valueType` | no | **`text`** (default), **`number`**, or **`select`**. Affects validation and editors. |
+| `valueType` | no | **`text`** (default), **`number`**, **`select`**, or **`link`**. Affects validation and editors. |
 | `selectOptions` | no | When `valueType` is **`select`**, list of option objects (see below). |
 | `allowEmpty` | no | On **`select`** columns: if `false`, committing empty uses the first option’s value. Default **`true`**. |
+| `icon` | no | On **`link`** columns: [Phosphor](https://phosphoricons.com/) **regular** icon name (lowercase, hyphens). Default **`arrow-square-out`** (open in a new tab). Invalid names are ignored. |
+| `label` | no | On **`link`** columns: text shown beside the icon. Omitted means the column **`header`** is shown. Blank header and label leave an icon-only button. |
+| `openInNewTab` | no | On **`link`** columns: if **`false`**, the button navigates in the same tab. Default **`true`** (`target="_blank"`, `rel="noopener noreferrer"`). |
 
 #### Select options and chips
 
@@ -236,6 +239,29 @@ For **`valueType: "select"`**, each entry in **`selectOptions`** is an object:
 If an option has **at least one** of `color`, `backgroundColor`, or a valid `icon`, the cell (and suggestion list) renders a **chip** with those styles. Options with **none** of these render as **plain escaped text** (label or value).
 
 **Text and number columns** are always plain text (no per-column display style enum).
+
+#### Link columns (icon button)
+
+Set **`valueType: "link"`** to render each cell as an icon with text beside it. The row value is the URL. **`label`** is the button text; if you omit it, the column **`header`** is shown next to the icon. Clicking the button (or pressing **Enter** on the cell) opens the URL. The grid does not edit these cells.
+
+| Cell value | Result |
+| ---------- | ------ |
+| `https://…`, `http://…`, `mailto:…` | Button opens that URL |
+| Path starting with `/` (for example `/records/12`) | Button opens that same-origin path |
+| Empty, `javascript:`, `data:`, or `//…` | No button |
+
+```json
+{
+  "id": "open",
+  "header": "Open",
+  "widthPx": 56,
+  "valueType": "link",
+  "icon": "arrow-square-out",
+  "label": "Open record"
+}
+```
+
+Omit **`icon`** for the same open-in-new glyph. Omit **`label`** to use the column header as the text. Set **`"openInNewTab": false`** when the URL should replace the current Ark page (another sheet path). When both header and label are blank, the button is icon-only and its accessible name is **`Open`**. A link column does not supply **`recordId`** unless you also mark it **`readOnly`**.
 
 **Example — sheet with select chips (PUT body)**
 
