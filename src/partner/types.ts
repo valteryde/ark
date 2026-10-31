@@ -26,6 +26,12 @@ export interface PartnerSheetPayload {
   ghostRowCount?: number;
   defaultRowHeightPx?: number;
   enabledUiCapabilities?: ReadonlyArray<UiToolbarCapability>;
+  /**
+   * When `false`, the header Export PDF button is hidden and
+   * `GET /api/sheets/{path}/pdf` returns 403. Omitted means export is allowed.
+   * The partner CRUD route ignores this flag.
+   */
+  pdfExport?: boolean;
   /** Optional links in the header chrome (top right). Max 8; invalid entries ignored. */
   chromeActions?: ReadonlyArray<PartnerChromeAction>;
   /** Server document revision (increments per mutation). */

@@ -19,9 +19,10 @@ import secrets
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .collab import hub
+from .pdf_export import PdfTooLarge, render_sheet_pdf
 from .store import SheetValidationError, get_store, normalize_sheet_path
 
 router = APIRouter(prefix="/api/partner")
@@ -180,6 +181,66 @@ async def get_sheet_audit_logs(path: str, request: Request) -> JSONResponse:
     return await _handle_audit_logs(request, path=path)
 
 
+def _pdf_download(payload: dict[str, Any]) -> Response:
+    try:
+        body, filename = render_sheet_pdf(payload)
+    except PdfTooLarge:
+        return JSONResponse({"detail": "pdf_too_large"}, status_code=413)
+    return Response(
+        content=body,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _existing_sheet_at_suffix(request: Request, prefix: str) -> str | None:
+    """If `{prefix}{remainder}` is itself a stored sheet path, return that path.
+
+    Lets a document whose path ends in `/pdf` keep its JSON route instead of
+    being treated as an export of the parent.
+    """
+    full = request.url.path
+    if not full.startswith(prefix):
+        return None
+    raw = full[len(prefix):]
+    try:
+        normalized = normalize_sheet_path(raw)
+    except SheetValidationError:
+        return None
+    if get_store().sheet_exists(normalized):
+        return normalized
+    return None
+
+
+@router.get("/sheets/{path:path}/pdf")
+async def export_sheet_pdf(path: str, request: Request) -> Response:
+    """PDF of a stored sheet. Does not auto-create. Ignores `pdfExport`."""
+    if err := _auth_error(request):
+        return err
+    existing = _existing_sheet_at_suffix(request, "/api/partner/sheets/")
+    if existing is not None:
+        return await get_sheet(existing, request)
+    try:
+        norm_path = normalize_sheet_path(path)
+    except SheetValidationError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
+    payload = get_store().get_sheet_payload(norm_path)
+    if payload is None:
+        return JSONResponse({"detail": "sheet not found"}, status_code=404)
+    response = _pdf_download(payload)
+    if response.status_code == 200:
+        get_store().log_audit_event(
+            sheet_path=norm_path,
+            action="sheet.export",
+            actor_type="partner",
+            actor_id=_partner_actor_id(request),
+            ip_address=_client_ip(request),
+            revision=payload.get("revision"),
+            details={"format": "pdf", "client": "partner_api"},
+        )
+    return response
+
+
 @router.get("/sheets/{path:path}")
 async def get_sheet(path: str, request: Request) -> JSONResponse:
     if err := _auth_error(request):
@@ -244,7 +305,7 @@ async def put_sheet(path: str, request: Request) -> JSONResponse:
         "columns": payload["columns"],
     }
     for k in ("title", "description", "ghostRowCount", "defaultRowHeightPx",
-              "enabledUiCapabilities", "chromeActions", "cells", "cellStyles"):
+              "enabledUiCapabilities", "chromeActions", "cells", "cellStyles", "pdfExport"):
         if k in payload:
             truth[k] = payload[k]
     await hub.broadcast(truth, normalized)

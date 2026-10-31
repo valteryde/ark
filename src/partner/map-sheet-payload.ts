@@ -109,6 +109,7 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
       chromeActions: i.chromeActions ?? o.chromeActions,
       cells: i.cells ?? o.cells,
       cellStyles: i.cellStyles ?? o.cellStyles,
+      pdfExport: i.pdfExport ?? o.pdfExport,
     };
   }
 
@@ -142,6 +143,7 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
       ? (src.enabledUiCapabilities.filter((s): s is UiToolbarCapability => typeof s === 'string') as UiToolbarCapability[])
       : undefined,
     ...(chromeActions !== undefined ? { chromeActions } : {}),
+    ...(src.pdfExport === false ? { pdfExport: false } : {}),
   };
 }
 
@@ -311,6 +313,7 @@ export function normalizeSheetTruthPayload(
     ...(chromeActions !== undefined ? { chromeActions } : {}),
     ...(sparseCells !== undefined ? { cells: sparseCells } : {}),
     ...(cellStyles !== undefined ? { cellStyles } : {}),
+    ...(o.pdfExport === false ? { pdfExport: false } : {}),
   };
   return { sheetPath, payload };
 }

@@ -7,7 +7,7 @@ import {
   rowsToInitialMap,
   sheetPayloadToConfig,
 } from './partner/map-sheet-payload.ts';
-import { mountPartnerChromeActions } from './partner/chrome-actions.ts';
+import { mountSheetHeaderActions } from './partner/export-pdf.ts';
 import type { PartnerSheetPayload } from './partner/types.ts';
 import { openCollabWs, type CollabConnectionState } from './partner/collab-ws.ts';
 import { peerDisplayFromClientId } from './partner/presence-persona.ts';
@@ -202,7 +202,7 @@ function showPartnerError(err: unknown): void {
   sheetHost.replaceChildren();
   toolbarHost.replaceChildren();
   if (chromeActionsEl) {
-    mountPartnerChromeActions(chromeActionsEl, undefined);
+    mountSheetHeaderActions(chromeActionsEl, { path: '' });
   }
   setAboutDescription(null);
   clearConnectionChip();
@@ -319,7 +319,7 @@ function initPartnerMode(): void {
   }
   document.title = 'Ark';
   if (chromeActionsEl) {
-    mountPartnerChromeActions(chromeActionsEl, undefined);
+    mountSheetHeaderActions(chromeActionsEl, { path: '' });
   }
 
   const collabIdentity = getCollabClientIdentity();
@@ -504,6 +504,7 @@ function initPartnerMode(): void {
       ...(payload.template !== undefined ? { template: { ...payload.template } } : {}),
       ...(payload.cells !== undefined ? { cells: { ...payload.cells } } : {}),
       ...(payload.cellStyles !== undefined ? { cellStyles: { ...payload.cellStyles } } : {}),
+      ...(payload.pdfExport === false ? { pdfExport: false } : {}),
     };
     const initial = rowsToInitialMap(payload.columns, payload.rows, payload.cells, payload.cellStyles);
     const pathForCollab = routingPath;
@@ -600,7 +601,11 @@ function initPartnerMode(): void {
     document.title = payload.title?.trim() ? payload.title : routingPath;
     setAboutDescription(payload.description ?? null);
     if (chromeActionsEl) {
-      mountPartnerChromeActions(chromeActionsEl, payload.chromeActions);
+      mountSheetHeaderActions(chromeActionsEl, {
+        path: routingPath,
+        pdfExport: payload.pdfExport,
+        chromeActions: payload.chromeActions,
+      });
     }
     const replay = pendingPastePlain;
     if (replay && liveHandle) {

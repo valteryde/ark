@@ -24,11 +24,11 @@ from typing import Any
 
 import dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .collab import hub
-from .partner_api import router as partner_router
+from .partner_api import _existing_sheet_at_suffix, _pdf_download, router as partner_router
 from .partner_auth import verify_browser_token
 from .partner_notify import notifier
 from .partner_template import PartnerTemplateError, fetch_partner_template
@@ -198,6 +198,58 @@ async def _verify_browser_token_safe(token: str | None, path: str | None = None)
         return await verify_browser_token(token, path)
     except TypeError:
         return await verify_browser_token(token)
+
+
+@app.get("/api/sheets/{path:path}/pdf")
+async def export_sheet_pdf(path: str, request: Request) -> Response:
+    """PDF download for the browser. Does not auto-create.
+
+    Hidden when the sheet document sets `pdfExport` to false. A document whose
+    path itself ends in `/pdf` is returned as JSON instead.
+    """
+    token = _bearer_token(request.headers.get("authorization"))
+    ip = _client_ip(request)
+    store = get_store()
+    actor_id = _user_actor_id(token)
+    existing = _existing_sheet_at_suffix(request, "/api/sheets/")
+    if existing is not None:
+        return await get_sheet(existing, request)
+    try:
+        normalized = normalize_sheet_path(path)
+    except SheetValidationError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
+    if not normalized:
+        return JSONResponse({"detail": "sheet path must not be empty"}, status_code=400)
+    if not await _verify_browser_token_safe(token, normalized):
+        logger.warning("unauthorized pdf export attempt for '%s' from IP %s", normalized, ip)
+        fail_key = f"{ip or ''}:{normalized}"
+        if _should_audit_auth_failure(fail_key):
+            store.log_audit_event(
+                sheet_path=normalized,
+                action="auth.failed",
+                actor_type="user",
+                actor_id=actor_id,
+                ip_address=ip,
+                details={"reason": "unauthorized", "path": normalized, "format": "pdf"},
+            )
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    payload = store.get_sheet_payload(normalized)
+    if payload is None:
+        return JSONResponse({"detail": "sheet not found"}, status_code=404)
+    if payload.get("pdfExport") is False:
+        return JSONResponse({"detail": "pdf_export_disabled"}, status_code=403)
+    response = _pdf_download(payload)
+    if response.status_code == 200:
+        store.log_audit_event(
+            sheet_path=normalized,
+            action="sheet.export",
+            actor_type="user",
+            actor_id=actor_id,
+            ip_address=ip,
+            revision=payload.get("revision"),
+            details={"format": "pdf", "client": "browser"},
+        )
+    return response
 
 
 @app.get("/api/sheets/{path:path}")

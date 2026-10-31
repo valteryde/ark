@@ -1,7 +1,7 @@
 import { partnerAuthHeaders } from './partner-token.ts';
 
 /** Encode each path segment for use in /api/sheets/{path}. */
-function encodeRoutingPath(path: string): string {
+export function encodeRoutingPath(path: string): string {
   return path
     .split('/')
     .map((s) => encodeURIComponent(s))
@@ -57,4 +57,9 @@ export async function fetchRoutingJson<T>(path: string): Promise<T> {
   }
 
   return data as T;
+}
+
+/** Browser PDF download for the sheet at `path`. */
+export function sheetPdfUrl(path: string): string {
+  return `/api/sheets/${encodeRoutingPath(path)}/pdf`;
 }

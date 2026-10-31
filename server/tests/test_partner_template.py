@@ -74,3 +74,10 @@ def test_parse_keeps_cell_styles_and_rejects_unsafe_maps():
 def test_parse_rejects_non_object():
     with pytest.raises(PartnerTemplateError):
         parse_template_response([1, 2, 3])
+
+
+def test_parse_pdf_export_must_be_boolean():
+    kept = parse_template_response({"version": 1, "columns": COLUMNS, "pdfExport": False})
+    assert kept["pdfExport"] is False
+    with pytest.raises(PartnerTemplateError):
+        parse_template_response({"version": 1, "columns": COLUMNS, "pdfExport": "no"})

@@ -69,6 +69,10 @@ The grid models two modes per cell, mirroring Google Sheets / Excel:
 - **Bundled Ark app**: Header **Find in sheet** field, **Enter** = next match, **Shift+Enter** = previous, **Cmd+F** / **Ctrl+F** focuses the field. Browser page find is not used for cell values.
 - **Embeds**: Use **`findInSheet({ query, forward })`** on the mount handle to drive your own UI; it returns whether a match was found and moves the selection + scrolls the match into view.
 
+## Export PDF
+
+The bundled app shows an **Export PDF** button in the header. It is on when the sheet payload omits **`pdfExport`**. Set **`pdfExport`** to **`false`** to hide the button; the browser download route then returns **403**. The partner route `GET /api/partner/sheets/{path}/pdf` still returns the file. See **[PARTNER_API.md](PARTNER_API.md)** for the PDF contents and cell styles it paints.
+
 ## Zoom
 
 - **Handle**: `getZoom()`, `setZoom(factor)` (clamped 0.5–2, returns the applied value), and `subscribeZoomChange(cb)`. Zoom scales the grid content only; overlays/popovers stay 1:1. The bundled toolbar renders a zoom dropdown wired to these.

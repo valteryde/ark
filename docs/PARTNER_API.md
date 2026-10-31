@@ -104,12 +104,33 @@ All routes require **`Authorization: Bearer <ARK_PARTNER_API_TOKEN>`**.
 | ------ | ---- | ------- |
 | `GET` | `/api/partner/sheets` | List sheets (`path`, `title`, `revision`, `updatedAt`). |
 | `GET` | `/api/partner/sheets/{path}` | Full sheet document (same shape browsers get, plus `revision`). |
+| `GET` | `/api/partner/sheets/{path}/pdf` | PDF of the stored sheet (`application/pdf`). Does not auto-create. |
 | `PUT` | `/api/partner/sheets/{path}` | Create or fully replace a sheet. Open tabs remount live (`sheet.truth` push). |
 | `PATCH` | `/api/partner/sheets/{path}` | Partial update: cells and/or metadata. Open tabs apply cell updates live without remounting. |
 | `DELETE` | `/api/partner/sheets/{path}` | Delete the document. |
 | `GET` | `/api/partner/audit-logs` | Query system audit logs across all sheets (filterable & paginated). |
 | `GET` | `/api/partner/sheets/{path}/audit-logs` | Query audit logs for a specific sheet. |
 | `GET` | `/api/partner/audit-logs/{id}` | Fetch a single audit log entry by ID. |
+
+### `GET /api/partner/sheets/{path}/pdf`
+
+Returns the stored sheet as a PDF attachment (`Content-Type: application/pdf`, `Content-Disposition: attachment`). The same file is what the header **Export PDF** button downloads from **`GET /api/sheets/{path}/pdf`** (browser `ark_token`, same auth as a sheet read).
+
+| Status | When |
+| ------ | ---- |
+| **200** | PDF body, starting with `%PDF`. |
+| **401** / **503** | Partner token missing or wrong (partner route). Browser route returns **401** when `/ark/auth` rejects the user. |
+| **404** | No document at `{path}`. Neither route creates a sheet. |
+| **403** | Browser route only, when the document has `pdfExport: false` (`{ "detail": "pdf_export_disabled" }`). |
+| **413** | More than 10,000 data rows (`{ "detail": "pdf_too_large" }`). |
+
+The file is landscape A4. It includes the sheet title (or the path), a repeating header row, and visible columns only (`hidden` columns are left out). Select cells print the option **label**. Link cells print the URL. Column widths follow `widthPx`. Empty rows between values stay; trailing empty `rowCount` padding does not. A cell that has a style and no value is still printed.
+
+Painted cell styles are the toolbar declarations stored in `cellStyles`: `background-color`, `color` (`#rgb`, `#rrggbb`, `#rrggbbaa` with alpha dropped), bold (`font-weight` 600/700/`bold`/`bolder`), italic, underline, and strikethrough (`text-decoration-line` tokens), alignment (`justify-content`: `center`, `flex-end`/`end`, otherwise left — this overrides the default right alignment of number columns), and the toolbar border (`box-shadow: inset 0 0 0 1px #64748b`). Other CSS keys are ignored. A select option's `color` and `backgroundColor` are used when the cell has no style of its own for that property.
+
+If a document's path is literally `{path}/pdf`, that URL returns the JSON document instead of a PDF of the parent, same collision rule as audit logs.
+
+A successful download is audited as **`sheet.export`**.
 
 ### `GET /api/partner/audit-logs` (audit log query)
 
@@ -118,7 +139,7 @@ Ark maintains an immutable, tamper-evident audit log of every event across sheet
 **Query Parameters:**
 - `path` or `sheet_path` — filter by sheet path (e.g. `clients/21`).
 - `prefix` — filter by sheet path prefix (e.g. `clients` matches `clients` and `clients/*`).
-- `action` — filter by action type (`cell.update`, `cell.clear`, `cell.style`, `row.delete`, `sheet.create`, `sheet.replace`, `sheet.patch`, `sheet.delete`, `sheet.read`, `sheet.subscribe`, `auth.failed`, `cell.rejected`). Supports comma-separated list (e.g. `action=cell.update,row.delete`).
+- `action` — filter by action type (`cell.update`, `cell.clear`, `cell.style`, `row.delete`, `sheet.create`, `sheet.replace`, `sheet.patch`, `sheet.delete`, `sheet.read`, `sheet.export`, `sheet.subscribe`, `auth.failed`, `cell.rejected`). Supports comma-separated list (e.g. `action=cell.update,row.delete`). `sheet.export` is a successful PDF download (`details.format` is `"pdf"`, `details.client` is `"partner_api"` or `"browser"`).
 - `actor_type` — filter by actor category (`user`, `partner`, `system`).
 - `actor_id` — filter by actor identity (e.g. browser `ark_token` or partner user ID).
 - `since` / `from` — ISO 8601 timestamp floor (e.g. `2026-10-24T00:00:00Z`).
@@ -162,7 +183,7 @@ Optional partner request header:
 
 ### `PUT /api/partner/sheets/{path}` (create / replace)
 
-Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**).
+Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`, `pdfExport`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**). `pdfExport: false` turns off the in-app export button; omitting it leaves export on.
 
 ### `PATCH /api/partner/sheets/{path}` (partial update)
 
@@ -209,6 +230,7 @@ Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `col
 | `cellStyles` | Sparse per-cell styles keyed `"row:col"` (1-based). Present only when at least one cell has formatting. See **Cell styles**. |
 | `defaultRowHeightPx` | Passed through to config |
 | `enabledUiCapabilities` | Toolbar flags (see SPREADSHEET.md) |
+| `pdfExport` | Present only as **`false`**, which hides the header **Export PDF** button and makes `GET /api/sheets/{path}/pdf` return **403**. Omitted means export is allowed. The partner route ignores this flag. |
 | `chromeActions` | Up to **8** header links (top right). Each item is an object (see below). Invalid or unsafe URLs are skipped. |
 
 **`chromeActions` entry** (each element of the array):

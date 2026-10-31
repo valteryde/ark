@@ -43,6 +43,7 @@ _TEMPLATE_PASSTHROUGH_KEYS = (
     "enabledUiCapabilities",
     "chromeActions",
     "cellStyles",
+    "pdfExport",
 )
 
 
@@ -71,6 +72,9 @@ def parse_template_response(data: Any) -> dict[str, Any]:
     rows = data.get("rows", [])
     if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
         raise PartnerTemplateError("template rows must be an array of objects")
+
+    if "pdfExport" in data and not isinstance(data["pdfExport"], bool):
+        raise PartnerTemplateError("pdfExport must be a boolean")
 
     template: dict[str, Any] = {"version": version, "columns": columns, "rows": rows}
     name = data.get("name")

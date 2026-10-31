@@ -53,8 +53,9 @@ export function normalizePartnerChromeActions(raw: unknown): PartnerChromeAction
 export function mountPartnerChromeActions(
   host: HTMLElement,
   actions: readonly PartnerChromeAction[] | undefined,
+  options?: { clear?: boolean },
 ): void {
-  host.replaceChildren();
+  if (options?.clear !== false) host.replaceChildren();
   if (!actions?.length) return;
   for (const a of actions) {
     const el = document.createElement('a');

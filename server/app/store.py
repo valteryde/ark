@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS sheets (
     default_row_height_px REAL,
     enabled_ui_capabilities TEXT,
     chrome_actions TEXT,
+    pdf_export INTEGER,
     template_name TEXT,
     template_version TEXT,
     revision INTEGER NOT NULL DEFAULT 0,
@@ -184,6 +185,19 @@ def _json_or_none(v: Any) -> str | None:
     return json.dumps(v) if v is not None else None
 
 
+def _coerce_pdf_export(payload: dict[str, Any] | None) -> int | None:
+    """NULL means export is allowed. 0 means the browser export is off.
+
+    Omitted and explicit true both store NULL. Only an explicit false disables.
+    """
+    if not payload or "pdfExport" not in payload:
+        return None
+    value = payload["pdfExport"]
+    if isinstance(value, bool):
+        return 0 if value is False else None
+    raise SheetValidationError("pdfExport must be a boolean")
+
+
 def _parse_json(raw: str | None) -> Any:
     if raw is None:
         return None
@@ -283,7 +297,13 @@ class SheetStore:
         self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.executescript(_SCHEMA)
         self._ensure_cell_style_column()
+        self._ensure_pdf_export_column()
         self._conn.commit()
+
+    def _ensure_pdf_export_column(self) -> None:
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sheets)")}
+        if "pdf_export" not in cols:
+            self._conn.execute("ALTER TABLE sheets ADD COLUMN pdf_export INTEGER")
 
     def _ensure_cell_style_column(self) -> None:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(cells)")}
@@ -394,6 +414,7 @@ class SheetStore:
                 "default_row_height_px": template.get("defaultRowHeightPx"),
                 "enabled_ui_capabilities": _json_or_none(template.get("enabledUiCapabilities")),
                 "chrome_actions": _json_or_none(template.get("chromeActions")),
+                "pdf_export": _coerce_pdf_export(template),
             }
             col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
         else:
@@ -406,6 +427,7 @@ class SheetStore:
                 "default_row_height_px": None,
                 "enabled_ui_capabilities": None,
                 "chrome_actions": None,
+                "pdf_export": None,
             }
             col_index_by_id = {}
             cell_styles = {}
@@ -415,9 +437,9 @@ class SheetStore:
                     """
                     INSERT INTO sheets (path, title, description, columns, row_count,
                         ghost_row_count, default_row_height_px, enabled_ui_capabilities,
-                        chrome_actions, template_name, template_version,
+                        chrome_actions, pdf_export, template_name, template_version,
                         revision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         path,
@@ -429,6 +451,7 @@ class SheetStore:
                         fields["default_row_height_px"],
                         fields["enabled_ui_capabilities"],
                         fields["chrome_actions"],
+                        fields["pdf_export"],
                         template_name,
                         template_version,
                         now,
@@ -794,6 +817,7 @@ class SheetStore:
         if row_count is not None and row_count > MAX_ROWS:
             raise SheetValidationError(f"rowCount must not exceed {MAX_ROWS}")
         cell_styles = _parse_styles_or_raise(payload.get("cellStyles"))
+        pdf_export = _coerce_pdf_export(payload)
         style_max_row = max((r for r, _c in cell_styles), default=0)
         effective_row_count = max(row_count or 0, len(rows), style_max_row, _BLANK_ROW_COUNT)
         col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
@@ -837,7 +861,7 @@ class SheetStore:
                 """
                 UPDATE sheets SET title = ?, description = ?, columns = ?, row_count = ?,
                     ghost_row_count = ?, default_row_height_px = ?,
-                    enabled_ui_capabilities = ?, chrome_actions = ?,
+                    enabled_ui_capabilities = ?, chrome_actions = ?, pdf_export = ?,
                     revision = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -850,6 +874,7 @@ class SheetStore:
                     payload.get("defaultRowHeightPx"),
                     _json_or_none(payload.get("enabledUiCapabilities")),
                     _json_or_none(payload.get("chromeActions")),
+                    pdf_export,
                     revision,
                     now,
                     sheet_id,
@@ -1169,6 +1194,8 @@ class SheetStore:
         actions = _parse_json(sheet["chrome_actions"])
         if actions is not None:
             payload["chromeActions"] = actions
+        if sheet["pdf_export"] == 0:
+            payload["pdfExport"] = False
         if sheet["template_version"] is not None:
             template: dict[str, Any] = {"version": sheet["template_version"]}
             if sheet["template_name"] is not None:

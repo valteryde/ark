@@ -322,6 +322,20 @@ a.app-btn {
   flex-shrink: 0;
 }
 
+.app-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.app-chrome__export-status {
+  font-size: 0.75rem;
+  color: var(--app-text-muted);
+}
+
+.app-chrome__export-status:empty {
+  display: none;
+}
+
 .app-chrome__row--toolbar {
   padding: 0.35rem 1.25rem 0.5rem;
   gap: 0.25rem;

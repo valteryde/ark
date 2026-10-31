@@ -586,3 +586,131 @@ def test_ws_style_on_readonly_column_is_rejected(client):
     sheet = client.get("/api/partner/sheets/locked", headers=AUTH).json()
     assert "cellStyles" not in sheet
 
+
+def _styled_sheet():
+    return {
+        "title": "Clients",
+        "pdfExport": False,
+        "columns": [
+            {"id": "name", "header": "Name", "widthPx": 200},
+            {
+                "id": "priority",
+                "header": "Priority",
+                "widthPx": 100,
+                "valueType": "select",
+                "selectOptions": [{"value": "HIGH", "label": "High", "backgroundColor": "#d8f3dc"}],
+            },
+            {"id": "secret", "header": "Secret", "widthPx": 40, "hidden": True},
+        ],
+        "rows": [{"name": "Acme", "priority": "HIGH", "secret": "hidden"}],
+        "cellStyles": {
+            "1:1": {"font-weight": "700", "background-color": "#fff59d", "color": "#2563eb"},
+        },
+    }
+
+
+def test_partner_pdf_export(client):
+    assert client.get("/api/partner/sheets/clients/pdf").status_code == 401
+    body = _styled_sheet()
+    assert client.put("/api/partner/sheets/clients", json=body, headers=AUTH).status_code == 200
+    stored = client.get("/api/partner/sheets/clients", headers=AUTH).json()
+    assert stored["pdfExport"] is False
+
+    from app.pdf_export import build_pdf_model
+
+    model = build_pdf_model(stored)
+    assert model.headers == ("Name", "Priority")
+    assert model.rows[0][0].bold is True
+    assert model.rows[0][0].fill is not None
+    assert model.rows[0][0].text_color is not None
+    assert model.rows[0][1].text == "High"
+
+    pdf = client.get("/api/partner/sheets/clients/pdf", headers=AUTH)
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"] == "application/pdf"
+    assert pdf.content.startswith(b"%PDF")
+    assert 'filename="Clients.pdf"' in pdf.headers["content-disposition"]
+
+    logs = client.get("/api/partner/audit-logs?action=sheet.export", headers=AUTH).json()
+    assert logs["total"] == 1
+    assert logs["auditLogs"][0]["details"]["format"] == "pdf"
+    assert logs["auditLogs"][0]["details"]["client"] == "partner_api"
+
+    missing = client.get("/api/partner/sheets/missing/sheet/pdf", headers=AUTH)
+    assert missing.status_code == 404
+    listed = client.get("/api/partner/sheets", headers=AUTH).json()["sheets"]
+    assert all(item["path"] != "missing/sheet" for item in listed)
+
+    bad = {"pdfExport": "no", "columns": body["columns"], "rows": []}
+    assert client.put("/api/partner/sheets/clients", json=bad, headers=AUTH).status_code == 400
+
+
+def test_partner_pdf_disabled_without_token(fresh_store, monkeypatch):
+    monkeypatch.delenv("ARK_PARTNER_API_TOKEN", raising=False)
+    c = TestClient(main_module.app)
+    assert c.get("/api/partner/sheets/clients/pdf", headers=AUTH).status_code == 503
+
+
+def test_browser_pdf_respects_flag_and_does_not_autocreate(client):
+    body = _styled_sheet()
+    client.put("/api/partner/sheets/clients", json=body, headers=AUTH)
+    blocked = client.get("/api/sheets/clients/pdf")
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "pdf_export_disabled"
+
+    enabled = dict(body)
+    del enabled["pdfExport"]
+    client.put("/api/partner/sheets/clients", json=enabled, headers=AUTH)
+    got = client.get("/api/partner/sheets/clients", headers=AUTH).json()
+    assert "pdfExport" not in got
+    pdf = client.get("/api/sheets/clients/pdf")
+    assert pdf.status_code == 200
+    assert pdf.content.startswith(b"%PDF")
+    logs = client.get(
+        "/api/partner/audit-logs?action=sheet.export&actor_type=user", headers=AUTH
+    ).json()
+    assert logs["total"] >= 1
+    assert logs["auditLogs"][0]["details"]["client"] == "browser"
+
+    missing = client.get("/api/sheets/does-not-exist/pdf")
+    assert missing.status_code == 404
+    listed = client.get("/api/partner/sheets", headers=AUTH).json()["sheets"]
+    assert all(item["path"] != "does-not-exist" for item in listed)
+
+
+def test_pdf_route_yields_to_a_sheet_named_pdf(client):
+    client.put(
+        "/api/partner/sheets/clients/pdf",
+        json={
+            "title": "Literally pdf",
+            "columns": [{"id": "name", "header": "Name", "widthPx": 80}],
+            "rows": [{"name": "Doc"}],
+        },
+        headers=AUTH,
+    )
+    got = client.get("/api/partner/sheets/clients/pdf", headers=AUTH)
+    assert got.status_code == 200
+    assert got.headers["content-type"].startswith("application/json")
+    assert got.json()["title"] == "Literally pdf"
+
+
+def test_pdf_too_large_is_413(client, monkeypatch):
+    from app.pdf_export import PdfTooLarge
+
+    client.put(
+        "/api/partner/sheets/wide",
+        json={
+            "columns": [{"id": "name", "header": "Name", "widthPx": 80}],
+            "rows": [{"name": "A"}],
+        },
+        headers=AUTH,
+    )
+
+    def _boom(_payload):
+        raise PdfTooLarge("too big")
+
+    monkeypatch.setattr("app.partner_api.render_sheet_pdf", _boom)
+    response = client.get("/api/partner/sheets/wide/pdf", headers=AUTH)
+    assert response.status_code == 413
+    assert response.json()["detail"] == "pdf_too_large"
+

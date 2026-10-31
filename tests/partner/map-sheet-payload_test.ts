@@ -174,6 +174,34 @@ Deno.test('normalizeSheetTruthPayload falls back to prior columns when omitted',
   assertEquals(result?.payload.rows, [{ name: 'Ada' }]);
 });
 
+Deno.test('normalizePartnerSheetPayload keeps pdfExport false and drops other values', () => {
+  const off = normalizePartnerSheetPayload({
+    columns: [{ id: 'name', header: 'Name' }],
+    rows: [],
+    pdfExport: false,
+  });
+  assertEquals(off?.pdfExport, false);
+  const on = normalizePartnerSheetPayload({
+    columns: [{ id: 'name', header: 'Name' }],
+    rows: [],
+    pdfExport: true,
+  });
+  assertEquals(on?.pdfExport, undefined);
+});
+
+Deno.test('normalizeSheetTruthPayload copies pdfExport false', () => {
+  const result = normalizeSheetTruthPayload(
+    {
+      type: 'sheet.truth',
+      sheetPath: 'clients',
+      rows: [],
+      pdfExport: false,
+    },
+    columns,
+  );
+  assertEquals(result?.payload.pdfExport, false);
+});
+
 Deno.test('normalizeSheetTruthPayload requires columns when no fallback', () => {
   assertEquals(
     normalizeSheetTruthPayload(
