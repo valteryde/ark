@@ -82,6 +82,7 @@ export function createPartnerNotifyDataStore(
   return {
     get: (row, col) => inner.get(row, col),
     getCellStyle: (row, col) => inner.getCellStyle?.(row, col),
+    forEachStoredCell: (visit) => inner.forEachStoredCell?.(visit),
     mergeCellStyle(row, col, patch) {
       const before = inner.getCellStyle?.(row, col);
       inner.mergeCellStyle?.(row, col, patch);

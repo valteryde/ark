@@ -31,6 +31,81 @@ export function sanitizeCssColor(input: string): string | null {
   return t;
 }
 
+/** CSS Level 1 names plus `orange`, so keyword colors collapse to the same swatch as hex. */
+const BASIC_NAMED_COLORS: Record<string, string> = {
+  black: '#000000',
+  silver: '#c0c0c0',
+  gray: '#808080',
+  grey: '#808080',
+  white: '#ffffff',
+  maroon: '#800000',
+  red: '#ff0000',
+  purple: '#800080',
+  fuchsia: '#ff00ff',
+  magenta: '#ff00ff',
+  green: '#008000',
+  lime: '#00ff00',
+  olive: '#808000',
+  yellow: '#ffff00',
+  navy: '#000080',
+  blue: '#0000ff',
+  teal: '#008080',
+  aqua: '#00ffff',
+  cyan: '#00ffff',
+  orange: '#ffa500',
+};
+
+function hexFromSanitized(safe: string): string | null {
+  const t = safe.trim().toLowerCase().replace(/\s+/g, '');
+  const hex = /^#([0-9a-f]{3,8})$/.exec(t);
+  if (hex) {
+    const h = hex[1]!;
+    if (h.length === 3 || h.length === 4) {
+      return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+    }
+    return `#${h.slice(0, 6)}`;
+  }
+  const rgb = /^rgba?\((\d{1,3}),(\d{1,3}),(\d{1,3})/.exec(t);
+  if (!rgb) return null;
+  const parts: string[] = [];
+  for (let i = 1; i <= 3; i++) {
+    const n = Number(rgb[i]);
+    if (!Number.isInteger(n) || n > 255) return null;
+    parts.push(n.toString(16).padStart(2, '0'));
+  }
+  return `#${parts.join('')}`;
+}
+
+function canvasNamedColor(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  try {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#010101';
+    ctx.fillStyle = name;
+    const painted = hexFromSanitized(String(ctx.fillStyle));
+    if (!painted || painted === '#010101') return null;
+    return painted;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `#rrggbb` form of a safe CSS color. Hex and `rgb()`/`rgba()` drop alpha.
+ * Unknown strings are rejected. `transparent` is rejected so "no fill" stays a separate action.
+ */
+export function canonicalCssColor(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'transparent') return null;
+  const safe = sanitizeCssColor(trimmed);
+  if (safe) return hexFromSanitized(safe);
+  const named = trimmed.toLowerCase();
+  if (!/^[a-z]{3,20}$/.test(named)) return null;
+  return BASIC_NAMED_COLORS[named] ?? canvasNamedColor(named);
+}
+
 export function sanitizePhosphorIconName(input: string): string | null {
   const t = input.trim().toLowerCase();
   return /^[a-z0-9-]{1,48}$/.test(t) ? t : null;

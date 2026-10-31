@@ -62,3 +62,15 @@ Deno.test('replaceCell writes and deletes', () => {
   store.replaceCell(1, 1, null);
   assertEquals(store.hasCell(1, 1), false);
 });
+
+Deno.test('forEachStoredCell visits stored cells in insertion order', () => {
+  const store = makeStore({
+    '1:1': { value: 'a', style: { color: '#111111' } },
+    '2:3': 'plain',
+  });
+  const seen: string[] = [];
+  store.forEachStoredCell((cell) => {
+    seen.push(`${cell.row}:${cell.col}:${cell.style?.color ?? ''}`);
+  });
+  assertEquals(seen, ['1:1:#111111', '2:3:']);
+});

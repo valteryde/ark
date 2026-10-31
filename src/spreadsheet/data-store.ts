@@ -115,5 +115,19 @@ export function createInMemoryDataStore(
       const nextComment = c !== undefined && c.trim() !== '' ? c.trim() : undefined;
       map.set(k, { value: cell.value, style: nextStyle, comment: nextComment });
     },
+    forEachStoredCell(visit) {
+      for (const [key, cell] of map) {
+        const sep = key.indexOf(':');
+        if (sep < 0) continue;
+        const row = Number(key.slice(0, sep));
+        const col = Number(key.slice(sep + 1));
+        if (!Number.isInteger(row) || !Number.isInteger(col)) continue;
+        visit({
+          row,
+          col,
+          ...(cell.style ? { style: cell.style } : {}),
+        });
+      }
+    },
   };
 }

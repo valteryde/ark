@@ -106,6 +106,13 @@ export interface SpreadsheetDataStore {
   getStoredCell?(row: number, col: number): SpreadsheetCellInit | undefined;
   /** Set cell exactly, or `null` to remove the key. Required for undo/redo when implemented. */
   replaceCell?(row: number, col: number, cell: SpreadsheetCellInit | null): void;
+  /**
+   * Visit cells that have a stored entry, in store insertion order.
+   * Skips empty coordinates. Used to collect colors already present on the sheet.
+   */
+  forEachStoredCell?(
+    visit: (cell: { row: number; col: number; style?: SpreadsheetCellStyleDeclarations }) => void,
+  ): void;
 }
 
 export interface SpreadsheetConfig {
@@ -230,6 +237,16 @@ export interface SpreadsheetMountHandle {
     predicate: (value: string | undefined) => boolean,
   ): boolean;
   getCellStyleAt(row: number, col: number): SpreadsheetCellStyleDeclarations | undefined;
+  /**
+   * Colors already stored for `cssProperty`, newest stored cell first, then matching
+   * select-option colors (`color` or `backgroundColor`). Duplicates removed.
+   */
+  colorsUsedInSheet(cssProperty: 'color' | 'background-color'): string[];
+  /**
+   * Canonical color when every formatting target shares one value for `cssProperty`.
+   * `null` when the selection is empty, mixed, or unset.
+   */
+  uniformTargetCellStyle(cssProperty: string): string | null;
   subscribeSelectionChange(cb: () => void): () => void;
   /** Whether undo/redo is available (requires `replaceCell` on the data store). */
   readonly historyEnabled: boolean;

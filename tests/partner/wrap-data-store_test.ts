@@ -76,3 +76,16 @@ Deno.test('remote apply does not notify', () => {
   assertEquals(store.get(1, 2), 'Bo');
   assertEquals(store.getCellStyle?.(1, 2), { color: '#111827' });
 });
+
+Deno.test('forEachStoredCell walks the inner store', () => {
+  const store = createPartnerNotifyDataStore(
+    columns,
+    { '1:2': { value: 'Ada', style: { color: '#111827' } } },
+    () => {},
+  );
+  const seen: string[] = [];
+  store.forEachStoredCell?.((cell) => {
+    seen.push(`${cell.row}:${cell.col}:${cell.style?.color ?? ''}`);
+  });
+  assertEquals(seen, ['1:2:#111827']);
+});

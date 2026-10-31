@@ -74,3 +74,131 @@ domTest('zoom select changes the sheet zoom', (env) => {
   zoom.dispatchEvent(new env.window.Event('change', { bubbles: true }));
   assertEquals(handle.getZoom(), 1.5);
 });
+
+function buttonByTitle(toolbar: HTMLElement, title: string): HTMLButtonElement {
+  const button = [...toolbar.querySelectorAll('button')].find(
+    (el) => el.getAttribute('title') === title,
+  );
+  assertExists(button);
+  return button as HTMLButtonElement;
+}
+
+function openColorMenu(env: DomEnv, toolbar: HTMLElement, title: string): HTMLElement {
+  buttonByTitle(toolbar, title).click();
+  const menu = env.document.querySelector('.app-color-menu');
+  assertExists(menu);
+  return menu as HTMLElement;
+}
+
+domTest('fill and text color open a palette menu instead of a bare color input', (env) => {
+  const { toolbar } = mountSheet(env);
+  assertEquals(toolbar.querySelector('input[type="color"]'), null);
+
+  const menu = openColorMenu(env, toolbar, 'Fill color');
+  assertEquals(menu.querySelectorAll('.app-color-menu__grid .app-color-menu__swatch').length, 80);
+  assertExists(menu.querySelector('input[type="color"]'));
+  const labels = [...menu.querySelectorAll('.app-color-menu__label')].map((el) => el.textContent);
+  assertEquals(labels.includes('Custom'), true);
+  assertEquals(labels.includes('Recent'), true);
+  assertEquals((menu.querySelector('.app-color-menu__recent') as HTMLElement).hidden, true);
+  assertEquals(buttonByTitle(toolbar, 'Fill color').getAttribute('aria-expanded'), 'true');
+
+  buttonByTitle(toolbar, 'Fill color').click();
+  assertEquals(env.document.querySelector('.app-color-menu'), null);
+  assertEquals(buttonByTitle(toolbar, 'Fill color').getAttribute('aria-expanded'), 'false');
+});
+
+domTest('a palette swatch sets fill color and No fill clears it', (env) => {
+  const { toolbar, handle } = mountSheet(env);
+  const menu = openColorMenu(env, toolbar, 'Fill color');
+  const red = menu.querySelector('[data-color="#ff0000"]') as HTMLButtonElement;
+  assertExists(red);
+  red.click();
+
+  assertEquals(handle.getCellStyleAt(1, 1)?.['background-color'], '#ff0000');
+  assertEquals(env.document.querySelector('.app-color-menu'), null);
+  handle.undo();
+  assertEquals(handle.getCellStyleAt(1, 1)?.['background-color'], undefined);
+
+  const again = openColorMenu(env, toolbar, 'Fill color');
+  const recent = [...again.querySelectorAll('.app-color-menu__recent-row [data-color]')].map(
+    (el) => (el as HTMLElement).dataset.color,
+  );
+  assertEquals(recent[0], '#ff0000');
+  (again.querySelector('[data-color="#ff0000"]') as HTMLButtonElement).click();
+  assertEquals(handle.getCellStyleAt(1, 1)?.['background-color'], '#ff0000');
+
+  const clearing = openColorMenu(env, toolbar, 'Fill color');
+  (clearing.querySelector('.app-color-menu__reset') as HTMLButtonElement).click();
+  assertEquals(handle.getCellStyleAt(1, 1)?.['background-color'], undefined);
+});
+
+domTest('custom color drags collapse into one undo step', (env) => {
+  const { toolbar, handle } = mountSheet(env);
+  const menu = openColorMenu(env, toolbar, 'Fill color');
+  const input = menu.querySelector('input[type="color"]') as HTMLInputElement;
+  assertExists(input);
+
+  input.value = '#111111';
+  input.dispatchEvent(new env.window.Event('input', { bubbles: true }));
+  input.value = '#222222';
+  input.dispatchEvent(new env.window.Event('input', { bubbles: true }));
+  input.dispatchEvent(new env.window.Event('change', { bubbles: true }));
+  assertEquals(handle.getCellStyleAt(1, 1)?.['background-color'], '#222222');
+
+  handle.undo();
+  assertEquals(handle.getCellStyleAt(1, 1)?.['background-color'], undefined);
+});
+
+domTest('text color menu sets text color and lists colors already on the sheet', (env) => {
+  const grid = env.makeContainer();
+  const handle = mountSpreadsheet(grid, {
+    columns: [
+      {
+        id: 'name',
+        header: 'Name',
+        widthPx: 160,
+        selectOptions: [{ value: 'A', backgroundColor: '#d8f3dc', color: '#1b4332' }],
+      },
+      { id: 'sys', header: 'Sys', widthPx: 80, readOnly: true },
+    ],
+    rowCount: 2,
+    data: createInMemoryDataStore({
+      '1:1': { value: 'x', style: { 'background-color': '#fef3c7' } },
+      '2:2': { value: 'y', style: { 'background-color': '#112233', color: '#abcdef' } },
+    }),
+  });
+  const toolbar = env.makeContainer();
+  mountFormattingToolbar(toolbar, handle, resolveEnabledUiCapabilities());
+
+  const fill = openColorMenu(env, toolbar, 'Fill color');
+  const fillRecent = [...fill.querySelectorAll('.app-color-menu__recent-row [data-color]')].map(
+    (el) => (el as HTMLElement).dataset.color,
+  );
+  assertEquals(fillRecent, ['#112233', '#fef3c7', '#d8f3dc']);
+
+  buttonByTitle(toolbar, 'Text color').click();
+  const text = env.document.querySelector('.app-color-menu') as HTMLElement;
+  assertEquals(text.getAttribute('aria-label'), 'Text color');
+  const textRecent = [...text.querySelectorAll('.app-color-menu__recent-row [data-color]')].map(
+    (el) => (el as HTMLElement).dataset.color,
+  );
+  assertEquals(textRecent, ['#abcdef', '#1b4332']);
+
+  (text.querySelector('[data-color="#0000ff"]') as HTMLButtonElement).click();
+  assertEquals(handle.getCellStyleAt(1, 1)?.color, '#0000ff');
+  assertEquals(handle.getCellStyleAt(1, 1)?.['background-color'], '#fef3c7');
+
+  const reopened = openColorMenu(env, toolbar, 'Text color');
+  (reopened.querySelector('.app-color-menu__reset') as HTMLButtonElement).click();
+  assertEquals(handle.getCellStyleAt(1, 1)?.color, undefined);
+});
+
+domTest('clicking outside the color menu closes it', (env) => {
+  const { toolbar } = mountSheet(env);
+  openColorMenu(env, toolbar, 'Fill color');
+  env.document.body.dispatchEvent(
+    new env.window.MouseEvent('pointerdown', { bubbles: true, button: 0 }),
+  );
+  assertEquals(env.document.querySelector('.app-color-menu'), null);
+});

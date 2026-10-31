@@ -1,7 +1,7 @@
 import '../sheet.css';
 
 import { applyCellDisplay, applyCellInlineStyleRecord, getCellEditor } from './cell-dom.ts';
-import { formatSelectOptionMarkup, linkButtonLabel } from './cell-display.ts';
+import { canonicalCssColor, formatSelectOptionMarkup, linkButtonLabel } from './cell-display.ts';
 import {
   cellPlainTextForSearch,
   columnValueType,
@@ -864,6 +864,53 @@ export function mountSpreadsheet(
       const v = data.getCellStyle?.(row, col)?.[cssProperty];
       return predicate(v);
     });
+  }
+
+  function uniformTargetCellStyle(cssProperty: string): string | null {
+    const targets = getFormattingTargets();
+    if (targets.length === 0) return null;
+    let current: string | null | undefined;
+    for (const { row, col } of targets) {
+      const raw = data.getCellStyle?.(row, col)?.[cssProperty];
+      const next = raw ? (canonicalCssColor(raw) ?? raw) : null;
+      if (current === undefined) current = next;
+      else if (current !== next) return null;
+    }
+    return current ?? null;
+  }
+
+  function colorsUsedInSheet(cssProperty: 'color' | 'background-color'): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const add = (raw: string | undefined) => {
+      if (!raw) return;
+      const color = canonicalCssColor(raw);
+      if (!color || seen.has(color)) return;
+      seen.add(color);
+      out.push(color);
+    };
+    const found: string[] = [];
+    const take = (style: SpreadsheetCellStyleDeclarations | undefined) => {
+      const raw = style?.[cssProperty];
+      if (raw) found.push(raw);
+    };
+    if (typeof data.forEachStoredCell === 'function') {
+      data.forEachStoredCell((cell) => take(cell.style));
+    } else if (data.getCellStyle) {
+      for (let row = 1; row <= dataRowCount; row++) {
+        for (let col = 1; col <= dataColumnCount; col++) {
+          take(data.getCellStyle(row, col));
+        }
+      }
+    }
+    for (let i = found.length - 1; i >= 0; i--) add(found[i]);
+    const optionKey = cssProperty === 'color' ? 'color' : 'backgroundColor';
+    for (const column of columns) {
+      for (const opt of column.selectOptions ?? []) {
+        add(opt[optionKey]);
+      }
+    }
+    return out;
   }
 
   function doOnEverySelectedCell(callback: (cell: HTMLDivElement) => void): void {
@@ -3251,6 +3298,8 @@ export function mountSpreadsheet(
     getCellStyleAt(row, col) {
       return data.getCellStyle?.(row, col);
     },
+    colorsUsedInSheet,
+    uniformTargetCellStyle,
     subscribeSelectionChange(cb) {
       selectionChangeListeners.add(cb);
       return () => selectionChangeListeners.delete(cb);

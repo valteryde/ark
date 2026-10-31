@@ -1,5 +1,6 @@
 import { assertEquals } from '@std/assert';
 import {
+  canonicalCssColor,
   formatCellHtml,
   formatSelectOptionMarkup,
   sanitizeCssColor,
@@ -23,6 +24,16 @@ Deno.test('sanitizePhosphorIconName allows lowercase slug only', () => {
   assertEquals(sanitizePhosphorIconName('bad name'), null);
   assertEquals(sanitizePhosphorIconName('under_score'), null);
   assertEquals(sanitizePhosphorIconName(''), null);
+});
+
+Deno.test('canonicalCssColor normalizes hex, rgb, and named colors', () => {
+  assertEquals(canonicalCssColor('#fff'), '#ffffff');
+  assertEquals(canonicalCssColor('#AABBCCDD'), '#aabbcc');
+  assertEquals(canonicalCssColor('rgb(255, 128, 0)'), '#ff8000');
+  assertEquals(canonicalCssColor('rgba(1, 2, 3, 0.5)'), '#010203');
+  assertEquals(canonicalCssColor('red'), '#ff0000');
+  assertEquals(canonicalCssColor('transparent'), null);
+  assertEquals(canonicalCssColor('url(#fff)'), null);
 });
 
 Deno.test('formatSelectOptionMarkup escapes plain labels', () => {

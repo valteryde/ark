@@ -1,4 +1,5 @@
 import type { SpreadsheetMountHandle, UiToolbarCapability } from './types.ts';
+import { dismissOpenColorMenu, mountToolbarColorMenu } from './color-menu.ts';
 
 const BORDER_INSET = 'inset 0 0 0 1px #64748b';
 
@@ -68,6 +69,7 @@ export function mountFormattingToolbar(
   sheet: SpreadsheetMountHandle,
   capabilities: Set<UiToolbarCapability>,
 ): void {
+  dismissOpenColorMenu();
   host.replaceChildren();
   host.classList.add('app-toolbar__dynamic');
 
@@ -215,49 +217,24 @@ export function mountFormattingToolbar(
       }
 
       if (cap === 'fill') {
-        const colorInput = document.createElement('input');
-        colorInput.type = 'color';
-        colorInput.className = 'app-toolbar__color-input';
-        colorInput.value = '#fff59d';
-        colorInput.setAttribute('aria-hidden', 'true');
-        colorInput.tabIndex = -1;
-        const endFillBatch = (): void => {
-          if (sheet.historyEnabled) sheet.endHistoryBatch();
-        };
-        colorInput.addEventListener('input', () => {
-          sheet.mergeCellStyleOnSelection({ 'background-color': colorInput.value });
+        mountToolbarColorMenu({
+          host,
+          sheet,
+          icon: CAP_ICONS.fill,
+          title: 'Fill color',
+          cssProperty: 'background-color',
+          resetLabel: 'No fill',
+          fallbackColor: '#fff59d',
         });
-        colorInput.addEventListener('change', endFillBatch);
-        colorInput.addEventListener('blur', endFillBatch);
-        const b = iconButton(CAP_ICONS[cap], 'Fill color');
-        b.addEventListener('pointerdown', () => {
-          if (sheet.historyEnabled) sheet.beginHistoryBatch();
+        mountToolbarColorMenu({
+          host,
+          sheet,
+          icon: 'ph-text-aa',
+          title: 'Text color',
+          cssProperty: 'color',
+          resetLabel: 'Automatic',
+          fallbackColor: '#1a1a1a',
         });
-        b.addEventListener('click', () => colorInput.click());
-        host.appendChild(colorInput);
-        host.appendChild(b);
-
-        const textColorInput = document.createElement('input');
-        textColorInput.type = 'color';
-        textColorInput.className = 'app-toolbar__color-input';
-        textColorInput.value = '#111827';
-        textColorInput.setAttribute('aria-hidden', 'true');
-        textColorInput.tabIndex = -1;
-        const endTextBatch = (): void => {
-          if (sheet.historyEnabled) sheet.endHistoryBatch();
-        };
-        textColorInput.addEventListener('input', () => {
-          sheet.mergeCellStyleOnSelection({ color: textColorInput.value });
-        });
-        textColorInput.addEventListener('change', endTextBatch);
-        textColorInput.addEventListener('blur', endTextBatch);
-        const textColorBtn = iconButton('ph-text-aa', 'Text color');
-        textColorBtn.addEventListener('pointerdown', () => {
-          if (sheet.historyEnabled) sheet.beginHistoryBatch();
-        });
-        textColorBtn.addEventListener('click', () => textColorInput.click());
-        host.appendChild(textColorInput);
-        host.appendChild(textColorBtn);
         continue;
       }
 
