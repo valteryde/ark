@@ -483,3 +483,106 @@ def test_partner_audit_logs_ws_events_and_sheet_deletion(client):
     assert "sheet.delete" in actions
     assert "cell.update" in actions
 
+
+def test_put_and_patch_persist_cell_styles(client):
+    r = client.put(
+        "/api/partner/sheets/styled",
+        json={
+            "columns": [{"id": "name", "header": "Name", "widthPx": 160}],
+            "rows": [{"name": "Ada"}],
+            "cellStyles": {"1:1": {"background-color": "#fef3c7", "color": "#111827"}},
+        },
+        headers=AUTH,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rows"][0]["name"] == "Ada"
+    assert body["cellStyles"]["1:1"]["background-color"] == "#fef3c7"
+    assert body["cellStyles"]["1:1"]["color"] == "#111827"
+
+    with client.websocket_connect("/ws/ark?path=styled") as ws:
+        patched = client.patch(
+            "/api/partner/sheets/styled",
+            json={"cells": [{"row": 1, "columnId": "name", "style": {"font-weight": "700"}}]},
+            headers=AUTH,
+        )
+        assert patched.status_code == 200
+        msg = ws.receive_json()
+        assert msg["type"] == "cell.style_committed"
+        assert msg["style"] == {"font-weight": "700"}
+        assert "value" not in msg
+
+    sheet = client.get("/api/partner/sheets/styled", headers=AUTH).json()
+    assert sheet["rows"][0]["name"] == "Ada"
+    assert sheet["cellStyles"]["1:1"] == {"font-weight": "700"}
+
+
+def test_ws_style_commit_persists_and_broadcasts_sanitized_style(client):
+    client.get("/api/sheets/styled")
+    with client.websocket_connect("/ws/ark?path=styled") as ws:
+        ws.send_json(
+            {
+                "type": "cell.style_committed",
+                "row": 1,
+                "col": 2,
+                "columnId": "b",
+                "style": {
+                    "color": "#b91c1c",
+                    "background-color": "#fff7ed",
+                    "background-image": "url(https://evil.example/x)",
+                },
+                "sheetPath": "styled",
+                "clientId": "tab-1",
+            }
+        )
+        echoed = ws.receive_json()
+        assert echoed["type"] == "cell.style_committed"
+        assert echoed["style"] == {"background-color": "#fff7ed", "color": "#b91c1c"}
+        assert echoed["clientId"] == "tab-1"
+
+    sheet = client.get("/api/sheets/styled").json()
+    assert sheet["cellStyles"]["1:2"] == {"background-color": "#fff7ed", "color": "#b91c1c"}
+
+    with client.websocket_connect("/ws/ark?path=styled") as ws:
+        ws.send_json(
+            {
+                "type": "cell.value_committed",
+                "row": 1,
+                "col": 2,
+                "columnId": "b",
+                "value": "kept",
+                "sheetPath": "styled",
+            }
+        )
+        ws.receive_json()
+    sheet = client.get("/api/sheets/styled").json()
+    assert sheet["rows"][0]["b"] == "kept"
+    assert sheet["cellStyles"]["1:2"]["color"] == "#b91c1c"
+
+
+def test_ws_style_on_readonly_column_is_rejected(client):
+    client.put(
+        "/api/partner/sheets/locked",
+        json={
+            "columns": [{"id": "id", "header": "ID", "widthPx": 80, "readOnly": True}],
+            "rows": [{"id": 1}],
+        },
+        headers=AUTH,
+    )
+    with client.websocket_connect("/ws/ark?path=locked") as ws:
+        ws.send_json(
+            {
+                "type": "cell.style_committed",
+                "row": 1,
+                "col": 1,
+                "columnId": "id",
+                "style": {"color": "#111"},
+                "sheetPath": "locked",
+            }
+        )
+        status = ws.receive_json()
+        assert status["type"] == "cell.persist_status"
+        assert status["ok"] is False
+    sheet = client.get("/api/partner/sheets/locked", headers=AUTH).json()
+    assert "cellStyles" not in sheet
+

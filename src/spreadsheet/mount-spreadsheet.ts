@@ -42,6 +42,7 @@ import type {
   CollabPresenceMode,
   CollabPresencePayload,
   RemoteCollabPeer,
+  SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
   SpreadsheetConfig,
   SpreadsheetCellInit,
@@ -219,6 +220,28 @@ export function mountSpreadsheet(
     data.set(row, col, value);
     hydrateCellFromStore(row, col);
     persistError.clear(row, col);
+    if (options?.remoteMarkerHue !== undefined) {
+      flashRemoteMarker(row, col, options.remoteMarkerHue);
+    }
+    return true;
+  }
+
+  function applyExternalStyle(
+    row: number,
+    col: number,
+    style: SpreadsheetCellStyleDeclarations | null,
+    options?: { remoteMarkerHue?: number },
+  ): boolean {
+    if (row < 1 || row > dataRowCount || col < 1 || col > dataColumnCount) return false;
+    const next = style && Object.keys(style).length > 0 ? style : undefined;
+    if (!data.setCellStyle) return false;
+    if (isHiddenCol(col)) {
+      data.setCellStyle(row, col, next);
+      return true;
+    }
+    if (!cells.has(cellKey(row, col))) return false;
+    data.setCellStyle(row, col, next);
+    syncCellChrome(row, col);
     if (options?.remoteMarkerHue !== undefined) {
       flashRemoteMarker(row, col, options.remoteMarkerHue);
     }
@@ -3251,6 +3274,7 @@ export function mountSpreadsheet(
       history?.endBatch();
     },
     applyExternalValue,
+    applyExternalStyle,
     getCollabPresencePayload,
     setRemoteCollabPresence,
     showCellPersistError: (row, col, message) => persistError.show(row, col, message),

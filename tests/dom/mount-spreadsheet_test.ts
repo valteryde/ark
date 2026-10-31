@@ -133,6 +133,31 @@ domTest('mergeCellStyleOnSelection styles the active cell and records history', 
   assertEquals(handle.canUndo(), true);
 });
 
+domTest('applyExternalStyle paints and clears without undo history', (env) => {
+  const container = env.makeContainer();
+  const handle = mountSpreadsheet(container, config());
+  const cell = container.querySelector(
+    '.sheet-cell[data-row="1"][data-col="1"]',
+  ) as HTMLElement;
+
+  assertEquals(
+    handle.applyExternalStyle(1, 1, {
+      'font-weight': '700',
+      color: '#112233',
+      position: 'fixed',
+    }),
+    true,
+  );
+  assertEquals(cell.style.getPropertyValue('font-weight'), '700');
+  assertEquals(handle.getCellStyleAt(1, 1)?.color, '#112233');
+  assertEquals(handle.getCellStyleAt(1, 1)?.position, undefined);
+  assertEquals(handle.canUndo(), false);
+
+  assertEquals(handle.applyExternalStyle(1, 1, null), true);
+  assertEquals(cell.style.getPropertyValue('font-weight'), '');
+  assertEquals(handle.getCellStyleAt(1, 1), undefined);
+});
+
 domTest('undo and redo revert and reapply a style change', (env) => {
   const container = env.makeContainer();
   const handle = mountSpreadsheet(container, config());

@@ -1,6 +1,10 @@
-import { parseCommittedCellValue } from '../spreadsheet/cell-value.ts';
+import { cellStylesEqual } from '../spreadsheet/cell-style.ts';
 import { createInMemoryDataStore, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
-import type { SpreadsheetColumn, SpreadsheetDataStore } from '../spreadsheet/types.ts';
+import type {
+  SpreadsheetCellStyleDeclarations,
+  SpreadsheetColumn,
+  SpreadsheetDataStore,
+} from '../spreadsheet/types.ts';
 
 export type OnCellSetNotify = (args: {
   row: number;
@@ -10,56 +14,104 @@ export type OnCellSetNotify = (args: {
   recordId?: string | number;
 }) => void;
 
+export type OnCellStyleNotify = (args: {
+  row: number;
+  col: number;
+  columnId: string;
+  /** Full replacement style. An empty object clears formatting. */
+  style: SpreadsheetCellStyleDeclarations;
+  recordId?: string | number;
+}) => void;
+
 function readOnlyIdColumnIndex(columns: readonly SpreadsheetColumn[]): number {
   const i = columns.findIndex((c) => c.readOnly);
   return i >= 0 ? i + 1 : 0;
 }
 
+function storedValue(value: string | number | undefined): string | number {
+  return value === undefined ? '' : value;
+}
+
 /**
- * In-memory store that notifies on `set` for collab/tunnel (skips when applyingRemote).
+ * In-memory store that notifies on `set` / style changes for collab (skips when applyingRemote).
  */
 export function createPartnerNotifyDataStore(
   columns: readonly SpreadsheetColumn[],
   initial: Record<string, InMemoryDataInitValue>,
   onSet: OnCellSetNotify,
+  onStyle?: OnCellStyleNotify,
 ): PartnerNotifyDataStore {
   const inner = createInMemoryDataStore(initial);
   let applyingRemote = false;
 
+  function recordIdFor(row: number, col: number): string | number | undefined {
+    const idCol = readOnlyIdColumnIndex(columns);
+    if (idCol <= 0 || idCol === col) return undefined;
+    const v = inner.get(row, idCol);
+    if (v !== undefined && v !== '') return v;
+    return undefined;
+  }
+
+  function emitValue(row: number, col: number, value: string | number, skipReadOnly = false): void {
+    const colDef = columns[col - 1];
+    if (!colDef || (skipReadOnly && colDef.readOnly)) return;
+    const recordId = recordIdFor(row, col);
+    onSet({
+      row,
+      col,
+      columnId: colDef.id,
+      value,
+      ...(recordId !== undefined ? { recordId } : {}),
+    });
+  }
+
+  function emitStyle(row: number, col: number): void {
+    if (!onStyle) return;
+    const colDef = columns[col - 1];
+    if (!colDef || colDef.readOnly) return;
+    const recordId = recordIdFor(row, col);
+    onStyle({
+      row,
+      col,
+      columnId: colDef.id,
+      style: inner.getCellStyle?.(row, col) ?? {},
+      ...(recordId !== undefined ? { recordId } : {}),
+    });
+  }
+
   return {
     get: (row, col) => inner.get(row, col),
     getCellStyle: (row, col) => inner.getCellStyle?.(row, col),
-    mergeCellStyle: (row, col, patch) => inner.mergeCellStyle?.(row, col, patch),
+    mergeCellStyle(row, col, patch) {
+      const before = inner.getCellStyle?.(row, col);
+      inner.mergeCellStyle?.(row, col, patch);
+      if (applyingRemote) return;
+      if (cellStylesEqual(before, inner.getCellStyle?.(row, col))) return;
+      emitStyle(row, col);
+    },
+    setCellStyle(row, col, style) {
+      const before = inner.getCellStyle?.(row, col);
+      inner.setCellStyle?.(row, col, style);
+      if (applyingRemote) return;
+      if (cellStylesEqual(before, inner.getCellStyle?.(row, col))) return;
+      emitStyle(row, col);
+    },
     hasCell: (row, col) => inner.hasCell?.(row, col) ?? false,
     getStoredCell: (row, col) => inner.getStoredCell?.(row, col),
     replaceCell(row, col, cell) {
+      const before = inner.getStoredCell?.(row, col);
       inner.replaceCell?.(row, col, cell);
       if (applyingRemote) return;
-      if (cell !== null) return;
-      const colDef = columns[col - 1];
-      if (!colDef || colDef.readOnly) return;
-      const parsed = parseCommittedCellValue(colDef, '');
-      if (!parsed.ok) return;
-      const idCol = readOnlyIdColumnIndex(columns);
-      let recordId: string | number | undefined;
-      if (idCol > 0 && idCol !== col) {
-        const v = inner.get(row, idCol);
-        if (v !== undefined && v !== '') recordId = v;
-      }
-      onSet({ row, col, columnId: colDef.id, value: parsed.value, recordId });
+      const after = inner.getStoredCell?.(row, col);
+      const beforeValue = storedValue(before?.value);
+      const afterValue = storedValue(after?.value);
+      if (beforeValue !== afterValue) emitValue(row, col, afterValue, true);
+      if (!cellStylesEqual(before?.style, after?.style)) emitStyle(row, col);
     },
     set(row, col, value) {
       inner.set(row, col, value);
       if (applyingRemote) return;
-      const colDef = columns[col - 1];
-      if (!colDef) return;
-      const idCol = readOnlyIdColumnIndex(columns);
-      let recordId: string | number | undefined;
-      if (idCol > 0 && idCol !== col) {
-        const v = inner.get(row, idCol);
-        if (v !== undefined && v !== '') recordId = v;
-      }
-      onSet({ row, col, columnId: colDef.id, value, recordId });
+      emitValue(row, col, value);
     },
     /** Call around applyExternalValue / remote applies so outbound notify does not fire. */
     withRemoteApply<T>(fn: () => T): T {

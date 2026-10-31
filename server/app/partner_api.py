@@ -244,7 +244,7 @@ async def put_sheet(path: str, request: Request) -> JSONResponse:
         "columns": payload["columns"],
     }
     for k in ("title", "description", "ghostRowCount", "defaultRowHeightPx",
-              "enabledUiCapabilities", "chromeActions"):
+              "enabledUiCapabilities", "chromeActions", "cells", "cellStyles"):
         if k in payload:
             truth[k] = payload[k]
     await hub.broadcast(truth, normalized)
@@ -277,17 +277,20 @@ async def patch_sheet(path: str, request: Request) -> JSONResponse:
         status = 404 if "not found" in str(e) else 400
         return JSONResponse({"detail": str(e)}, status_code=status)
     for cell in result["appliedCells"]:
-        await hub.broadcast(
-            {
-                "type": "cell.value_committed",
-                "row": cell["row"],
-                "col": cell["col"],
-                "columnId": cell["columnId"],
-                "value": cell["value"],
-                "sheetPath": normalized,
-            },
-            normalized,
-        )
+        has_value = "value" in cell
+        has_style = "style" in cell
+        message: dict[str, Any] = {
+            "type": "cell.value_committed" if has_value else "cell.style_committed",
+            "row": cell["row"],
+            "col": cell["col"],
+            "columnId": cell["columnId"],
+            "sheetPath": normalized,
+        }
+        if has_value:
+            message["value"] = cell["value"]
+        if has_style:
+            message["style"] = cell["style"] if cell["style"] else {}
+        await hub.broadcast(message, normalized)
     return JSONResponse({"status": "ok", "revision": result["revision"]})
 
 

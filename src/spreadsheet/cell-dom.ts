@@ -1,3 +1,4 @@
+import { sanitizeCellStyle } from './cell-style.ts';
 import { formatCellHtml } from './cell-display.ts';
 import type { SpreadsheetColumn } from './types.ts';
 
@@ -27,12 +28,13 @@ export function applyCellInlineStyleRecord(
   for (const prop of prev) {
     el.style.removeProperty(prop);
   }
-  if (!style || Object.keys(style).length === 0) {
+  const safe = sanitizeCellStyle(style);
+  if (!safe) {
     el.removeAttribute(SHEET_STYLE_PROPS_ATTR);
     return;
   }
   const keys: string[] = [];
-  for (const [k, v] of Object.entries(style)) {
+  for (const [k, v] of Object.entries(safe)) {
     const name = k.trim();
     if (!name || v === undefined || v === '') continue;
     el.style.setProperty(name, v);

@@ -381,3 +381,119 @@ def test_audit_logs_filtering_and_pagination(fresh_store):
     assert len(page2) == 1
     assert page1[0]["id"] != page2[0]["id"]
 
+
+def test_cell_style_roundtrip_survives_value_edits(fresh_store):
+    fresh_store.get_or_create_sheet("clients")
+    style = {"background-color": "#fef3c7", "color": "#111827", "font-weight": "700"}
+    rev, stored = fresh_store.apply_cell_style("clients", 2, 1, style)
+    assert rev == 2
+    assert stored == style
+
+    fresh_store.apply_cell("clients", 2, 1, "Acme")
+    payload = fresh_store.get_sheet_payload("clients")
+    assert payload["rows"][1]["a"] == "Acme"
+    assert payload["cellStyles"]["2:1"] == style
+
+    # Clearing the value keeps the formatting.
+    fresh_store.apply_cell("clients", 2, 1, "")
+    payload = fresh_store.get_sheet_payload("clients")
+    assert payload["rows"] == []
+    assert payload["cellStyles"]["2:1"] == style
+
+    # Clearing the style on an empty cell removes the row.
+    rev, stored = fresh_store.apply_cell_style("clients", 2, 1, {})
+    assert stored is None
+    payload = fresh_store.get_sheet_payload("clients")
+    assert "cellStyles" not in payload
+
+    logs, _total = fresh_store.get_audit_logs(sheet_path="clients", action="cell.style", order="asc")
+    assert len(logs) == 2
+    assert logs[0]["details"]["newStyle"]["color"] == "#111827"
+    assert logs[1]["details"]["newStyle"] is None
+
+
+def test_replace_and_template_seed_cell_styles(fresh_store):
+    payload = fresh_store.replace_sheet(
+        "tasks",
+        {
+            "columns": [
+                {"id": "title", "header": "Title", "widthPx": 200},
+                {"id": "owner", "header": "Owner", "widthPx": 120},
+            ],
+            "rows": [{"title": "Ship", "owner": "Ada"}],
+            "cellStyles": {
+                "1:1": {"background-color": "#d8f3dc", "color": "red"},
+                "1:2": {"font-style": "italic"},
+            },
+        },
+    )
+    assert payload["rows"][0]["title"] == "Ship"
+    assert payload["cellStyles"]["1:1"]["background-color"] == "#d8f3dc"
+    assert payload["cellStyles"]["1:1"]["color"] == "red"
+    assert payload["cellStyles"]["1:2"] == {"font-style": "italic"}
+
+    created, was_created = fresh_store.get_or_create_sheet(
+        "from-template",
+        {
+            "version": 1,
+            "columns": [{"id": "name", "header": "Name", "widthPx": 160}],
+            "rows": [{"name": "Ada"}],
+            "cellStyles": {"1:1": {"font-weight": "bold"}},
+        },
+    )
+    assert was_created is True
+    assert created["cellStyles"]["1:1"] == {"font-weight": "bold"}
+    assert created["rows"][0]["name"] == "Ada"
+
+
+def test_patch_style_does_not_clobber_value(fresh_store):
+    fresh_store.replace_sheet(
+        "clients",
+        {
+            "columns": [{"id": "name", "header": "Name", "widthPx": 160}],
+            "rows": [{"name": "Acme"}],
+        },
+    )
+    result = fresh_store.patch_sheet(
+        "clients",
+        {"cells": [{"row": 1, "columnId": "name", "style": {"color": "#b91c1c"}}]},
+    )
+    assert result["appliedCells"] == [
+        {
+            "row": 1,
+            "col": 1,
+            "columnId": "name",
+            "style": {"color": "#b91c1c"},
+        }
+    ]
+    payload = fresh_store.get_sheet_payload("clients")
+    assert payload["rows"][0]["name"] == "Acme"
+    assert payload["cellStyles"]["1:1"] == {"color": "#b91c1c"}
+
+    fresh_store.patch_sheet(
+        "clients",
+        {"cells": [{"row": 1, "columnId": "name", "value": "Acme Corp"}]},
+    )
+    payload = fresh_store.get_sheet_payload("clients")
+    assert payload["rows"][0]["name"] == "Acme Corp"
+    assert payload["cellStyles"]["1:1"] == {"color": "#b91c1c"}
+
+
+def test_apply_cell_style_rejects_readonly_and_unsafe_style(fresh_store):
+    fresh_store.replace_sheet(
+        "grades",
+        {
+            "columns": [
+                {"id": "id", "header": "ID", "widthPx": 80, "readOnly": True},
+                {"id": "grade", "header": "Grade", "widthPx": 80},
+            ],
+            "rows": [{"id": 1, "grade": "A"}],
+        },
+    )
+    with pytest.raises(SheetValidationError, match="read-only"):
+        fresh_store.apply_cell_style("grades", 1, 1, {"color": "#111"})
+    with pytest.raises(SheetValidationError, match="no allowed"):
+        fresh_store.apply_cell_style("grades", 1, 2, {"background-image": "url(https://evil)"})
+    payload = fresh_store.get_sheet_payload("grades")
+    assert "cellStyles" not in payload
+

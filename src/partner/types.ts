@@ -1,4 +1,8 @@
-import type { SpreadsheetColumn, UiToolbarCapability } from '../spreadsheet/types.ts';
+import type {
+  SpreadsheetCellStyleDeclarations,
+  SpreadsheetColumn,
+  UiToolbarCapability,
+} from '../spreadsheet/types.ts';
 
 /** Top-right header link rendered from `PartnerSheetPayload.chromeActions`. */
 export interface PartnerChromeAction {
@@ -30,12 +34,30 @@ export interface PartnerSheetPayload {
   template?: { name?: string; version: string };
   /** Sparse out-of-schema cells keyed `"row:col"` (1-based grid indices). */
   cells?: Record<string, string | number>;
+  /**
+   * Per-cell presentation styles keyed `"row:col"` (1-based). Values are
+   * sanitized CSS declarations (`color`, `background-color`, `font-weight`, …).
+   */
+  cellStyles?: Record<string, SpreadsheetCellStyleDeclarations>;
 }
 
 /** User deleted a grid row (e.g. context menu); backend should remove the record, not only clear cells. */
 export interface RowDeletedEvent {
   type: 'row.deleted';
   row: number;
+  sheetPath?: string;
+  clientId?: string;
+  markerHue?: number;
+  recordId?: string | number;
+}
+
+/** Full replacement of one cell's style. An empty `style` object clears it. */
+export interface CellStyleCommittedEvent {
+  type: 'cell.style_committed';
+  row: number;
+  col: number;
+  columnId: string;
+  style: SpreadsheetCellStyleDeclarations;
   sheetPath?: string;
   clientId?: string;
   markerHue?: number;

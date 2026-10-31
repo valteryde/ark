@@ -52,6 +52,25 @@ def test_parse_normalizes_name_and_passthrough_fields():
     assert t["rows"] == []
 
 
+def test_parse_keeps_cell_styles_and_rejects_unsafe_maps():
+    t = parse_template_response(
+        {
+            "version": 1,
+            "columns": COLUMNS,
+            "cellStyles": {"1:1": {"background-color": "#fff", "position": "fixed"}},
+        }
+    )
+    assert t["cellStyles"]["1:1"] == {"background-color": "#fff"}
+    with pytest.raises(PartnerTemplateError):
+        parse_template_response(
+            {
+                "version": 1,
+                "columns": COLUMNS,
+                "cellStyles": {"nope": {"color": "#fff"}},
+            }
+        )
+
+
 def test_parse_rejects_non_object():
     with pytest.raises(PartnerTemplateError):
         parse_template_response([1, 2, 3])

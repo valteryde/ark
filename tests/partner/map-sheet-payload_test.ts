@@ -105,6 +105,35 @@ Deno.test('rowsToInitialMap keys cells by row:col (1-indexed) and skips blanks',
   assertEquals('2:2' in initial, false);
 });
 
+Deno.test('rowsToInitialMap merges cellStyles onto values and empty cells', () => {
+  const initial = rowsToInitialMap(
+    columns,
+    [{ name: 'Ada' }],
+    undefined,
+    {
+      '1:1': { 'background-color': '#fef3c7', color: '#111827' },
+      '2:2': { 'font-weight': '700', position: 'fixed' } as Record<string, string>,
+    },
+  );
+  assertEquals(initial['1:1'], {
+    value: 'Ada',
+    style: { 'background-color': '#fef3c7', color: '#111827' },
+  });
+  assertEquals(initial['2:2'], { value: '', style: { 'font-weight': '700' } });
+});
+
+Deno.test('normalizePartnerSheetPayload keeps sanitized cellStyles', () => {
+  const result = normalizePartnerSheetPayload({
+    columns: [{ id: 'name', header: 'Name' }],
+    rows: [{ name: 'Ada' }],
+    cellStyles: {
+      '1:1': { color: '#112233', 'background-image': 'url(https://evil)' },
+      'bad': { color: '#fff' },
+    },
+  });
+  assertEquals(result?.cellStyles, { '1:1': { color: '#112233' } });
+});
+
 Deno.test('rowsToInitialMap coerces booleans to strings', () => {
   const initial = rowsToInitialMap([{ id: 'flag', header: 'Flag', widthPx: 120 }], [
     { flag: true },

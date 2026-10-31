@@ -89,7 +89,8 @@ Ark sends live change notifications as users edit. Events for the same sheet and
 ```
 
 - **`revision`** — the sheet's document revision after the last event in the batch. Increments on every mutation.
-- **`kind: "cell"`** — a committed cell value. `row`/`col` are 1-based grid indices; `columnId` matches the sheet's column config; `recordId` is the row's first read-only column value when present.
+- **`kind: "cell"`** — a committed cell value. `row`/`col` are 1-based grid indices; `columnId` matches the sheet's column config; `recordId` is the row's first read-only column value when present. Does not include style.
+- **`kind: "cell_style"`** — a committed cell style. `style` is the full replacement object (`{}` means formatting was cleared). `row`, `col`, `columnId`, and `recordId` match `kind: "cell"`.
 - **`kind: "row_deleted"`** — user deleted a grid row (cells cleared; rows are not shifted).
 - **`kind: "sheet_created"`** — a sheet was auto-created on first visit; includes the `template` name/version it was built from (absent for blank sheets).
 
@@ -117,7 +118,7 @@ Ark maintains an immutable, tamper-evident audit log of every event across sheet
 **Query Parameters:**
 - `path` or `sheet_path` — filter by sheet path (e.g. `clients/21`).
 - `prefix` — filter by sheet path prefix (e.g. `clients` matches `clients` and `clients/*`).
-- `action` — filter by action type (`cell.update`, `cell.clear`, `row.delete`, `sheet.create`, `sheet.replace`, `sheet.patch`, `sheet.delete`, `sheet.read`, `sheet.subscribe`, `auth.failed`, `cell.rejected`). Supports comma-separated list (e.g. `action=cell.update,row.delete`).
+- `action` — filter by action type (`cell.update`, `cell.clear`, `cell.style`, `row.delete`, `sheet.create`, `sheet.replace`, `sheet.patch`, `sheet.delete`, `sheet.read`, `sheet.subscribe`, `auth.failed`, `cell.rejected`). Supports comma-separated list (e.g. `action=cell.update,row.delete`).
 - `actor_type` — filter by actor category (`user`, `partner`, `system`).
 - `actor_id` — filter by actor identity (e.g. browser `ark_token` or partner user ID).
 - `since` / `from` — ISO 8601 timestamp floor (e.g. `2026-10-24T00:00:00Z`).
@@ -161,7 +162,7 @@ Optional partner request header:
 
 ### `PUT /api/partner/sheets/{path}` (create / replace)
 
-Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `enabledUiCapabilities`, `chromeActions`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`.
+Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**).
 
 ### `PATCH /api/partner/sheets/{path}` (partial update)
 
@@ -172,12 +173,23 @@ Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`
   "cells": [
     { "row": 1, "columnId": "name", "value": "Acme Corp" },
     { "recordId": 2, "columnId": "name", "value": "Beta LLC" },
-    { "row": 3, "col": 2, "value": "Gamma" }
+    {
+      "row": 3,
+      "col": 2,
+      "value": "Gamma",
+      "style": { "background-color": "#fef3c7", "color": "#111827", "font-weight": "700" }
+    },
+    { "row": 4, "columnId": "name", "style": { "color": "#b91c1c" } }
   ]
 }
 ```
 
-Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `columnId`** (row resolved through the first read-only column), or raw **`row` + `col`**. An empty-string `value` clears the cell. Applied updates are broadcast to open tabs as live cell commits.
+Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `columnId`** (row resolved through the first read-only column), or raw **`row` + `col`**. Include **`value`**, **`style`**, or both.
+
+- An empty-string `value` clears the **value**. Formatting already on the cell is kept.
+- Omit `style` to leave formatting unchanged. `style: null` or `style: {}` clears it. A style object **replaces** the cell's style (it is not merged).
+- A cell with neither a value nor a style is deleted.
+- A style-only update does not change the value. Open tabs apply value updates as `cell.value_committed` and style-only updates as `cell.style_committed`.
 
 ## Sheet payload reference
 
@@ -194,6 +206,7 @@ Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `col
 | `rows` | Array of row objects; keys match column `id` |
 | `rowCount` | Visible grid height. Grows automatically when users write below it. |
 | `cells` | Sparse out-of-schema cells keyed `"row:col"` (values written outside the defined columns), when present. |
+| `cellStyles` | Sparse per-cell styles keyed `"row:col"` (1-based). Present only when at least one cell has formatting. See **Cell styles**. |
 | `defaultRowHeightPx` | Passed through to config |
 | `enabledUiCapabilities` | Toolbar flags (see SPREADSHEET.md) |
 | `chromeActions` | Up to **8** header links (top right). Each item is an object (see below). Invalid or unsafe URLs are skipped. |
@@ -238,7 +251,7 @@ For **`valueType: "select"`**, each entry in **`selectOptions`** is an object:
 
 If an option has **at least one** of `color`, `backgroundColor`, or a valid `icon`, the cell (and suggestion list) renders a **chip** with those styles. Options with **none** of these render as **plain escaped text** (label or value).
 
-**Text and number columns** are always plain text (no per-column display style enum).
+**Text and number columns** have no per-column display style enum. Formatting is per cell (`cellStyles`), not per column. Select chips (`color` / `backgroundColor` on an option) are separate: they follow the option, not the cell's own style.
 
 #### Link columns (icon button)
 
@@ -289,11 +302,41 @@ Omit **`icon`** for the same open-in-new glyph. Omit **`label`** to use the colu
 }
 ```
 
+## Cell styles
+
+Any cell can store presentation CSS. Styles survive refresh, partner `GET`/`PUT`/`PATCH`, and live collab. The toolbar (bold, italic, strikethrough, fill, text color, borders, alignment, link underline) writes this same object.
+
+`cellStyles` is a map of **`"row:col"`** (1-based grid indices, same keys as sparse `cells`) to a style object. Keys use kebab-case CSS properties. Unknown properties and unsafe values are rejected or dropped so a payload cannot inject URLs or layout CSS.
+
+| Property | Accepted values |
+| -------- | ---------------- |
+| `color`, `background-color`, `border-color` | Hex (`#rgb`, `#rrggbb`, `#rrggbbaa`), `rgb()` / `rgba()` with numeric channels, or a CSS color name such as `red` |
+| `font-weight` | `normal`, `bold`, `bolder`, `lighter`, or `100`–`900` |
+| `font-style` | `normal`, `italic`, `oblique` |
+| `font-size` | `8px`–`96px` |
+| `text-decoration-line` | `underline`, `line-through`, `overline`, `none` (space-separated) |
+| `text-align` | `left`, `right`, `center`, `start`, `end`, `justify` |
+| `justify-content`, `align-items` | `flex-start`, `center`, `flex-end`, `start`, `end`, and the other flex keywords the toolbar uses |
+| `box-shadow` | `inset 0 0 0 1px` plus a color (the toolbar border) |
+| `border-width` | `0px`–`8px` |
+| `border-style` | `none`, `solid`, `dashed`, `dotted`, `double` |
+
+Clearing a cell's **value** does not clear its style. Clearing the style (toolbar toggle off, or `style: {}`) removes those declarations. Deleting a row removes both. An empty cell that only has a style is kept and comes back as a `cellStyles` entry with no row value.
+
+Browser edits send `{ "type": "cell.style_committed", "row", "col", "columnId", "style", "sheetPath", … }`. `style` is the full replacement object (`{}` clears). Ark stores it, broadcasts it, and enqueues a partner notification:
+
+```json
+{ "kind": "cell_style", "row": 1, "col": 2, "columnId": "name", "style": { "font-weight": "700" } }
+```
+
+`kind: "cell"` is still value-only. Pull `GET /api/partner/sheets/{path}` for the full `cellStyles` map. Templates may include `cellStyles` alongside `rows`.
+
 ## Browser-facing API (for reference)
 
 - **`GET /api/sheets/{path}`** — sheet payload, auto-creating unknown paths. Requires a valid `ark_token` when `ARK_PARTNER_BASE_URL` is set.
 - **WebSocket `/ws/ark`** — collab channel. Browsers send:
-  - `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath", "clientId"?, "markerHue"?, "recordId"? }` — Ark persists the cell, bumps the revision, broadcasts to peers, and enqueues a partner notification. On a persistence failure only the sender receives `{ "type": "cell.persist_status", "ok": false, "row", "col", … }`.
+  - `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath", "clientId"?, "markerHue"?, "recordId"? }` — Ark persists the cell value (existing style is kept), bumps the revision, broadcasts to peers, and enqueues a partner notification. On a persistence failure only the sender receives `{ "type": "cell.persist_status", "ok": false, "row", "col", … }`.
+  - `{ "type": "cell.style_committed", "row", "col", "columnId", "style", "sheetPath", "clientId"?, "markerHue"?, "recordId"? }` — Ark replaces that cell's style (`{}` clears it), broadcasts the sanitized style, and enqueues `kind: "cell_style"`. The cell value is unchanged. Read-only columns are rejected.
   - `{ "type": "row.deleted", "row", "sheetPath", … }` — Ark clears the row's cells, broadcasts, and notifies.
   - `{ "type": "cell.presence" | "cell.presence_clear", … }` — ephemeral cursor presence; broadcast only, never persisted or notified.
   - Browsers must not send `{ "type": "sheet.truth" }`; that shape is reserved for partner `PUT` pushes.
@@ -340,7 +383,6 @@ Full notes and examples live in [`.env.example`](https://github.com/valteryde/ar
 
 ## Out of scope (v1)
 
-- Formatting sync (`mergeCellStyle` stays client-side; the store has a style column reserved for later).
 - Authoritative **locking** or merge conflict resolution (presence outlines are indicative only).
 - Sheet history / restore endpoints (mutations are already recorded in the `sheet_events` log for a future version).
 

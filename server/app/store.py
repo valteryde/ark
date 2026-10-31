@@ -18,6 +18,14 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
+from .cell_style import (
+    CellStyleError,
+    dump_style,
+    load_style,
+    parse_cell_style,
+    parse_cell_styles_map,
+)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sheets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +109,10 @@ def _dump_value(value: str | int | float) -> str:
     return json.dumps(value)
 
 
+def _style_error(exc: CellStyleError) -> SheetValidationError:
+    return SheetValidationError(str(exc))
+
+
 def _load_value(raw: str) -> str | int | float:
     try:
         v = json.loads(raw)
@@ -109,6 +121,63 @@ def _load_value(raw: str) -> str | int | float:
     if isinstance(v, (str, int, float)) and not isinstance(v, bool):
         return v
     return raw
+
+
+def _write_cell(
+    conn: sqlite3.Connection,
+    sheet_id: int,
+    row: int,
+    col: int,
+    value: str | int | float,
+    style: dict[str, str] | None,
+) -> None:
+    """Insert or replace one cell. An empty value with no style deletes the row."""
+    if value == "" and not style:
+        conn.execute(
+            "DELETE FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
+            (sheet_id, row, col),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO cells (sheet_id, row, col, value, style) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (sheet_id, row, col) DO UPDATE SET
+            value = excluded.value,
+            style = excluded.style
+        """,
+        (sheet_id, row, col, _dump_value(value), dump_style(style)),
+    )
+
+
+def _apply_seed_styles(
+    conn: sqlite3.Connection,
+    sheet_id: int,
+    styles: dict[tuple[int, int], dict[str, str]],
+) -> None:
+    for (row, col), style in styles.items():
+        existing = conn.execute(
+            "SELECT value FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
+            (sheet_id, row, col),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO cells (sheet_id, row, col, value, style) VALUES (?, ?, ?, ?, ?)",
+                (sheet_id, row, col, _dump_value(""), dump_style(style)),
+            )
+        else:
+            conn.execute(
+                "UPDATE cells SET style = ? WHERE sheet_id = ? AND row = ? AND col = ?",
+                (dump_style(style), sheet_id, row, col),
+            )
+
+
+def _parse_styles_or_raise(
+    raw: Any,
+) -> dict[tuple[int, int], dict[str, str]]:
+    try:
+        return parse_cell_styles_map(raw, max_rows=MAX_ROWS, max_cols=MAX_COLS)
+    except CellStyleError as e:
+        raise _style_error(e) from e
 
 
 def _json_or_none(v: Any) -> str | None:
@@ -213,7 +282,13 @@ class SheetStore:
             self._conn.execute("PRAGMA synchronous = NORMAL")
         self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.executescript(_SCHEMA)
+        self._ensure_cell_style_column()
         self._conn.commit()
+
+    def _ensure_cell_style_column(self) -> None:
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(cells)")}
+        if "style" not in cols:
+            self._conn.execute("ALTER TABLE cells ADD COLUMN style TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -299,6 +374,7 @@ class SheetStore:
                 if not isinstance(r, dict):
                     raise SheetValidationError("each template row must be an object")
             rows = raw_rows
+            cell_styles = _parse_styles_or_raise(template.get("cellStyles"))
             rc = template.get("rowCount")
             if rc is not None and (not isinstance(rc, int) or rc < 1):
                 raise SheetValidationError("template rowCount must be an integer >= 1")
@@ -307,7 +383,8 @@ class SheetStore:
             # Documents always start with at least the blank-sheet room (same
             # floor as replace_sheet): templates seed data, they don't cap the
             # grid — Ark should feel like a spreadsheet, not a fixed form.
-            row_count = max(rc or 0, len(rows), _BLANK_ROW_COUNT)
+            style_max_row = max((r for r, _c in cell_styles), default=0)
+            row_count = max(rc or 0, len(rows), style_max_row, _BLANK_ROW_COUNT)
             fields = {
                 "title": _validate_title(template.get("title")),
                 "description": _validate_description(template.get("description")),
@@ -331,6 +408,7 @@ class SheetStore:
                 "chrome_actions": None,
             }
             col_index_by_id = {}
+            cell_styles = {}
         with self._lock:
             try:
                 cur = self._conn.execute(
@@ -374,6 +452,7 @@ class SheetStore:
                             "INSERT INTO cells (sheet_id, row, col, value) VALUES (?, ?, ?, ?)",
                             (sheet_id, r_idx + 1, col, _dump_value(v)),
                         )
+                _apply_seed_styles(self._conn, sheet_id, cell_styles)
                 self._log_event(
                     sheet_id,
                     1,
@@ -462,10 +541,11 @@ class SheetStore:
                     )
 
             existing_cell = self._conn.execute(
-                "SELECT value FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
+                "SELECT value, style FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
                 (sheet["id"], row, col),
             ).fetchone()
             old_value = _load_value(existing_cell["value"]) if existing_cell else None
+            kept_style = load_style(existing_cell["style"]) if existing_cell else None
 
             resolved_col_id = column_id
             if not resolved_col_id and isinstance(columns, list) and 1 <= col <= len(columns):
@@ -476,10 +556,17 @@ class SheetStore:
             revision = sheet["revision"] + 1
             now = _now()
             action = "cell.clear" if value == "" else "cell.update"
-            if value == "":
+            # Clearing the value keeps formatting. The row goes away only when
+            # both the value and the style are empty.
+            if value == "" and not kept_style:
                 self._conn.execute(
                     "DELETE FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
                     (sheet["id"], row, col),
+                )
+            elif value == "" and existing_cell is not None:
+                self._conn.execute(
+                    "UPDATE cells SET value = ? WHERE sheet_id = ? AND row = ? AND col = ?",
+                    (_dump_value(""), sheet["id"], row, col),
                 )
             else:
                 self._conn.execute(
@@ -524,6 +611,101 @@ class SheetStore:
             self._conn.commit()
         return revision
 
+    def apply_cell_style(
+        self,
+        path: str,
+        row: int,
+        col: int,
+        style: Any,
+        *,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+        column_id: str | None = None,
+    ) -> tuple[int, dict[str, str] | None]:
+        """Replace one cell's style. Returns (revision, stored style).
+
+        `None` or `{}` clears formatting. An empty value with no style deletes
+        the cell. The cell value is left unchanged. Read-only columns are rejected.
+        """
+        if not isinstance(row, int) or not isinstance(col, int) or row < 1 or col < 1:
+            raise SheetValidationError("row and col must be integers >= 1")
+        if row > MAX_ROWS:
+            raise SheetValidationError(f"row must not exceed {MAX_ROWS}")
+        if col > MAX_COLS:
+            raise SheetValidationError(f"col must not exceed {MAX_COLS}")
+        try:
+            parsed = parse_cell_style(style)
+        except CellStyleError as e:
+            raise _style_error(e) from e
+        path = normalize_sheet_path(path)
+        with self._lock:
+            sheet = self._conn.execute(
+                "SELECT id, revision, row_count, columns FROM sheets WHERE path = ?", (path,)
+            ).fetchone()
+            if sheet is None:
+                raise SheetValidationError(f"sheet not found: {path}")
+            columns = _parse_json(sheet["columns"])
+            if isinstance(columns, list) and 1 <= col <= len(columns):
+                col_def = columns[col - 1]
+                if isinstance(col_def, dict) and col_def.get("readOnly") is True:
+                    raise SheetValidationError(
+                        f"column '{col_def.get('id', col)}' is read-only"
+                    )
+            existing_cell = self._conn.execute(
+                "SELECT value, style FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
+                (sheet["id"], row, col),
+            ).fetchone()
+            old_style = load_style(existing_cell["style"]) if existing_cell else None
+            stored_value: str | int | float = (
+                _load_value(existing_cell["value"]) if existing_cell else ""
+            )
+            resolved_col_id = column_id
+            if not resolved_col_id and isinstance(columns, list) and 1 <= col <= len(columns):
+                col_def = columns[col - 1]
+                if isinstance(col_def, dict):
+                    resolved_col_id = col_def.get("id")
+            revision = sheet["revision"] + 1
+            now = _now()
+            _write_cell(self._conn, sheet["id"], row, col, stored_value, parsed)
+            new_row_count = max(sheet["row_count"], row)
+            self._conn.execute(
+                "UPDATE sheets SET revision = ?, row_count = ?, updated_at = ? WHERE id = ?",
+                (revision, new_row_count, now, sheet["id"]),
+            )
+            self._log_event(
+                sheet["id"],
+                revision,
+                "cell_style",
+                {"row": row, "col": col, "style": parsed or {}},
+            )
+            details = {
+                "row": row,
+                "col": col,
+                "columnId": resolved_col_id,
+                "oldStyle": old_style,
+                "newStyle": parsed,
+            }
+            self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path,
+                    sheet["id"],
+                    "cell.style",
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    json.dumps(details),
+                    now,
+                ),
+            )
+            self._conn.commit()
+        return revision, parsed
+
     def apply_row_delete(
         self,
         path: str,
@@ -544,13 +726,16 @@ class SheetStore:
             if sheet is None:
                 raise SheetValidationError(f"sheet not found: {path}")
             old_cells = self._conn.execute(
-                "SELECT col, value FROM cells WHERE sheet_id = ? AND row = ?",
+                "SELECT col, value, style FROM cells WHERE sheet_id = ? AND row = ?",
                 (sheet["id"], row),
             ).fetchall()
-            cleared = [
-                {"col": r["col"], "value": _load_value(r["value"])}
-                for r in old_cells
-            ]
+            cleared = []
+            for r in old_cells:
+                item: dict[str, Any] = {"col": r["col"], "value": _load_value(r["value"])}
+                style = load_style(r["style"])
+                if style:
+                    item["style"] = style
+                cleared.append(item)
             revision = sheet["revision"] + 1
             now = _now()
             self._conn.execute(
@@ -608,7 +793,9 @@ class SheetStore:
             raise SheetValidationError("rowCount must be an integer >= 1")
         if row_count is not None and row_count > MAX_ROWS:
             raise SheetValidationError(f"rowCount must not exceed {MAX_ROWS}")
-        effective_row_count = max(row_count or 0, len(rows), _BLANK_ROW_COUNT)
+        cell_styles = _parse_styles_or_raise(payload.get("cellStyles"))
+        style_max_row = max((r for r, _c in cell_styles), default=0)
+        effective_row_count = max(row_count or 0, len(rows), style_max_row, _BLANK_ROW_COUNT)
         col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
         title = _validate_title(payload.get("title"))
         description = _validate_description(payload.get("description"))
@@ -645,6 +832,7 @@ class SheetStore:
                         "INSERT INTO cells (sheet_id, row, col, value) VALUES (?, ?, ?, ?)",
                         (sheet_id, r_idx + 1, col, _dump_value(v)),
                     )
+            _apply_seed_styles(self._conn, sheet_id, cell_styles)
             self._conn.execute(
                 """
                 UPDATE sheets SET title = ?, description = ?, columns = ?, row_count = ?,
@@ -727,31 +915,54 @@ class SheetStore:
             for upd in cell_updates:
                 if not isinstance(upd, dict):
                     raise SheetValidationError("each cell update must be an object")
-                value = validate_cell_value(upd.get("value"))
+                has_value = "value" in upd
+                has_style = "style" in upd
+                if not has_value and not has_style:
+                    raise SheetValidationError("cell update needs value and/or style")
                 row, col, column_id = self._resolve_cell_address(
                     sheet["id"], columns, col_index_by_id, upd
                 )
+                if col > MAX_COLS:
+                    raise SheetValidationError(f"col must not exceed {MAX_COLS}")
                 existing_cell = self._conn.execute(
-                    "SELECT value FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
+                    "SELECT value, style FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
                     (sheet["id"], row, col),
                 ).fetchone()
                 old_val = _load_value(existing_cell["value"]) if existing_cell else None
-                if value == "":
-                    self._conn.execute(
-                        "DELETE FROM cells WHERE sheet_id = ? AND row = ? AND col = ?",
-                        (sheet["id"], row, col),
-                    )
+                old_style = load_style(existing_cell["style"]) if existing_cell else None
+                if has_value:
+                    value = validate_cell_value(upd.get("value"))
                 else:
-                    self._conn.execute(
-                        """
-                        INSERT INTO cells (sheet_id, row, col, value) VALUES (?, ?, ?, ?)
-                        ON CONFLICT (sheet_id, row, col) DO UPDATE SET value = excluded.value
-                        """,
-                        (sheet["id"], row, col, _dump_value(value)),
-                    )
+                    value = old_val if old_val is not None else ""
+                if has_style:
+                    try:
+                        style = parse_cell_style(upd.get("style"))
+                    except CellStyleError as e:
+                        raise _style_error(e) from e
+                else:
+                    style = old_style
+                _write_cell(self._conn, sheet["id"], row, col, value, style)
                 row_count = max(row_count, row)
-                applied.append({"row": row, "col": col, "columnId": column_id, "value": value})
-                audit_cells.append({"row": row, "col": col, "columnId": column_id, "oldValue": old_val, "newValue": value})
+                applied_cell: dict[str, Any] = {
+                    "row": row,
+                    "col": col,
+                    "columnId": column_id,
+                }
+                audit_cell: dict[str, Any] = {
+                    "row": row,
+                    "col": col,
+                    "columnId": column_id,
+                }
+                if has_value:
+                    applied_cell["value"] = value
+                    audit_cell["oldValue"] = old_val
+                    audit_cell["newValue"] = value
+                if has_style:
+                    applied_cell["style"] = style
+                    audit_cell["oldStyle"] = old_style
+                    audit_cell["newStyle"] = style
+                applied.append(applied_cell)
+                audit_cells.append(audit_cell)
 
             sets: list[str] = ["revision = ?", "updated_at = ?", "row_count = ?"]
             params: list[Any] = [revision, _now(), row_count]
@@ -916,8 +1127,14 @@ class SheetStore:
         max_row = 0
         in_schema: dict[tuple[int, int], str | int | float] = {}
         sparse: dict[str, str | int | float] = {}
+        cell_styles: dict[str, dict[str, str]] = {}
         for c in cells:
             v = _load_value(c["value"])
+            style = load_style(c["style"])
+            if style:
+                cell_styles[f"{c['row']}:{c['col']}"] = style
+            if v == "":
+                continue
             if 1 <= c["col"] <= n_cols:
                 in_schema[(c["row"], c["col"])] = v
                 max_row = max(max_row, c["row"])
@@ -959,6 +1176,8 @@ class SheetStore:
             payload["template"] = template
         if sparse:
             payload["cells"] = sparse
+        if cell_styles:
+            payload["cellStyles"] = cell_styles
         return payload
 
     # ------------------------------------------------------------ audit logs

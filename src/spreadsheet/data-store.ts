@@ -1,3 +1,4 @@
+import { sanitizeCellStyle } from './cell-style.ts';
 import type {
   SpreadsheetCellInit,
   SpreadsheetDataStore,
@@ -21,7 +22,7 @@ function normalizeInitEntry(v: InMemoryDataInitValue): StoredCell | undefined {
   if (v === undefined) return undefined;
   if (v !== null && typeof v === 'object' && 'value' in v) {
     const o = v as SpreadsheetCellInit;
-    return { value: o.value, style: o.style, comment: o.comment };
+    return { value: o.value, style: sanitizeCellStyle(o.style), comment: o.comment };
   }
   return { value: v as string | number };
 }
@@ -62,8 +63,27 @@ export function createInMemoryDataStore(
           style[name] = val;
         }
       }
-      const nextStyle = Object.keys(style).length > 0 ? style : undefined;
+      const nextStyle = sanitizeCellStyle(style);
       if (prev === undefined && value === '' && nextStyle === undefined && !comment) {
+        return;
+      }
+      if (nextStyle === undefined && value === '' && !comment) {
+        map.delete(k);
+        return;
+      }
+      map.set(k, { value, style: nextStyle, comment });
+    },
+    setCellStyle(row: number, col: number, style: SpreadsheetCellStyleDeclarations | undefined) {
+      const k = cellKey(row, col);
+      const prev = map.get(k);
+      const value = prev !== undefined ? prev.value : '';
+      const comment = prev?.comment;
+      const nextStyle = sanitizeCellStyle(style);
+      if (prev === undefined && value === '' && nextStyle === undefined && !comment) {
+        return;
+      }
+      if (nextStyle === undefined && value === '' && !comment) {
+        map.delete(k);
         return;
       }
       map.set(k, { value, style: nextStyle, comment });
@@ -90,9 +110,7 @@ export function createInMemoryDataStore(
         map.delete(k);
         return;
       }
-      const style = cell.style;
-      const nextStyle =
-        style !== undefined && Object.keys(style).length > 0 ? { ...style } : undefined;
+      const nextStyle = sanitizeCellStyle(cell.style);
       const c = cell.comment;
       const nextComment = c !== undefined && c.trim() !== '' ? c.trim() : undefined;
       map.set(k, { value: cell.value, style: nextStyle, comment: nextComment });

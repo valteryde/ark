@@ -335,6 +335,48 @@ def _persist_ws_event(
             event["recordId"] = data.get("recordId")
         return (True, None, event, revision)
 
+    if msg_type == "cell.style_committed":
+        if "style" not in data:
+            return (False, "missing style", None, 0)
+        try:
+            revision, stored = store.apply_cell_style(
+                sheet_path,
+                data.get("row"),
+                data.get("col"),
+                data.get("style"),
+                actor_type="user",
+                actor_id=actor_id,
+                ip_address=client_ip,
+                column_id=data.get("columnId") if isinstance(data.get("columnId"), str) else None,
+            )
+        except SheetValidationError as e:
+            store.log_audit_event(
+                sheet_path=sheet_path,
+                action="cell.rejected",
+                actor_type="user",
+                actor_id=actor_id,
+                ip_address=client_ip,
+                details={
+                    "row": data.get("row"),
+                    "col": data.get("col"),
+                    "columnId": data.get("columnId"),
+                    "attemptedStyle": data.get("style"),
+                    "reason": str(e),
+                },
+            )
+            return (False, str(e), None, 0)
+        data["style"] = stored if stored else {}
+        event = {
+            "kind": "cell_style",
+            "row": data.get("row"),
+            "col": data.get("col"),
+            "columnId": data.get("columnId"),
+            "style": data["style"],
+        }
+        if data.get("recordId") is not None:
+            event["recordId"] = data.get("recordId")
+        return (True, None, event, revision)
+
     if msg_type == "row.deleted":
         try:
             revision = store.apply_row_delete(
@@ -515,7 +557,7 @@ async def collab_ws(websocket: WebSocket) -> None:
                 _persist_ws_event, data, token, client_ip
             )
             if not ok:
-                if msg_type == "cell.value_committed":
+                if msg_type in ("cell.value_committed", "cell.style_committed"):
                     await _send_persist_status(websocket, data, err)
                 continue
             if partner_event is not None and sheet_path:

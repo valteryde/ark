@@ -98,6 +98,8 @@ export interface SpreadsheetDataStore {
   getCellStyle?(row: number, col: number): SpreadsheetCellStyleDeclarations | undefined;
   /** Merge CSS keys onto the cell; `undefined` or empty string removes that property. */
   mergeCellStyle?(row: number, col: number, patch: Record<string, string | undefined>): void;
+  /** Replace the cell's style. `undefined` or an empty map clears it and keeps the value. */
+  setCellStyle?(row: number, col: number, style: SpreadsheetCellStyleDeclarations | undefined): void;
   /** True if the backing map has an entry for this cell (used for undo snapshots). */
   hasCell?(row: number, col: number): boolean;
   /** Full `{ value, style }` for the cell, or `undefined` if the key is absent. */
@@ -253,6 +255,17 @@ export interface SpreadsheetMountHandle {
     row: number,
     col: number,
     value: string | number,
+    options?: { remoteMarkerHue?: number },
+  ): boolean;
+  /**
+   * Replace a cell's style from outside local editing (collab / partner push).
+   * Does not create undo history. `null` clears the style. Returns false if the
+   * cell is outside the grid.
+   */
+  applyExternalStyle(
+    row: number,
+    col: number,
+    style: SpreadsheetCellStyleDeclarations | null,
     options?: { remoteMarkerHue?: number },
   ): boolean;
   /** Current cell + whether the editor is focused (for collab presence). */

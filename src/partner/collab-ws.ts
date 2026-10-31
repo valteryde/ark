@@ -1,12 +1,14 @@
 import type {
   CellPresenceClearEvent,
   CellPresenceEvent,
+  CellStyleCommittedEvent,
   CellValueCommittedEvent,
   RowDeletedEvent,
 } from './types.ts';
 import { normalizeSheetTruthPayload, type SheetTruthNormalized } from './map-sheet-payload.ts';
 import { PARTNER_TOKEN_PARAM, getPartnerToken } from './partner-token.ts';
-import type { SpreadsheetColumn } from '../spreadsheet/types.ts';
+import { sanitizeCellStyle } from '../spreadsheet/cell-style.ts';
+import type { SpreadsheetCellStyleDeclarations, SpreadsheetColumn } from '../spreadsheet/types.ts';
 
 export function collabWsUrl(sheetPath?: string | null): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -28,6 +30,8 @@ function parseCommitted(
   sheetPath: string | null;
   clientId: string | null;
   markerHue: number | undefined;
+  /** Present when the message included `style`. `null` clears formatting. */
+  style?: SpreadsheetCellStyleDeclarations | null;
 } | null {
   if (o.type !== 'cell.value_committed') return null;
   const row = o.row;
@@ -42,13 +46,43 @@ function parseCommitted(
   if (typeof o.markerHue === 'number' && Number.isFinite(o.markerHue)) {
     markerHue = ((o.markerHue % 360) + 360) % 360;
   }
+  let style: SpreadsheetCellStyleDeclarations | null | undefined;
+  if ('style' in o) {
+    style = sanitizeCellStyle(o.style) ?? null;
+  }
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return { row, col, value, sheetPath, clientId, markerHue };
+    return { row, col, value, sheetPath, clientId, markerHue, ...(style !== undefined ? { style } : {}) };
   }
   if (typeof value === 'string') {
-    return { row, col, value, sheetPath, clientId, markerHue };
+    return { row, col, value, sheetPath, clientId, markerHue, ...(style !== undefined ? { style } : {}) };
   }
   return null;
+}
+
+function parseStyleCommitted(
+  o: Record<string, unknown>,
+): {
+  row: number;
+  col: number;
+  style: SpreadsheetCellStyleDeclarations | null;
+  sheetPath: string | null;
+  clientId: string | null;
+  markerHue: number | undefined;
+} | null {
+  if (o.type !== 'cell.style_committed') return null;
+  const row = o.row;
+  const col = o.col;
+  if (typeof row !== 'number' || typeof col !== 'number' || !Number.isFinite(row) || !Number.isFinite(col)) {
+    return null;
+  }
+  if (!('style' in o)) return null;
+  const sheetPath = typeof o.sheetPath === 'string' ? o.sheetPath : null;
+  const clientId = typeof o.clientId === 'string' ? o.clientId : null;
+  let markerHue: number | undefined;
+  if (typeof o.markerHue === 'number' && Number.isFinite(o.markerHue)) {
+    markerHue = ((o.markerHue % 360) + 360) % 360;
+  }
+  return { row, col, style: sanitizeCellStyle(o.style) ?? null, sheetPath, clientId, markerHue };
 }
 
 function parsePresence(
@@ -90,6 +124,7 @@ export type CollabConnectionState = 'connecting' | 'open' | 'disconnected';
 
 export interface CollabConnection {
   sendCommitted(ev: CellValueCommittedEvent): void;
+  sendStyleCommitted(ev: CellStyleCommittedEvent): void;
   sendRowDeleted(ev: RowDeletedEvent): void;
   sendPresence(ev: CellPresenceEvent): void;
   sendPresenceClear(ev: CellPresenceClearEvent): void;
@@ -100,6 +135,8 @@ export interface CollabConnection {
 
 export interface RemoteCommittedMeta {
   markerHue?: number;
+  /** Set when the commit also replaced the cell style. `null` clears it. */
+  style?: SpreadsheetCellStyleDeclarations | null;
 }
 
 export type RemotePresenceUpdate =
@@ -163,6 +200,13 @@ export function openCollabWs(opts: {
     row: number,
     col: number,
     value: string | number,
+    meta?: RemoteCommittedMeta,
+  ) => void;
+  /** Peer or partner replaced a cell's style without changing its value. */
+  onRemoteStyle?: (
+    row: number,
+    col: number,
+    style: SpreadsheetCellStyleDeclarations | null,
     meta?: RemoteCommittedMeta,
   ) => void;
   onRemotePresence: (msg: RemotePresenceUpdate) => void;
@@ -276,6 +320,17 @@ export function openCollabWs(opts: {
       return;
     }
 
+    const styled = parseStyleCommitted(rec);
+    if (styled) {
+      if (styled.clientId !== null && styled.clientId === opts.localClientId) return;
+      const active = opts.getActiveSheetPath();
+      if (styled.sheetPath !== null && active !== null && styled.sheetPath !== active) return;
+      const meta: RemoteCommittedMeta = {};
+      if (styled.markerHue !== undefined) meta.markerHue = styled.markerHue;
+      opts.onRemoteStyle?.(styled.row, styled.col, styled.style, meta);
+      return;
+    }
+
     const parsed = parseCommitted(rec);
     if (!parsed) return;
     if (parsed.clientId !== null && parsed.clientId === opts.localClientId) {
@@ -285,9 +340,15 @@ export function openCollabWs(opts: {
     if (parsed.sheetPath !== null && active !== null && parsed.sheetPath !== active) {
       return;
     }
-    const meta: RemoteCommittedMeta | undefined =
-      parsed.markerHue !== undefined ? { markerHue: parsed.markerHue } : undefined;
-    opts.onRemoteCommitted(parsed.row, parsed.col, parsed.value, meta);
+    const meta: RemoteCommittedMeta = {};
+    if (parsed.markerHue !== undefined) meta.markerHue = parsed.markerHue;
+    if (parsed.style !== undefined) meta.style = parsed.style;
+    opts.onRemoteCommitted(
+      parsed.row,
+      parsed.col,
+      parsed.value,
+      meta.markerHue !== undefined || meta.style !== undefined ? meta : undefined,
+    );
   }
 
   function connect(): void {
@@ -363,6 +424,10 @@ export function openCollabWs(opts: {
     queueSend(JSON.stringify(ev));
   }
 
+  function sendStyleCommitted(ev: CellStyleCommittedEvent): void {
+    queueSend(JSON.stringify(ev));
+  }
+
   function sendRowDeleted(ev: RowDeletedEvent): void {
     queueSend(JSON.stringify(ev));
   }
@@ -384,6 +449,7 @@ export function openCollabWs(opts: {
 
   return {
     sendCommitted,
+    sendStyleCommitted,
     sendRowDeleted,
     sendPresence,
     sendPresenceClear,

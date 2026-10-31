@@ -236,6 +236,28 @@ export function mountFormattingToolbar(
         b.addEventListener('click', () => colorInput.click());
         host.appendChild(colorInput);
         host.appendChild(b);
+
+        const textColorInput = document.createElement('input');
+        textColorInput.type = 'color';
+        textColorInput.className = 'app-toolbar__color-input';
+        textColorInput.value = '#111827';
+        textColorInput.setAttribute('aria-hidden', 'true');
+        textColorInput.tabIndex = -1;
+        const endTextBatch = (): void => {
+          if (sheet.historyEnabled) sheet.endHistoryBatch();
+        };
+        textColorInput.addEventListener('input', () => {
+          sheet.mergeCellStyleOnSelection({ color: textColorInput.value });
+        });
+        textColorInput.addEventListener('change', endTextBatch);
+        textColorInput.addEventListener('blur', endTextBatch);
+        const textColorBtn = iconButton('ph-text-aa', 'Text color');
+        textColorBtn.addEventListener('pointerdown', () => {
+          if (sheet.historyEnabled) sheet.beginHistoryBatch();
+        });
+        textColorBtn.addEventListener('click', () => textColorInput.click());
+        host.appendChild(textColorInput);
+        host.appendChild(textColorBtn);
         continue;
       }
 

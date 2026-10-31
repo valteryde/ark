@@ -29,7 +29,8 @@ from typing import Any
 import httpx
 
 from .partner_auth import partner_base_url
-from .store import SheetValidationError, _validate_columns
+from .cell_style import CellStyleError, parse_cell_styles_map
+from .store import MAX_COLS, MAX_ROWS, SheetValidationError, _validate_columns
 
 logger = logging.getLogger("ark")
 
@@ -41,6 +42,7 @@ _TEMPLATE_PASSTHROUGH_KEYS = (
     "defaultRowHeightPx",
     "enabledUiCapabilities",
     "chromeActions",
+    "cellStyles",
 )
 
 
@@ -77,6 +79,14 @@ def parse_template_response(data: Any) -> dict[str, Any]:
     for key in _TEMPLATE_PASSTHROUGH_KEYS:
         if key in data:
             template[key] = data[key]
+    if "cellStyles" in template:
+        try:
+            parsed = parse_cell_styles_map(
+                template["cellStyles"], max_rows=MAX_ROWS, max_cols=MAX_COLS
+            )
+        except CellStyleError as e:
+            raise PartnerTemplateError(f"invalid template cellStyles: {e}") from e
+        template["cellStyles"] = {f"{row}:{col}": style for (row, col), style in parsed.items()}
     return template
 
 

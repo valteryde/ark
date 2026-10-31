@@ -1,6 +1,8 @@
+import { sanitizeCellStyle } from '../spreadsheet/cell-style.ts';
 import { cellKey, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
 import { sanitizePhosphorIconName } from '../spreadsheet/cell-display.ts';
 import type {
+  SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
   SpreadsheetConfig,
   SpreadsheetSelectOption,
@@ -105,6 +107,8 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
             : undefined,
       enabledUiCapabilities: i.enabledUiCapabilities ?? o.enabledUiCapabilities,
       chromeActions: i.chromeActions ?? o.chromeActions,
+      cells: i.cells ?? o.cells,
+      cellStyles: i.cellStyles ?? o.cellStyles,
     };
   }
 
@@ -114,8 +118,10 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
   const rows = (src.rows as unknown[]).filter((r): r is Record<string, unknown> => r !== null && typeof r === 'object');
   const chromeActions = normalizePartnerChromeActions(src.chromeActions);
   const sparseCells = normalizeSparseCells(src.cells);
+  const cellStyles = normalizeCellStyles(src.cellStyles);
   return {
     ...(sparseCells !== undefined ? { cells: sparseCells } : {}),
+    ...(cellStyles !== undefined ? { cellStyles } : {}),
     ...(typeof src.revision === 'number' && Number.isFinite(src.revision)
       ? { revision: src.revision }
       : {}),
@@ -156,6 +162,23 @@ function normalizeSparseCells(raw: unknown): Record<string, string | number> | u
   return any ? out : undefined;
 }
 
+/** Validate a `"row:col"` style map. Unsafe declarations are dropped. */
+function normalizeCellStyles(
+  raw: unknown,
+): Record<string, SpreadsheetCellStyleDeclarations> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, SpreadsheetCellStyleDeclarations> = {};
+  let any = false;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!SPARSE_CELL_KEY_RE.test(k)) continue;
+    const style = sanitizeCellStyle(v);
+    if (!style) continue;
+    out[k] = style;
+    any = true;
+  }
+  return any ? out : undefined;
+}
+
 function cellValueFromRow(row: Record<string, unknown>, columnId: string): string | number | undefined {
   const v = row[columnId];
   if (v === undefined || v === null) return undefined;
@@ -173,6 +196,7 @@ export function rowsToInitialMap(
   columns: readonly SpreadsheetColumn[],
   rows: ReadonlyArray<Record<string, unknown>>,
   sparseCells?: Record<string, string | number>,
+  cellStyles?: Record<string, SpreadsheetCellStyleDeclarations>,
 ): Record<string, InMemoryDataInitValue> {
   const initial: Record<string, InMemoryDataInitValue> = {};
   for (let r = 0; r < rows.length; r++) {
@@ -189,6 +213,20 @@ export function rowsToInitialMap(
   if (sparseCells) {
     for (const [k, v] of Object.entries(sparseCells)) {
       initial[k] = v;
+    }
+  }
+  if (cellStyles) {
+    for (const [k, raw] of Object.entries(cellStyles)) {
+      const style = sanitizeCellStyle(raw);
+      if (!style) continue;
+      const existing = initial[k];
+      if (existing === undefined) {
+        initial[k] = { value: '', style };
+      } else if (typeof existing === 'object') {
+        initial[k] = { ...existing, style };
+      } else {
+        initial[k] = { value: existing, style };
+      }
     }
   }
   return initial;
@@ -258,6 +296,8 @@ export function normalizeSheetTruthPayload(
     ? (o.enabledUiCapabilities.filter((s): s is UiToolbarCapability => typeof s === 'string') as UiToolbarCapability[])
     : undefined;
   const chromeActions = normalizePartnerChromeActions(o.chromeActions);
+  const sparseCells = normalizeSparseCells(o.cells);
+  const cellStyles = normalizeCellStyles(o.cellStyles);
   const payload: PartnerSheetPayload = {
     title: typeof o.title === 'string' ? o.title : undefined,
     description: typeof o.description === 'string' ? o.description : undefined,
@@ -269,6 +309,8 @@ export function normalizeSheetTruthPayload(
       typeof o.defaultRowHeightPx === 'number' && o.defaultRowHeightPx > 0 ? o.defaultRowHeightPx : undefined,
     enabledUiCapabilities,
     ...(chromeActions !== undefined ? { chromeActions } : {}),
+    ...(sparseCells !== undefined ? { cells: sparseCells } : {}),
+    ...(cellStyles !== undefined ? { cellStyles } : {}),
   };
   return { sheetPath, payload };
 }

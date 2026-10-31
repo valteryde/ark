@@ -406,6 +406,25 @@ function initPartnerMode(): void {
           value,
           meta?.markerHue !== undefined ? { remoteMarkerHue: meta.markerHue } : undefined,
         );
+        if (meta?.style !== undefined) {
+          liveHandle!.applyExternalStyle(
+            row,
+            col,
+            meta.style,
+            meta.markerHue !== undefined ? { remoteMarkerHue: meta.markerHue } : undefined,
+          );
+        }
+      });
+    },
+    onRemoteStyle(row, col, style, meta) {
+      if (!liveHandle || !liveStore) return;
+      liveStore.withRemoteApply(() => {
+        liveHandle!.applyExternalStyle(
+          row,
+          col,
+          style,
+          meta?.markerHue !== undefined ? { remoteMarkerHue: meta.markerHue } : undefined,
+        );
       });
     },
     onRemotePresence(msg) {
@@ -484,26 +503,44 @@ function initPartnerMode(): void {
       ...(payload.revision !== undefined ? { revision: payload.revision } : {}),
       ...(payload.template !== undefined ? { template: { ...payload.template } } : {}),
       ...(payload.cells !== undefined ? { cells: { ...payload.cells } } : {}),
+      ...(payload.cellStyles !== undefined ? { cellStyles: { ...payload.cellStyles } } : {}),
     };
-    const initial = rowsToInitialMap(payload.columns, payload.rows, payload.cells);
+    const initial = rowsToInitialMap(payload.columns, payload.rows, payload.cells, payload.cellStyles);
     const pathForCollab = routingPath;
     clearPresenceWiring();
     if (resetPresence) {
       remotePeers.clear();
     }
-    const store = createPartnerNotifyDataStore(payload.columns, initial, (ev) => {
-      collab.sendCommitted({
-        type: 'cell.value_committed',
-        row: ev.row,
-        col: ev.col,
-        columnId: ev.columnId,
-        value: ev.value,
-        sheetPath: pathForCollab,
-        clientId: collabIdentity.clientId,
-        markerHue: collabIdentity.markerHue,
-        ...(ev.recordId !== undefined ? { recordId: ev.recordId } : {}),
-      });
-    }) as PartnerNotifyDataStore;
+    const store = createPartnerNotifyDataStore(
+      payload.columns,
+      initial,
+      (ev) => {
+        collab.sendCommitted({
+          type: 'cell.value_committed',
+          row: ev.row,
+          col: ev.col,
+          columnId: ev.columnId,
+          value: ev.value,
+          sheetPath: pathForCollab,
+          clientId: collabIdentity.clientId,
+          markerHue: collabIdentity.markerHue,
+          ...(ev.recordId !== undefined ? { recordId: ev.recordId } : {}),
+        });
+      },
+      (ev) => {
+        collab.sendStyleCommitted({
+          type: 'cell.style_committed',
+          row: ev.row,
+          col: ev.col,
+          columnId: ev.columnId,
+          style: ev.style,
+          sheetPath: pathForCollab,
+          clientId: collabIdentity.clientId,
+          markerHue: collabIdentity.markerHue,
+          ...(ev.recordId !== undefined ? { recordId: ev.recordId } : {}),
+        });
+      },
+    ) as PartnerNotifyDataStore;
     const config = sheetPayloadToConfig(payload, store);
     config.columnWidthPersistenceKey = `ark:colw:${routingPath}`;
     if (initialSelection) {
