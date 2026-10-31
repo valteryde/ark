@@ -18,6 +18,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
+from .cell_span import CellSpanError, load_cell_spans, parse_cell_spans, spans_after_clearing_row
 from .cell_style import (
     CellStyleError,
     dump_style,
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS sheets (
     pdf_export INTEGER,
     template_name TEXT,
     template_version TEXT,
+    cell_spans TEXT,
     revision INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -172,6 +174,19 @@ def _apply_seed_styles(
             )
 
 
+def _dump_spans(spans: list[dict[str, int]]) -> str | None:
+    if not spans:
+        return None
+    return json.dumps(spans)
+
+
+def _spans_or_raise(raw: Any, *, max_rows: int, max_cols: int) -> list[dict[str, int]]:
+    try:
+        return parse_cell_spans(raw, max_rows=max_rows, max_cols=max_cols)
+    except CellSpanError as e:
+        raise SheetValidationError(str(e)) from e
+
+
 def _parse_styles_or_raise(
     raw: Any,
 ) -> dict[tuple[int, int], dict[str, str]]:
@@ -298,12 +313,18 @@ class SheetStore:
         self._conn.executescript(_SCHEMA)
         self._ensure_cell_style_column()
         self._ensure_pdf_export_column()
+        self._ensure_cell_spans_column()
         self._conn.commit()
 
     def _ensure_pdf_export_column(self) -> None:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sheets)")}
         if "pdf_export" not in cols:
             self._conn.execute("ALTER TABLE sheets ADD COLUMN pdf_export INTEGER")
+
+    def _ensure_cell_spans_column(self) -> None:
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sheets)")}
+        if "cell_spans" not in cols:
+            self._conn.execute("ALTER TABLE sheets ADD COLUMN cell_spans TEXT")
 
     def _ensure_cell_style_column(self) -> None:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(cells)")}
@@ -405,6 +426,11 @@ class SheetStore:
             # grid — Ark should feel like a spreadsheet, not a fixed form.
             style_max_row = max((r for r, _c in cell_styles), default=0)
             row_count = max(rc or 0, len(rows), style_max_row, _BLANK_ROW_COUNT)
+            cell_spans = _spans_or_raise(
+                template.get("cellSpans"),
+                max_rows=row_count,
+                max_cols=len(columns),
+            )
             fields = {
                 "title": _validate_title(template.get("title")),
                 "description": _validate_description(template.get("description")),
@@ -431,6 +457,7 @@ class SheetStore:
             }
             col_index_by_id = {}
             cell_styles = {}
+            cell_spans = []
         with self._lock:
             try:
                 cur = self._conn.execute(
@@ -476,6 +503,11 @@ class SheetStore:
                             (sheet_id, r_idx + 1, col, _dump_value(v)),
                         )
                 _apply_seed_styles(self._conn, sheet_id, cell_styles)
+                if cell_spans:
+                    self._conn.execute(
+                        "UPDATE sheets SET cell_spans = ? WHERE id = ?",
+                        (_dump_spans(cell_spans), sheet_id),
+                    )
                 self._log_event(
                     sheet_id,
                     1,
@@ -744,7 +776,7 @@ class SheetStore:
         path = normalize_sheet_path(path)
         with self._lock:
             sheet = self._conn.execute(
-                "SELECT id, revision FROM sheets WHERE path = ?", (path,)
+                "SELECT id, revision, cell_spans FROM sheets WHERE path = ?", (path,)
             ).fetchone()
             if sheet is None:
                 raise SheetValidationError(f"sheet not found: {path}")
@@ -764,9 +796,13 @@ class SheetStore:
             self._conn.execute(
                 "DELETE FROM cells WHERE sheet_id = ? AND row = ?", (sheet["id"], row)
             )
+            kept_spans = spans_after_clearing_row(
+                load_cell_spans(sheet["cell_spans"], max_rows=MAX_ROWS, max_cols=MAX_COLS),
+                row,
+            )
             self._conn.execute(
-                "UPDATE sheets SET revision = ?, updated_at = ? WHERE id = ?",
-                (revision, now, sheet["id"]),
+                "UPDATE sheets SET revision = ?, updated_at = ?, cell_spans = ? WHERE id = ?",
+                (revision, now, _dump_spans(kept_spans), sheet["id"]),
             )
             self._log_event(sheet["id"], revision, "row_deleted", {"row": row})
             self._conn.execute(
@@ -788,6 +824,62 @@ class SheetStore:
             )
             self._conn.commit()
         return revision
+
+    def apply_cell_spans(
+        self,
+        path: str,
+        spans: Any,
+        *,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> tuple[int, list[dict[str, int]]]:
+        """Replace the sheet's merge list. Returns (revision, stored spans).
+
+        An empty list clears every merge. Covered cell values are not changed
+        here; the grid clears them before sending the new list.
+        """
+        path = normalize_sheet_path(path)
+        with self._lock:
+            sheet = self._conn.execute(
+                "SELECT id, revision, row_count, columns FROM sheets WHERE path = ?",
+                (path,),
+            ).fetchone()
+            if sheet is None:
+                raise SheetValidationError(f"sheet not found: {path}")
+            columns = _parse_json(sheet["columns"])
+            max_cols = len(columns) if isinstance(columns, list) and columns else 1
+            stored = _spans_or_raise(
+                spans,
+                max_rows=sheet["row_count"],
+                max_cols=max_cols,
+            )
+            revision = sheet["revision"] + 1
+            now = _now()
+            self._conn.execute(
+                "UPDATE sheets SET cell_spans = ?, revision = ?, updated_at = ? WHERE id = ?",
+                (_dump_spans(stored), revision, now, sheet["id"]),
+            )
+            self._log_event(sheet["id"], revision, "cell_spans", {"cellSpans": stored})
+            self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path,
+                    sheet["id"],
+                    "cell.spans",
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    json.dumps({"cellSpans": stored}),
+                    now,
+                ),
+            )
+            self._conn.commit()
+        return revision, stored
 
     def replace_sheet(
         self,
@@ -820,6 +912,11 @@ class SheetStore:
         pdf_export = _coerce_pdf_export(payload)
         style_max_row = max((r for r, _c in cell_styles), default=0)
         effective_row_count = max(row_count or 0, len(rows), style_max_row, _BLANK_ROW_COUNT)
+        cell_spans = _spans_or_raise(
+            payload.get("cellSpans"),
+            max_rows=effective_row_count,
+            max_cols=len(columns),
+        )
         col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
         title = _validate_title(payload.get("title"))
         description = _validate_description(payload.get("description"))
@@ -862,7 +959,7 @@ class SheetStore:
                 UPDATE sheets SET title = ?, description = ?, columns = ?, row_count = ?,
                     ghost_row_count = ?, default_row_height_px = ?,
                     enabled_ui_capabilities = ?, chrome_actions = ?, pdf_export = ?,
-                    revision = ?, updated_at = ?
+                    cell_spans = ?, revision = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -875,6 +972,7 @@ class SheetStore:
                     _json_or_none(payload.get("enabledUiCapabilities")),
                     _json_or_none(payload.get("chromeActions")),
                     pdf_export,
+                    _dump_spans(cell_spans),
                     revision,
                     now,
                     sheet_id,
@@ -925,6 +1023,7 @@ class SheetStore:
         path = normalize_sheet_path(path)
         applied: list[dict[str, Any]] = []
         audit_cells: list[dict[str, Any]] = []
+        applied_spans: list[dict[str, int]] | None = None
         with self._lock:
             sheet = self._conn.execute("SELECT * FROM sheets WHERE path = ?", (path,)).fetchone()
             if sheet is None:
@@ -1010,13 +1109,26 @@ class SheetStore:
                     elif key == "description":
                         sets.append("description = ?")
                         params.append(_validate_description(patch["description"]))
+            if "cellSpans" in patch:
+                applied_spans = _spans_or_raise(
+                    patch.get("cellSpans"),
+                    max_rows=params[2],
+                    max_cols=len(columns) if isinstance(columns, list) and columns else 1,
+                )
+                sets.append("cell_spans = ?")
+                params.append(_dump_spans(applied_spans))
             params.append(sheet["id"])
             self._conn.execute(f"UPDATE sheets SET {', '.join(sets)} WHERE id = ?", params)
             self._log_event(
                 sheet["id"],
                 revision,
                 "sheet_patched",
-                {"cells": len(applied), "fields": [k for k in ("title", "description", "rowCount") if k in patch]},
+                {
+                    "cells": len(applied),
+                    "fields": [
+                        k for k in ("title", "description", "rowCount", "cellSpans") if k in patch
+                    ],
+                },
             )
             self._conn.execute(
                 """
@@ -1033,13 +1145,18 @@ class SheetStore:
                     revision,
                     json.dumps({
                         "appliedCells": audit_cells,
-                        "fields": [k for k in ("title", "description", "rowCount") if k in patch],
+                        "fields": [
+                            k for k in ("title", "description", "rowCount", "cellSpans") if k in patch
+                        ],
                     }),
                     _now(),
                 ),
             )
             self._conn.commit()
-        return {"revision": revision, "appliedCells": applied}
+        result: dict[str, Any] = {"revision": revision, "appliedCells": applied}
+        if applied_spans is not None:
+            result["cellSpans"] = applied_spans
+        return result
 
     def delete_sheet(
         self,
@@ -1205,6 +1322,13 @@ class SheetStore:
             payload["cells"] = sparse
         if cell_styles:
             payload["cellStyles"] = cell_styles
+        cell_spans = load_cell_spans(
+            sheet["cell_spans"] if "cell_spans" in sheet.keys() else None,
+            max_rows=MAX_ROWS,
+            max_cols=MAX_COLS,
+        )
+        if cell_spans:
+            payload["cellSpans"] = cell_spans
         return payload
 
     # ------------------------------------------------------------ audit logs

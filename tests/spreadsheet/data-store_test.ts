@@ -55,6 +55,15 @@ Deno.test('getStoredCell omits empty style and comment', () => {
   assertEquals(store.getStoredCell(5, 5), undefined);
 });
 
+Deno.test('cell spans round-trip independently of cell values', () => {
+  const store = makeStore({ '1:1': 'Ada' }, [{ row: 1, col: 1, rowSpan: 1, colSpan: 2 }]);
+  assertEquals(store.get(1, 1), 'Ada');
+  assertEquals(store.getCellSpans(), [{ row: 1, col: 1, rowSpan: 1, colSpan: 2 }]);
+  store.setCellSpans([]);
+  assertEquals(store.getCellSpans(), []);
+  assertEquals(store.get(1, 1), 'Ada');
+});
+
 Deno.test('replaceCell writes and deletes', () => {
   const store = makeStore();
   store.replaceCell(1, 1, { value: 'x', style: { color: 'blue' }, comment: '  ' });

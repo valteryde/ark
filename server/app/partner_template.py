@@ -29,6 +29,7 @@ from typing import Any
 import httpx
 
 from .partner_auth import partner_base_url
+from .cell_span import CellSpanError, parse_cell_spans
 from .cell_style import CellStyleError, parse_cell_styles_map
 from .store import MAX_COLS, MAX_ROWS, SheetValidationError, _validate_columns
 
@@ -43,6 +44,7 @@ _TEMPLATE_PASSTHROUGH_KEYS = (
     "enabledUiCapabilities",
     "chromeActions",
     "cellStyles",
+    "cellSpans",
     "pdfExport",
 )
 
@@ -91,6 +93,18 @@ def parse_template_response(data: Any) -> dict[str, Any]:
         except CellStyleError as e:
             raise PartnerTemplateError(f"invalid template cellStyles: {e}") from e
         template["cellStyles"] = {f"{row}:{col}": style for (row, col), style in parsed.items()}
+    if "cellSpans" in template:
+        declared = data.get("rowCount")
+        declared_n = declared if isinstance(declared, int) and not isinstance(declared, bool) and declared >= 1 else 0
+        max_row = min(MAX_ROWS, max(declared_n, len(rows), 100))
+        try:
+            template["cellSpans"] = parse_cell_spans(
+                template["cellSpans"],
+                max_rows=max_row,
+                max_cols=min(MAX_COLS, len(columns)),
+            )
+        except CellSpanError as e:
+            raise PartnerTemplateError(f"invalid template cellSpans: {e}") from e
     return template
 
 

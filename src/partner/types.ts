@@ -1,4 +1,5 @@
 import type {
+  CellSpan,
   SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
   UiToolbarCapability,
@@ -45,6 +46,23 @@ export interface PartnerSheetPayload {
    * sanitized CSS declarations (`color`, `background-color`, `font-weight`, …).
    */
   cellStyles?: Record<string, SpreadsheetCellStyleDeclarations>;
+  /**
+   * Merged rectangles. The value and style live on the anchor (`row`, `col`).
+   * Covered cells are empty. Present only when the sheet has at least one merge.
+   */
+  cellSpans?: readonly CellSpan[];
+}
+
+/** Full replacement of the sheet's merge list. An empty array clears every merge. */
+export interface CellSpansCommittedEvent {
+  type: 'cell.spans_committed';
+  cellSpans: readonly CellSpan[];
+  /** Anchor used when a save failure needs a cell to mark. */
+  row: number;
+  col: number;
+  sheetPath?: string;
+  clientId?: string;
+  markerHue?: number;
 }
 
 /** User deleted a grid row (e.g. context menu); backend should remove the record, not only clear cells. */

@@ -91,7 +91,8 @@ Ark sends live change notifications as users edit. Events for the same sheet and
 - **`revision`** — the sheet's document revision after the last event in the batch. Increments on every mutation.
 - **`kind: "cell"`** — a committed cell value. `row`/`col` are 1-based grid indices; `columnId` matches the sheet's column config; `recordId` is the row's first read-only column value when present. Does not include style.
 - **`kind: "cell_style"`** — a committed cell style. `style` is the full replacement object (`{}` means formatting was cleared). `row`, `col`, `columnId`, and `recordId` match `kind: "cell"`.
-- **`kind: "row_deleted"`** — user deleted a grid row (cells cleared; rows are not shifted).
+- **`kind: "row_deleted"`** — user deleted a grid row (cells cleared; rows are not shifted). Any merge that included the row is removed.
+- **`kind: "cell_spans"`** — the sheet's merge list was replaced. `cellSpans` is the full list (`[]` clears every merge). Pull the sheet for the anchor values; this event does not repeat them.
 - **`kind: "sheet_created"`** — a sheet was auto-created on first visit; includes the `template` name/version it was built from (absent for blank sheets).
 
 The notification is intentionally lightweight: when you need full state, pull the sheet with **`GET /api/partner/sheets/{path}`**. Notifications carry the editing user's `ark_token` as a Bearer header and are fire-and-forget (one retry); Ark never blocks the grid on your response.
@@ -126,7 +127,7 @@ Returns the stored sheet as a PDF attachment (`Content-Type: application/pdf`, `
 
 The file is landscape A4. It includes the sheet title (or the path), a repeating header row, and visible columns only (`hidden` columns are left out). Select cells print the option **label**. Link cells print the URL. Column widths follow `widthPx`. Empty rows between values stay; trailing empty `rowCount` padding does not. A cell that has a style and no value is still printed.
 
-Painted cell styles are the toolbar declarations stored in `cellStyles`: `background-color`, `color` (`#rgb`, `#rrggbb`, `#rrggbbaa` with alpha dropped), bold (`font-weight` 600/700/`bold`/`bolder`), italic, underline, and strikethrough (`text-decoration-line` tokens), alignment (`justify-content`: `center`, `flex-end`/`end`, otherwise left — this overrides the default right alignment of number columns), and the toolbar border (`box-shadow: inset 0 0 0 1px #64748b`). Other CSS keys are ignored. A select option's `color` and `backgroundColor` are used when the cell has no style of its own for that property.
+Painted cell styles are the toolbar declarations stored in `cellStyles`: `background-color`, `color` (`#rgb`, `#rrggbb`, `#rrggbbaa` with alpha dropped), bold (`font-weight` 600/700/`bold`/`bolder`), italic, underline, and strikethrough (`text-decoration-line` tokens), alignment (`justify-content`: `center`, `flex-end`/`end`, otherwise left — this overrides the default right alignment of number columns), and the toolbar border (`box-shadow: inset 0 0 0 1px #64748b`). Other CSS keys are ignored. A select option's `color` and `backgroundColor` are used when the cell has no style of its own for that property. Merged rectangles in `cellSpans` are drawn as one table cell from the anchor. A span whose anchor column is hidden is omitted.
 
 If a document's path is literally `{path}/pdf`, that URL returns the JSON document instead of a PDF of the parent, same collision rule as audit logs.
 
@@ -183,7 +184,7 @@ Optional partner request header:
 
 ### `PUT /api/partner/sheets/{path}` (create / replace)
 
-Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`, `pdfExport`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**). `pdfExport: false` turns off the in-app export button; omitting it leaves export on.
+Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`, `cellSpans`, `pdfExport`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**). `cellSpans` seeds merged rectangles (see **Merged cells**). Omitting `cellSpans` on `PUT` clears merges, because `PUT` replaces the document. `pdfExport: false` turns off the in-app export button; omitting it leaves export on.
 
 ### `PATCH /api/partner/sheets/{path}` (partial update)
 
@@ -228,6 +229,7 @@ Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `col
 | `rowCount` | Visible grid height. Grows automatically when users write below it. |
 | `cells` | Sparse out-of-schema cells keyed `"row:col"` (values written outside the defined columns), when present. |
 | `cellStyles` | Sparse per-cell styles keyed `"row:col"` (1-based). Present only when at least one cell has formatting. See **Cell styles**. |
+| `cellSpans` | Merged rectangles. Present only when the sheet has at least one. See **Merged cells**. |
 | `defaultRowHeightPx` | Passed through to config |
 | `enabledUiCapabilities` | Toolbar flags (see SPREADSHEET.md) |
 | `pdfExport` | Present only as **`false`**, which hides the header **Export PDF** button and makes `GET /api/sheets/{path}/pdf` return **403**. Omitted means export is allowed. The partner route ignores this flag. |
@@ -353,13 +355,31 @@ Browser edits send `{ "type": "cell.style_committed", "row", "col", "columnId", 
 
 `kind: "cell"` is still value-only. Pull `GET /api/partner/sheets/{path}` for the full `cellStyles` map. Templates may include `cellStyles` alongside `rows`.
 
+## Merged cells
+
+`cellSpans` is an array of rectangles. Each item is `{ "row", "col", "rowSpan", "colSpan" }` with 1-based indexes. `row` and `col` are the anchor (top-left). The value and style live on that cell. `rowSpan` and `colSpan` count the anchor, and at least one of them is greater than 1. Covered cells are empty. Rectangles must sit inside the sheet and must not overlap.
+
+```json
+"cellSpans": [
+  { "row": 1, "col": 1, "rowSpan": 1, "colSpan": 3 },
+  { "row": 4, "col": 2, "rowSpan": 2, "colSpan": 2 }
+]
+```
+
+The toolbar capability is **`merge-cells`**. Merging keeps the anchor value and clears the other cells in the rectangle (value, style, and comment). Those clears are ordinary `cell` / `cell_style` notifications, then one `cell_spans` notification with the full list. Unmerge sends `cellSpans: []` or the list with that rectangle removed. Deleting a row removes any span that included it.
+
+`PATCH` may include `cellSpans` to replace the list without rewriting every cell. `[]` clears merges. `PUT` replaces the document: omit `cellSpans` and the stored list is cleared. Templates may include `cellSpans`. A span that starts on a hidden column is kept in the document and omitted from the PDF, because the anchor value is not in a visible column.
+
+PDF export draws each in-range span as one table cell. The anchor's text and style fill the rectangle. Covered cells are left blank in the file.
+
 ## Browser-facing API (for reference)
 
 - **`GET /api/sheets/{path}`** — sheet payload, auto-creating unknown paths. Requires a valid `ark_token` when `ARK_PARTNER_BASE_URL` is set.
 - **WebSocket `/ws/ark`** — collab channel. Browsers send:
   - `{ "type": "cell.value_committed", "row", "col", "columnId", "value", "sheetPath", "clientId"?, "markerHue"?, "recordId"? }` — Ark persists the cell value (existing style is kept), bumps the revision, broadcasts to peers, and enqueues a partner notification. On a persistence failure only the sender receives `{ "type": "cell.persist_status", "ok": false, "row", "col", … }`.
   - `{ "type": "cell.style_committed", "row", "col", "columnId", "style", "sheetPath", "clientId"?, "markerHue"?, "recordId"? }` — Ark replaces that cell's style (`{}` clears it), broadcasts the sanitized style, and enqueues `kind: "cell_style"`. The cell value is unchanged. Read-only columns are rejected.
-  - `{ "type": "row.deleted", "row", "sheetPath", … }` — Ark clears the row's cells, broadcasts, and notifies.
+  - `{ "type": "row.deleted", "row", "sheetPath", … }` — Ark clears the row's cells, drops any merge that included the row, broadcasts, and notifies.
+  - `{ "type": "cell.spans_committed", "cellSpans", "row", "col", "sheetPath", "clientId"?, "markerHue"? }` — Ark replaces the merge list (`[]` clears it), broadcasts the stored list, and enqueues `kind: "cell_spans"`. `row` and `col` mark a cell when the save fails. The anchor values travel as separate cell commits.
   - `{ "type": "cell.presence" | "cell.presence_clear", … }` — ephemeral cursor presence; broadcast only, never persisted or notified.
   - Browsers must not send `{ "type": "sheet.truth" }`; that shape is reserved for partner `PUT` pushes.
 

@@ -461,6 +461,12 @@ function initPartnerMode(): void {
         liveHandle!.applyRemoteRowClear(row);
       });
     },
+    onRemoteSpans(spans) {
+      if (!liveHandle || !liveStore) return;
+      liveStore.withRemoteApply(() => {
+        liveHandle!.applyExternalSpans(spans);
+      });
+    },
   });
 
   remountPartnerSheetFromPayload = (
@@ -504,6 +510,9 @@ function initPartnerMode(): void {
       ...(payload.template !== undefined ? { template: { ...payload.template } } : {}),
       ...(payload.cells !== undefined ? { cells: { ...payload.cells } } : {}),
       ...(payload.cellStyles !== undefined ? { cellStyles: { ...payload.cellStyles } } : {}),
+      ...(payload.cellSpans !== undefined
+        ? { cellSpans: payload.cellSpans.map((span) => ({ ...span })) }
+        : {}),
       ...(payload.pdfExport === false ? { pdfExport: false } : {}),
     };
     const initial = rowsToInitialMap(payload.columns, payload.rows, payload.cells, payload.cellStyles);
@@ -540,6 +549,21 @@ function initPartnerMode(): void {
           markerHue: collabIdentity.markerHue,
           ...(ev.recordId !== undefined ? { recordId: ev.recordId } : {}),
         });
+      },
+      {
+        cellSpans: payload.cellSpans,
+        onCellSpans: (spans) => {
+          const anchor = spans[0];
+          collab.sendCellSpans({
+            type: 'cell.spans_committed',
+            cellSpans: spans.map((span) => ({ ...span })),
+            row: anchor?.row ?? 1,
+            col: anchor?.col ?? 1,
+            sheetPath: pathForCollab,
+            clientId: collabIdentity.clientId,
+            markerHue: collabIdentity.markerHue,
+          });
+        },
       },
     ) as PartnerNotifyDataStore;
     const config = sheetPayloadToConfig(payload, store);

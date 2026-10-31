@@ -497,3 +497,56 @@ def test_apply_cell_style_rejects_readonly_and_unsafe_style(fresh_store):
     payload = fresh_store.get_sheet_payload("grades")
     assert "cellStyles" not in payload
 
+
+def test_cell_spans_roundtrip_and_row_delete_drops_them(fresh_store):
+    payload = fresh_store.replace_sheet(
+        "clients",
+        {
+            "columns": [
+                {"id": "name", "header": "Name", "widthPx": 160},
+                {"id": "note", "header": "Note", "widthPx": 120},
+            ],
+            "rows": [{"name": "Ada", "note": "kept"}],
+            "rowCount": 6,
+            "cellSpans": [
+                {"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2},
+                {"row": 3, "col": 1, "rowSpan": 2, "colSpan": 1},
+            ],
+        },
+    )
+    assert payload["cellSpans"] == [
+        {"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2},
+        {"row": 3, "col": 1, "rowSpan": 2, "colSpan": 1},
+    ]
+    assert payload["rows"][0]["name"] == "Ada"
+
+    with pytest.raises(SheetValidationError, match="overlap"):
+        fresh_store.apply_cell_spans(
+            "clients",
+            [
+                {"row": 1, "col": 1, "rowSpan": 2, "colSpan": 2},
+                {"row": 2, "col": 2, "rowSpan": 2, "colSpan": 1},
+            ],
+        )
+
+    revision, stored = fresh_store.apply_cell_spans(
+        "clients",
+        [{"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2}],
+    )
+    assert revision == payload["revision"] + 1
+    assert stored == [{"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2}]
+
+    fresh_store.apply_row_delete("clients", 1)
+    after = fresh_store.get_sheet_payload("clients")
+    assert "cellSpans" not in after
+
+    patched = fresh_store.patch_sheet(
+        "clients",
+        {"cellSpans": [{"row": 2, "col": 1, "rowSpan": 1, "colSpan": 2}]},
+    )
+    assert patched["cellSpans"] == [{"row": 2, "col": 1, "rowSpan": 1, "colSpan": 2}]
+    assert fresh_store.get_sheet_payload("clients")["cellSpans"] == patched["cellSpans"]
+
+    fresh_store.patch_sheet("clients", {"cellSpans": []})
+    assert "cellSpans" not in fresh_store.get_sheet_payload("clients")
+

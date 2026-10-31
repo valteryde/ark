@@ -83,7 +83,7 @@ When someone edits a cell, Ark persists it immediately (the sheet document is th
 
 Your backend changed data and open tabs should see it?
 
-- **`PATCH /api/partner/sheets/{path}`** with `cells` for in-place updates — open tabs apply them live, no remount. A cell may include `style` (`color`, `background-color`, and the other properties in **[PARTNER_API.md](PARTNER_API.md)**) without changing its value. `GET` returns those styles as `cellStyles`.
+- **`PATCH /api/partner/sheets/{path}`** with `cells` for in-place updates — open tabs apply them live, no remount. A cell may include `style` (`color`, `background-color`, and the other properties in **[PARTNER_API.md](PARTNER_API.md)**) without changing its value. `GET` returns those styles as `cellStyles`. The same PATCH may include `cellSpans` to replace merged rectangles (see **Merged cells** in PARTNER_API).
 - **`PUT /api/partner/sheets/{path}`** to replace the whole document (bulk import, reorder, schema change) — open tabs remount with fresh state.
 
 ## URLs and routing

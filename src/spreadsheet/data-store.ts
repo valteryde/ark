@@ -1,5 +1,6 @@
 import { sanitizeCellStyle } from './cell-style.ts';
 import type {
+  CellSpan,
   SpreadsheetCellInit,
   SpreadsheetDataStore,
   SpreadsheetCellStyleDeclarations,
@@ -27,11 +28,22 @@ function normalizeInitEntry(v: InMemoryDataInitValue): StoredCell | undefined {
   return { value: v as string | number };
 }
 
+function cloneSpans(spans: readonly CellSpan[]): CellSpan[] {
+  return spans.map((span) => ({
+    row: span.row,
+    col: span.col,
+    rowSpan: span.rowSpan,
+    colSpan: span.colSpan,
+  }));
+}
+
 /** In-memory store keyed by "row:col" — swap for a REST-backed adapter. */
 export function createInMemoryDataStore(
   initial: Record<string, InMemoryDataInitValue> = {},
+  cellSpans: readonly CellSpan[] = [],
 ): SpreadsheetDataStore {
   const map = new Map<string, StoredCell>();
+  let spans = cloneSpans(cellSpans);
   for (const [k, v] of Object.entries(initial)) {
     const cell = normalizeInitEntry(v);
     if (cell !== undefined) map.set(k, cell);
@@ -114,6 +126,12 @@ export function createInMemoryDataStore(
       const c = cell.comment;
       const nextComment = c !== undefined && c.trim() !== '' ? c.trim() : undefined;
       map.set(k, { value: cell.value, style: nextStyle, comment: nextComment });
+    },
+    getCellSpans() {
+      return cloneSpans(spans);
+    },
+    setCellSpans(next: readonly CellSpan[]) {
+      spans = cloneSpans(next);
     },
     forEachStoredCell(visit) {
       for (const [key, cell] of map) {

@@ -33,12 +33,24 @@ import {
   sumVisibleColumnWidths,
   visibleColumnCount,
 } from './column-visibility.ts';
+import {
+  cellSpansEqual,
+  cloneCellSpans,
+  coveredCellKeys,
+  expandRectToSpans,
+  mergeSpanList,
+  spanCovering,
+  spansAfterClearingRow,
+  spansOverlap,
+  unmergeSpanList,
+} from './cell-span.ts';
 import { cellKey } from './data-store.ts';
 import { cellMapsEqual, createSpreadsheetHistory, type HistoryCellMap } from './history.ts';
 import { jumpToEdge } from './navigation.ts';
 import { createPersistErrorController } from './persist-error.ts';
 import { createRowContextMenu } from './row-context-menu.ts';
 import type {
+  CellSpan,
   CollabPresenceMode,
   CollabPresencePayload,
   RemoteCollabPeer,
@@ -149,6 +161,19 @@ export function mountSpreadsheet(
   function keyToRowCol(k: string): { row: number; col: number } {
     const [rs, cs] = k.split(':');
     return { row: Number(rs), col: Number(cs) };
+  }
+
+  function currentSpans(): readonly CellSpan[] {
+    return data.getCellSpans?.() ?? [];
+  }
+
+  function coveringSpan(row: number, col: number): CellSpan | null {
+    return spanCovering(currentSpans(), row, col);
+  }
+
+  function isCoveredCell(row: number, col: number): boolean {
+    const span = coveringSpan(row, col);
+    return span !== null && (span.row !== row || span.col !== col);
   }
 
   function captureSnapshot(keys: readonly string[]): HistoryCellMap {
@@ -446,7 +471,10 @@ export function mountSpreadsheet(
     const byKey = new Map<string, RemoteCollabPeer[]>();
     for (const p of remotePresenceList) {
       if (p.row > dataRowCount || p.col > dataColumnCount) continue;
-      const k = cellKey(p.row, p.col);
+      const span = coveringSpan(p.row, p.col);
+      const row = span ? span.row : p.row;
+      const col = span ? span.col : p.col;
+      const k = cellKey(row, col);
       const arr = byKey.get(k);
       if (arr) arr.push(p);
       else byKey.set(k, [p]);
@@ -597,6 +625,15 @@ export function mountSpreadsheet(
   active.col = clampColVisible(active.col);
   selectArea.col = active.col;
   selectArea.colEnd = active.col;
+  const initialCovering = coveringSpan(active.row, active.col);
+  if (initialCovering) {
+    active.row = initialCovering.row;
+    active.col = clampColVisible(initialCovering.col);
+    selectArea.row = active.row;
+    selectArea.col = active.col;
+    selectArea.rowEnd = active.row;
+    selectArea.colEnd = active.col;
+  }
 
   function isReadOnlyCol(col: number): boolean {
     if (col > dataColumnCount) return true;
@@ -665,7 +702,10 @@ export function mountSpreadsheet(
     const rec = history.undo();
     if (!rec) return false;
     applySnapshot(rec.before);
+    restoreHistorySpans(rec.spansBefore);
     hydrateFromHistoryRecord(rec.before, rec.after);
+    layoutCellSpans();
+    snapActiveToSpanAnchor();
     notifySelectionChange();
     return true;
   }
@@ -676,9 +716,27 @@ export function mountSpreadsheet(
     const rec = history.redo();
     if (!rec) return false;
     applySnapshot(rec.after);
+    restoreHistorySpans(rec.spansAfter);
     hydrateFromHistoryRecord(rec.before, rec.after);
+    layoutCellSpans();
+    snapActiveToSpanAnchor();
     notifySelectionChange();
     return true;
+  }
+
+  function restoreHistorySpans(spans: readonly CellSpan[] | undefined): void {
+    if (!spans || !data.setCellSpans) return;
+    const next = cloneCellSpans(spans);
+    const run = () => data.setCellSpans!(next);
+    if (config.suppressOutboundSyncDuring) config.suppressOutboundSyncDuring(run);
+    else run();
+  }
+
+  /** Move the active cell onto the anchor when it sits on a covered coordinate. */
+  function snapActiveToSpanAnchor(): void {
+    const span = coveringSpan(active.row, active.col);
+    if (!span || (span.row === active.row && span.col === active.col)) return;
+    setActive(span.row, span.col);
   }
 
   function updateCommentIndicator(row: number, col: number): void {
@@ -797,8 +855,23 @@ export function mountSpreadsheet(
     commentTextarea.focus();
   }
 
+  function anchorOf(row: number, col: number): { row: number; col: number } {
+    const span = coveringSpan(row, col);
+    if (!span) return { row, col };
+    return { row: span.row, col: span.col };
+  }
+
   function getFormattingTargets(): { row: number; col: number }[] {
     const out: { row: number; col: number }[] = [];
+    const seen = new Set<string>();
+    const push = (row: number, col: number) => {
+      const anchor = anchorOf(row, col);
+      if (isGhostRow(anchor.row) || isReadOnlyCol(anchor.col)) return;
+      const key = cellKey(anchor.row, anchor.col);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(anchor);
+    };
     if (selectArea.active) {
       const minRow = Math.min(selectArea.row, selectArea.rowEnd);
       const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
@@ -807,13 +880,111 @@ export function mountSpreadsheet(
       for (let row = minRow; row <= maxRow; row++) {
         if (isGhostRow(row)) continue;
         for (let col = minCol; col <= maxCol; col++) {
-          if (!isReadOnlyCol(col)) out.push({ row, col });
+          if (!isHiddenCol(col)) push(row, col);
         }
       }
       return out;
     }
-    if (!isGhostRow(active.row) && !isReadOnlyCol(active.col)) out.push({ row: active.row, col: active.col });
+    if (!isGhostRow(active.row) && !isReadOnlyCol(active.col)) push(active.row, active.col);
     return out;
+  }
+
+  function currentSelectionRect(): CellSpan {
+    if (selectArea.active) {
+      const minRow = Math.min(selectArea.row, selectArea.rowEnd);
+      const maxRow = Math.max(selectArea.row, selectArea.rowEnd);
+      const minCol = Math.min(selectArea.col, selectArea.colEnd);
+      const maxCol = Math.max(selectArea.col, selectArea.colEnd);
+      return {
+        row: minRow,
+        col: minCol,
+        rowSpan: maxRow - minRow + 1,
+        colSpan: maxCol - minCol + 1,
+      };
+    }
+    return { row: active.row, col: active.col, rowSpan: 1, colSpan: 1 };
+  }
+
+  function rectCanMerge(rect: CellSpan): boolean {
+    if (rect.rowSpan === 1 && rect.colSpan === 1) return false;
+    let count = 0;
+    for (let row = rect.row; row < rect.row + rect.rowSpan; row++) {
+      if (row < 1 || row > dataRowCount || isGhostRow(row)) return false;
+      for (let col = rect.col; col < rect.col + rect.colSpan; col++) {
+        if (col < 1 || col > dataColumnCount || isHiddenCol(col)) return false;
+        if (isReadOnlyCol(col) || isLinkColumn(columnAt(col))) return false;
+        count++;
+      }
+    }
+    return count >= 2;
+  }
+
+  function canMergeCells(): boolean {
+    if (!data.setCellSpans) return false;
+    const rect = currentSelectionRect();
+    if (!rectCanMerge(rect)) return false;
+    const already = currentSpans().some(
+      (span) =>
+        span.row === rect.row &&
+        span.col === rect.col &&
+        span.rowSpan === rect.rowSpan &&
+        span.colSpan === rect.colSpan,
+    );
+    return !already;
+  }
+
+  function canUnmergeCells(): boolean {
+    if (!data.setCellSpans) return false;
+    const rect = currentSelectionRect();
+    return currentSpans().some((span) => spansOverlap(span, rect));
+  }
+
+  function writeCellSpans(next: readonly CellSpan[], clearKeys: readonly string[]): void {
+    if (!data.setCellSpans) return;
+    const spansBefore = cloneCellSpans(currentSpans());
+    const spansAfter = cloneCellSpans(next);
+    const before = history ? captureSnapshot(clearKeys) : null;
+    for (const key of clearKeys) {
+      const { row, col } = keyToRowCol(key);
+      if (data.replaceCell) data.replaceCell(row, col, null);
+      else data.set(row, col, '');
+      hydrateCellFromStore(row, col);
+    }
+    data.setCellSpans(spansAfter);
+    layoutCellSpans();
+    if (history && before) {
+      history.pushRecord(before, captureSnapshot(clearKeys), {
+        before: spansBefore,
+        after: spansAfter,
+      });
+    }
+    notifySelectionChange();
+  }
+
+  function mergeCells(): boolean {
+    if (!canMergeCells()) return false;
+    persistActiveInput();
+    const rect = currentSelectionRect();
+    writeCellSpans(mergeSpanList(currentSpans(), rect), coveredCellKeys(rect));
+    setActive(rect.row, rect.col);
+    return true;
+  }
+
+  function unmergeCells(): boolean {
+    if (!canUnmergeCells()) return false;
+    persistActiveInput();
+    const rect = currentSelectionRect();
+    writeCellSpans(unmergeSpanList(currentSpans(), rect), []);
+    return true;
+  }
+
+  function applyExternalSpans(spans: readonly CellSpan[]): boolean {
+    if (!data.setCellSpans) return false;
+    data.setCellSpans(cloneCellSpans(spans));
+    layoutCellSpans();
+    snapActiveToSpanAnchor();
+    notifySelectionChange();
+    return true;
   }
 
   function mergeCellStyleOnSelection(patch: Record<string, string | undefined>): void {
@@ -986,15 +1157,26 @@ export function mountSpreadsheet(
       if (!isReadOnlyCol(col)) keys.push(cellKey(row, col));
     }
     if (keys.length === 0) return;
+    const spansBefore = cloneCellSpans(currentSpans());
+    const spansAfter = spansAfterClearingRow(spansBefore, row);
+    const spanChange = !cellSpansEqual(spansBefore, spansAfter);
     const before = history ? captureSnapshot(keys) : null;
     for (const k of keys) {
       const { row: rr, col } = keyToRowCol(k);
       data.replaceCell(rr, col, null);
       hydrateCellFromStore(rr, col);
     }
+    if (spanChange && data.setCellSpans) {
+      data.setCellSpans(spansAfter);
+      layoutCellSpans();
+    }
     if (history && before) {
       const after = captureSnapshot(keys);
-      pushHistoryIfChanged(before, after);
+      if (spanChange) {
+        history.pushRecord(before, after, { before: spansBefore, after: spansAfter });
+      } else {
+        pushHistoryIfChanged(before, after);
+      }
     }
   }
 
@@ -1060,7 +1242,7 @@ export function mountSpreadsheet(
         const r = anchorRow + dr;
         const c = anchorCol + dc;
         if (r < 1 || r > dataRowCount || c < 1 || c > dataColumnCount) continue;
-        if (!isEditableCol(c)) continue;
+        if (!isEditableCol(c) || isCoveredCell(r, c)) continue;
         keys.push(cellKey(r, c));
       }
     }
@@ -1091,7 +1273,7 @@ export function mountSpreadsheet(
         const r = anchor.row + dr;
         const c = anchor.col + dc;
         if (r < 1 || r > dataRowCount || c < 1 || c > dataColumnCount) continue;
-        if (!isEditableCol(c)) continue;
+        if (!isEditableCol(c) || isCoveredCell(r, c)) continue;
         const raw = row[dc] ?? '';
         const colDef = columnAt(c);
         const parsed = parseCommittedCellValue(colDef, raw);
@@ -1447,6 +1629,7 @@ export function mountSpreadsheet(
   gridBody.style.height = `${sheetTotalHeight}px`;
 
   const rowCellsEls: HTMLDivElement[] = [];
+  const rowEls: HTMLDivElement[] = [];
 
   for (let row = 1; row <= mountedRowCount; row++) {
     const rowEl = document.createElement('div');
@@ -1549,6 +1732,7 @@ export function mountSpreadsheet(
       rowCells.appendChild(cell);
     }
     rowCellsEls.push(rowCells);
+    rowEls.push(rowEl);
     rowEl.append(rowGutter, rowCells);
     gridBody.appendChild(rowEl);
   }
@@ -1657,6 +1841,70 @@ export function mountSpreadsheet(
   }
 
   /**
+   * Size each merge anchor across its rectangle and hide the covered cells.
+   * A horizontal merge is a wider anchor in its row. A vertical merge grows
+   * the anchor out of its row; that row is stacked above the rows it covers.
+   */
+  function layoutCellSpans(): void {
+    for (const rowEl of rowEls) rowEl.classList.remove('sheet-row--span-anchor');
+    for (let row = 1; row <= dataRowCount; row++) {
+      for (let col = 1; col <= dataColumnCount; col++) {
+        if (isHiddenCol(col)) continue;
+        const cell = cells.get(cellKey(row, col));
+        if (!cell) continue;
+        cell.classList.remove(
+          'sheet-cell--span-anchor',
+          'sheet-cell--span-covered',
+          'sheet-cell--span-rows',
+        );
+        cell.style.width = `${columnWidths[col - 1]}px`;
+        cell.style.height = '';
+        cell.removeAttribute('aria-rowspan');
+        cell.removeAttribute('aria-colspan');
+        if (!isGhostRow(row)) cell.removeAttribute('aria-hidden');
+      }
+    }
+    for (const span of currentSpans()) {
+      if (span.row < 1 || span.col < 1) continue;
+      if (span.row > dataRowCount || span.col > dataColumnCount) continue;
+      if (isHiddenCol(span.col)) continue;
+      const anchor = cells.get(cellKey(span.row, span.col));
+      if (!anchor) continue;
+      let width = 0;
+      for (let col = span.col; col < span.col + span.colSpan; col++) {
+        if (col > dataColumnCount || isHiddenCol(col)) continue;
+        width += columnWidths[col - 1] ?? 0;
+      }
+      if (width <= 0) continue;
+      let height = 0;
+      for (let row = span.row; row < span.row + span.rowSpan; row++) {
+        if (row < 1 || row > dataRowCount) continue;
+        height += rowHeights[row - 1] ?? 0;
+      }
+      anchor.classList.add('sheet-cell--span-anchor');
+      anchor.style.width = `${width}px`;
+      if (span.rowSpan > 1) {
+        anchor.classList.add('sheet-cell--span-rows');
+        anchor.style.height = `${height}px`;
+        rowEls[span.row - 1]?.classList.add('sheet-row--span-anchor');
+        anchor.setAttribute('aria-rowspan', String(span.rowSpan));
+      }
+      if (span.colSpan > 1) anchor.setAttribute('aria-colspan', String(span.colSpan));
+      for (let row = span.row; row < span.row + span.rowSpan; row++) {
+        for (let col = span.col; col < span.col + span.colSpan; col++) {
+          if (row === span.row && col === span.col) continue;
+          if (row > dataRowCount || col > dataColumnCount || isHiddenCol(col)) continue;
+          const covered = cells.get(cellKey(row, col));
+          if (!covered) continue;
+          covered.classList.add('sheet-cell--span-covered');
+          covered.setAttribute('aria-hidden', 'true');
+        }
+      }
+    }
+    paintRemotePresenceOverlays();
+  }
+
+  /**
    * Re-apply column layout after `columnWidths[]` mutates. Updates header widths, the cumulative
    * left-offset table, every cell's `width`/`left` (data and ghost), and the grid envelope, then
    * recomputes ghost-column padding. Pass `persist: true` to write to `sessionStorage` once the
@@ -1684,12 +1932,15 @@ export function mountSpreadsheet(
       }
     }
     syncGhostColumnsToViewport();
+    layoutCellSpans();
     syncCopyMarqueeLayout();
     syncSelectionOutlineLayout();
     if (opts?.persist) {
       persistColumnWidths(columnWidthPersistenceKey, columnWidths);
     }
   }
+
+  layoutCellSpans();
 
   function setColumnWidth(colIndex: number, nextWidth: number, opts?: { persist?: boolean }): void {
     if (colIndex < 1 || colIndex > dataColumnCount) return;
@@ -1710,6 +1961,12 @@ export function mountSpreadsheet(
     for (let row = 1; row <= dataRowCount; row++) {
       const cell = cells.get(cellKey(row, col));
       if (!cell) continue;
+      if (
+        cell.classList.contains('sheet-cell--span-anchor') ||
+        cell.classList.contains('sheet-cell--span-covered')
+      ) {
+        continue;
+      }
       const content = cell.querySelector<HTMLElement>('.sheet-cell-content');
       if (content) max = Math.max(max, content.scrollWidth);
     }
@@ -2263,7 +2520,30 @@ export function mountSpreadsheet(
     }
   }
 
+  function expandActiveSelectionToSpans(): void {
+    if (!selectArea.active) return;
+    const rect = currentSelectionRect();
+    const expanded = expandRectToSpans(rect, currentSpans());
+    if (
+      expanded.row === rect.row &&
+      expanded.col === rect.col &&
+      expanded.rowSpan === rect.rowSpan &&
+      expanded.colSpan === rect.colSpan
+    ) {
+      return;
+    }
+    const anchorIsMinRow = selectArea.row <= selectArea.rowEnd;
+    const anchorIsMinCol = selectArea.col <= selectArea.colEnd;
+    const maxRow = expanded.row + expanded.rowSpan - 1;
+    const maxCol = expanded.col + expanded.colSpan - 1;
+    selectArea.row = anchorIsMinRow ? expanded.row : maxRow;
+    selectArea.rowEnd = anchorIsMinRow ? maxRow : expanded.row;
+    selectArea.col = anchorIsMinCol ? expanded.col : maxCol;
+    selectArea.colEnd = anchorIsMinCol ? maxCol : expanded.col;
+  }
+
   function syncSelectionHighlight(): void {
+    expandActiveSelectionToSpans();
     const nextKeys = new Set<string>();
     if (selectArea.active) {
       const minRow = Math.min(selectArea.row, selectArea.rowEnd);
@@ -2327,6 +2607,11 @@ export function mountSpreadsheet(
   }
 
   function setActive(row: number, col: number): void {
+    const covering = coveringSpan(row, col);
+    if (covering) {
+      row = covering.row;
+      col = covering.col;
+    }
     row = clampRow(row);
     col = clampColVisible(col);
 
@@ -2768,6 +3053,27 @@ export function mountSpreadsheet(
     );
   }
 
+  /** Step off a merge before moving, so arrows and Tab do not land on a covered cell. */
+  function cellAfterStep(
+    row: number,
+    col: number,
+    dRow: number,
+    dCol: number,
+  ): { row: number; col: number } {
+    const origin = coveringSpan(row, col);
+    let nextRow = row;
+    let nextCol = col;
+    if (origin) {
+      if (dRow > 0) nextRow = origin.row + origin.rowSpan - 1;
+      else if (dRow < 0) nextRow = origin.row;
+      if (dCol > 0) nextCol = origin.col + origin.colSpan - 1;
+      else if (dCol < 0) nextCol = origin.col;
+    }
+    if (dRow !== 0) nextRow = clampRow(nextRow + (dRow > 0 ? 1 : -1));
+    if (dCol !== 0) nextCol = stepVisibleCol(nextCol, dCol > 0 ? 1 : -1);
+    return { row: nextRow, col: nextCol };
+  }
+
   function handleSheetKeydown(e: KeyboardEvent): void {
     const target = e.target as HTMLElement | null;
     if (!target || !viewport.contains(target)) return;
@@ -2842,10 +3148,10 @@ export function mountSpreadsheet(
         e.preventDefault();
         hideSuggestions();
         tabAnchorCol = null;
-        if (e.key === 'ArrowUp') setActive(row - 1, col);
-        else if (e.key === 'ArrowDown') setActive(row + 1, col);
-        else if (e.key === 'ArrowLeft') setActive(row, col - 1);
-        else if (e.key === 'ArrowRight') setActive(row, col + 1);
+        const dRow = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+        const dCol = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+        const next = cellAfterStep(row, col, dRow, dCol);
+        setActive(next.row, next.col);
         return;
       }
       if (e.key !== 'Escape' && e.key !== 'Tab' && e.key !== 'Enter') {
@@ -2948,7 +3254,8 @@ export function mountSpreadsheet(
       hideSuggestions();
       if (tabAnchorCol === null) tabAnchorCol = active.col;
       const dir = e.shiftKey ? -1 : 1;
-      setActive(row, col + dir);
+      const next = cellAfterStep(row, col, 0, dir);
+      setActive(next.row, next.col);
       return;
     }
 
@@ -2961,7 +3268,8 @@ export function mountSpreadsheet(
       const targetCol = clampColVisible(tabAnchorCol ?? col);
       tabAnchorCol = null;
       const dir = e.shiftKey ? -1 : 1;
-      setActive(row + dir, targetCol);
+      const next = cellAfterStep(row, targetCol, dir, 0);
+      setActive(next.row, next.col);
       return;
     }
 
@@ -3184,19 +3492,23 @@ export function mountSpreadsheet(
     if (e.key === 'ArrowUp') {
       e.preventDefault();
       tabAnchorCol = null;
-      setActive(row - 1, col);
+      const next = cellAfterStep(row, col, -1, 0);
+      setActive(next.row, next.col);
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       tabAnchorCol = null;
-      setActive(row + 1, col);
+      const next = cellAfterStep(row, col, 1, 0);
+      setActive(next.row, next.col);
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
       tabAnchorCol = null;
-      setActive(row, col - 1);
+      const next = cellAfterStep(row, col, 0, -1);
+      setActive(next.row, next.col);
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
       tabAnchorCol = null;
-      setActive(row, col + 1);
+      const next = cellAfterStep(row, col, 0, 1);
+      setActive(next.row, next.col);
     }
   }
 
@@ -3273,7 +3585,7 @@ export function mountSpreadsheet(
         : ((activeFlat - step) % total + total) % total;
       const row = Math.floor(flat / dataColumnCount) + 1;
       const col = (flat % dataColumnCount) + 1;
-      if (isHiddenCol(col)) continue;
+      if (isHiddenCol(col) || isCoveredCell(row, col)) continue;
       const colDef = columnAt(col);
       const raw = data.get(row, col);
       const text = cellPlainTextForSearch(colDef, raw).toLowerCase();
@@ -3324,6 +3636,14 @@ export function mountSpreadsheet(
     },
     applyExternalValue,
     applyExternalStyle,
+    mergeCells,
+    unmergeCells,
+    canMergeCells,
+    canUnmergeCells,
+    getCellSpans() {
+      return currentSpans();
+    },
+    applyExternalSpans,
     getCollabPresencePayload,
     setRemoteCollabPresence,
     showCellPersistError: (row, col, message) => persistError.show(row, col, message),

@@ -1,3 +1,4 @@
+import { normalizeCellSpans } from '../spreadsheet/cell-span.ts';
 import { sanitizeCellStyle } from '../spreadsheet/cell-style.ts';
 import { cellKey, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
 import { sanitizePhosphorIconName } from '../spreadsheet/cell-display.ts';
@@ -109,6 +110,7 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
       chromeActions: i.chromeActions ?? o.chromeActions,
       cells: i.cells ?? o.cells,
       cellStyles: i.cellStyles ?? o.cellStyles,
+      cellSpans: i.cellSpans ?? o.cellSpans,
       pdfExport: i.pdfExport ?? o.pdfExport,
     };
   }
@@ -120,9 +122,15 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
   const chromeActions = normalizePartnerChromeActions(src.chromeActions);
   const sparseCells = normalizeSparseCells(src.cells);
   const cellStyles = normalizeCellStyles(src.cellStyles);
+  const rowCount = typeof src.rowCount === 'number' && src.rowCount >= 1 ? src.rowCount : undefined;
+  const cellSpans = normalizeCellSpans(src.cellSpans, {
+    maxRow: partnerEffectiveRowCount({ columns, rows, rowCount }),
+    maxCol: columns.length,
+  });
   return {
     ...(sparseCells !== undefined ? { cells: sparseCells } : {}),
     ...(cellStyles !== undefined ? { cellStyles } : {}),
+    ...(cellSpans.length > 0 ? { cellSpans } : {}),
     ...(typeof src.revision === 'number' && Number.isFinite(src.revision)
       ? { revision: src.revision }
       : {}),
@@ -300,6 +308,10 @@ export function normalizeSheetTruthPayload(
   const chromeActions = normalizePartnerChromeActions(o.chromeActions);
   const sparseCells = normalizeSparseCells(o.cells);
   const cellStyles = normalizeCellStyles(o.cellStyles);
+  const cellSpans = normalizeCellSpans(o.cellSpans, {
+    maxRow: partnerEffectiveRowCount({ columns, rows, rowCount }),
+    maxCol: columns.length,
+  });
   const payload: PartnerSheetPayload = {
     title: typeof o.title === 'string' ? o.title : undefined,
     description: typeof o.description === 'string' ? o.description : undefined,
@@ -313,6 +325,7 @@ export function normalizeSheetTruthPayload(
     ...(chromeActions !== undefined ? { chromeActions } : {}),
     ...(sparseCells !== undefined ? { cells: sparseCells } : {}),
     ...(cellStyles !== undefined ? { cellStyles } : {}),
+    ...(cellSpans.length > 0 ? { cellSpans } : {}),
     ...(o.pdfExport === false ? { pdfExport: false } : {}),
   };
   return { sheetPath, payload };

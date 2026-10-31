@@ -305,7 +305,7 @@ async def put_sheet(path: str, request: Request) -> JSONResponse:
         "columns": payload["columns"],
     }
     for k in ("title", "description", "ghostRowCount", "defaultRowHeightPx",
-              "enabledUiCapabilities", "chromeActions", "cells", "cellStyles", "pdfExport"):
+              "enabledUiCapabilities", "chromeActions", "cells", "cellStyles", "cellSpans", "pdfExport"):
         if k in payload:
             truth[k] = payload[k]
     await hub.broadcast(truth, normalized)
@@ -352,6 +352,17 @@ async def patch_sheet(path: str, request: Request) -> JSONResponse:
         if has_style:
             message["style"] = cell["style"] if cell["style"] else {}
         await hub.broadcast(message, normalized)
+    if "cellSpans" in result:
+        await hub.broadcast(
+            {
+                "type": "cell.spans_committed",
+                "cellSpans": result["cellSpans"],
+                "sheetPath": normalized,
+                "row": 1,
+                "col": 1,
+            },
+            normalized,
+        )
     return JSONResponse({"status": "ok", "revision": result["revision"]})
 
 

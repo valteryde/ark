@@ -142,6 +142,7 @@ const roadmapColumnsAndChrome = (): Omit<SpreadsheetConfig, 'data'> => ({
     'align',
     'link',
     'comment',
+    'merge-cells',
     'functions',
   ],
 });

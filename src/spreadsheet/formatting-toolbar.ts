@@ -14,6 +14,7 @@ const CAP_ICONS: Record<UiToolbarCapability, string> = {
   align: 'ph-text-align-left',
   link: 'ph-link',
   comment: 'ph-chat-circle-text',
+  'merge-cells': 'ph-unite',
   functions: 'ph-sigma',
 };
 
@@ -23,6 +24,7 @@ const TOOLBAR_GROUPS: UiToolbarCapability[][] = [
   ['format-bold', 'format-italic', 'format-strikethrough'],
   ['fill', 'borders'],
   ['align'],
+  ['merge-cells'],
   ['link', 'comment'],
   ['functions'],
 ];
@@ -113,6 +115,8 @@ export function mountFormattingToolbar(
     alignL?: HTMLButtonElement;
     alignC?: HTMLButtonElement;
     alignR?: HTMLButtonElement;
+    merge?: HTMLButtonElement;
+    unmerge?: HTMLButtonElement;
   } = {};
 
   let firstGroup = true;
@@ -252,6 +256,21 @@ export function mountFormattingToolbar(
         continue;
       }
 
+      if (cap === 'merge-cells') {
+        const merge = iconButton(CAP_ICONS[cap], 'Merge cells');
+        merge.addEventListener('click', () => {
+          sheet.mergeCells();
+        });
+        const unmerge = iconButton('ph-square-split-horizontal', 'Unmerge cells');
+        unmerge.addEventListener('click', () => {
+          sheet.unmergeCells();
+        });
+        ui.merge = merge;
+        ui.unmerge = unmerge;
+        host.append(merge, unmerge);
+        continue;
+      }
+
       if (cap === 'comment') {
         if (!sheet.commentsEnabled) continue;
         const b = iconButton(CAP_ICONS[cap], 'Comment (Shift+F2)');
@@ -292,6 +311,19 @@ export function mountFormattingToolbar(
         host.appendChild(b);
         continue;
       }
+    }
+  }
+
+  function refreshMergeButtons(): void {
+    if (ui.merge) {
+      const on = sheet.canMergeCells();
+      ui.merge.disabled = !on;
+      ui.merge.setAttribute('aria-disabled', on ? 'false' : 'true');
+    }
+    if (ui.unmerge) {
+      const on = sheet.canUnmergeCells();
+      ui.unmerge.disabled = !on;
+      ui.unmerge.setAttribute('aria-disabled', on ? 'false' : 'true');
     }
   }
 
@@ -356,6 +388,13 @@ export function mountFormattingToolbar(
 
   refreshToggleStates();
   refreshHistoryButtons();
-  sheet.subscribeSelectionChange(refreshToggleStates);
-  sheet.subscribeHistoryChange(refreshHistoryButtons);
+  refreshMergeButtons();
+  sheet.subscribeSelectionChange(() => {
+    refreshToggleStates();
+    refreshMergeButtons();
+  });
+  sheet.subscribeHistoryChange(() => {
+    refreshHistoryButtons();
+    refreshMergeButtons();
+  });
 }

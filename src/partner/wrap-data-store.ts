@@ -1,6 +1,8 @@
+import { cellSpansEqual } from '../spreadsheet/cell-span.ts';
 import { cellStylesEqual } from '../spreadsheet/cell-style.ts';
 import { createInMemoryDataStore, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
 import type {
+  CellSpan,
   SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
   SpreadsheetDataStore,
@@ -40,8 +42,13 @@ export function createPartnerNotifyDataStore(
   initial: Record<string, InMemoryDataInitValue>,
   onSet: OnCellSetNotify,
   onStyle?: OnCellStyleNotify,
+  options?: {
+    cellSpans?: readonly CellSpan[];
+    onCellSpans?: (spans: readonly CellSpan[]) => void;
+  },
 ): PartnerNotifyDataStore {
-  const inner = createInMemoryDataStore(initial);
+  const inner = createInMemoryDataStore(initial, options?.cellSpans ?? []);
+  const onCellSpans = options?.onCellSpans;
   let applyingRemote = false;
 
   function recordIdFor(row: number, col: number): string | number | undefined {
@@ -113,6 +120,15 @@ export function createPartnerNotifyDataStore(
       inner.set(row, col, value);
       if (applyingRemote) return;
       emitValue(row, col, value);
+    },
+    getCellSpans: () => inner.getCellSpans?.() ?? [],
+    setCellSpans(spans) {
+      const before = inner.getCellSpans?.() ?? [];
+      inner.setCellSpans?.(spans);
+      if (applyingRemote) return;
+      const after = inner.getCellSpans?.() ?? [];
+      if (cellSpansEqual(before, after)) return;
+      onCellSpans?.(after);
     },
     /** Call around applyExternalValue / remote applies so outbound notify does not fire. */
     withRemoteApply<T>(fn: () => T): T {

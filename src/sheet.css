@@ -381,24 +381,25 @@ a.app-btn {
   background: transparent;
 }
 
-.app-toolbar__color-btn {
+button.app-toolbar__icon.app-toolbar__color-btn {
   width: auto;
+  height: auto;
   min-width: 1.75rem;
-  height: 1.75rem;
-  padding: 0 0.12rem 0 0.2rem;
+  min-height: 1.75rem;
+  padding: 0.16rem 0.28rem 0.14rem 0.22rem;
 }
 
 .app-toolbar__color-glyph {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 3px;
 }
 
 .app-toolbar__color-main {
   display: inline-flex;
   flex-direction: column;
   align-items: center;
-  gap: 1px;
+  gap: 3px;
 }
 
 .app-toolbar__color-btn .ph {
@@ -994,6 +995,25 @@ a.app-sheet-tabs__tab {
   text-overflow: ellipsis;
   white-space: nowrap;
   background: var(--sheet-surface);
+}
+
+/* Anchor paints across the rectangle. A multi-row anchor overflows its row,
+   so that row sits above the rows it covers. The selection outline stays above. */
+.sheet-row--span-anchor {
+  z-index: 2;
+}
+
+.sheet-cell--span-anchor {
+  z-index: 1;
+}
+
+.sheet-cell--span-rows {
+  border-bottom: 1px solid rgb(232 232 232 / 0.85);
+}
+
+.sheet-cell--span-covered {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* Remote collab: very light tint wash (hue 0–360 from peer), fades out quickly */

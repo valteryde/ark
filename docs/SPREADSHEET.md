@@ -13,9 +13,9 @@ This document is the contract that both sides should align on.
 3. **Select column chips** — For `valueType: 'select'`, each **`selectOptions`** entry can include optional **`color`**, **`backgroundColor`**, and **`icon`** (Phosphor icon name). The UI renders a small chip when any of these are present; see **[PARTNER_API.md](PARTNER_API.md)**.
 4. **`enabledUiCapabilities`** — Optional set of toolbar/feature flags (undo, bold, fill, …). The shell hides or disables controls based on this; it is the **documented contract** for API payloads.
 
-### Naming: `mergeCellStyle` vs toolbar
+### Naming: `mergeCellStyle` vs merged cells
 
-The data store’s **`mergeCellStyle`** (and the mount handle’s **`mergeCellStyleOnSelection`**) means **merge CSS property patches** onto a cell (bold, background, borders)—not “merge cells” spanning columns. There is **no** merge-cells spanning feature in v1.
+The data store’s **`mergeCellStyle`** (and the mount handle’s **`mergeCellStyleOnSelection`**) means **merge CSS property patches** onto a cell (bold, background, borders). Spanning merges are a separate list, **`cellSpans`**, described under **Merged cells**. The toolbar capability is **`merge-cells`**.
 
 ### Toolbar behavior (v1)
 
@@ -45,6 +45,20 @@ Chip styling uses the canonical **`value`** to find the option; **`label`** is f
 
 Rich cell HTML for select chips is built from **sanitized** `color` / `backgroundColor` strings, a restricted **`icon`** name, and **escaped** labels. Link-column buttons use the same icon sanitizer and only **`http:`**, **`https:`**, **`mailto:`**, or same-origin **`/`** paths. Do not pipe arbitrary server HTML into cells without a separate, explicit escape hatch and sanitization policy.
 
+## Merged cells
+
+A merge is a rectangle stored beside the cells, not a new kind of value. The list is **`cellSpans`**: each entry is `{ row, col, rowSpan, colSpan }` with 1-based indexes. **`row` / `col`** is the anchor (top-left). The anchor’s value, style, and comment are what the rectangle shows. Every other coordinate in the rectangle is empty. Creating a merge keeps the anchor and clears the rest, including their styles and comments.
+
+The grid is not an HTML table. A merge that stays on one row is the anchor cell drawn wider. A merge that crosses rows grows that cell out of its row and stacks the row above the cells it covers. Covered cells stay in the model so addresses do not shift, and they are left out of hit testing, copy, paste, and find.
+
+Selection, typing, and formatting land on the anchor. Arrow keys, Tab, and Enter step off the rectangle instead of stopping on a covered coordinate. A range that touches a merge grows to include the whole rectangle. Paste writes the anchor when the paste cell is the anchor and skips covered coordinates, so a block paste does not split the merge. Copy still writes TSV values (the anchor value and empty covered cells); it does not put the rectangle on the clipboard.
+
+The toolbar shows **Merge cells** and **Unmerge cells** when **`merge-cells`** is in **`enabledUiCapabilities`** (included when the payload omits the list). Merge needs two or more editable cells in a rectangle. Read-only columns, hidden columns, and link columns cannot be part of a merge. Unmerge removes every span the selection touches and leaves the anchor value where it is. Both actions are one undo step, together with the cells the merge cleared.
+
+Deleting a row clears that row and does not shift later rows. Any span that included the row is removed. The anchor value remains if it sat on a different row.
+
+Stores that implement **`getCellSpans` / `setCellSpans`** (the in-memory store and the partner store) can merge. The bundled server persists the list on the sheet. See **[PARTNER_API.md](PARTNER_API.md)**.
+
 ## Keyboard / selection
 
 The grid models two modes per cell, mirroring Google Sheets / Excel:
@@ -58,7 +72,7 @@ The grid models two modes per cell, mirroring Google Sheets / Excel:
 
 ## Undo / redo
 
-- **Gestures**: Each committed cell edit, range clear (**Backspace** with a multi-cell selection), and formatting change (toolbar applying CSS via `mergeCellStyle`) is one undo step. Fill color drags in the native picker are **batched** into one step per pick session.
+- **Gestures**: Each committed cell edit, range clear (**Backspace** with a multi-cell selection), formatting change (toolbar applying CSS via `mergeCellStyle`), and merge or unmerge is one undo step. Fill color drags in the native picker are **batched** into one step per pick session.
 - **Keyboard**: **Cmd+Z** / **Ctrl+Z** undo; **Cmd+Shift+Z** / **Ctrl+Shift+Z** redo; **Ctrl+Y** redo (Windows-style).
 - **Handle**: `SpreadsheetMountHandle` exposes **`undo()`**, **`redo()`**, **`canUndo()`**, **`canRedo()`**, **`subscribeHistoryChange`**, **`runHistoryBatch`**, **`beginHistoryBatch`**, **`endHistoryBatch`**, **`historyEnabled`**, **`applyExternalValue`** (collab), **`replayClipboardPaste`** (same paste pipeline as native paste, for host-driven replay after row growth), and collab/persist helpers documented in TypeScript.
 
@@ -93,7 +107,7 @@ The bundled app shows an **Export PDF** button in the header. It is on when the 
 
 - `mountSpreadsheet(container, config)` — Build the grid once; returns a **`SpreadsheetMountHandle`** (apply CSS patches on selection, subscribe to selection changes, undo/redo when the store supports it) for `mountFormattingToolbar(toolbarEl, handle, resolveEnabledUiCapabilities(config.enabledUiCapabilities))`.
 - `mountFormattingToolbar` — Renders toolbar controls from **`enabledUiCapabilities`**; styling actions call **`mergeCellStyle`** on the store (in-memory preset implements it).
-- `createInMemoryDataStore(initial?)` — In-memory `row:col` map for prototyping.
+- `createInMemoryDataStore(initial?, cellSpans?)` — In-memory `row:col` map for prototyping. The optional second argument seeds `cellSpans`.
 - Presets (e.g. `createRoadmapPreset()`) — Example configs only; production should build config from JSON your API returns.
 
 ## Example API payload (schema only)

@@ -117,7 +117,7 @@ Optional: copy [`.env.example`](https://github.com/valteryde/ark/blob/main/.env.
 - **Partner mode**: Header title from the sheet payload’s **`title`** when present; one grid per URL; edits go over **`/ws/ark`**, persist in Ark's document store, and reach the partner as **`sheet.changed`** notifications.
 - **`?demo=1`**: Header **Product Roadmap 2026**, tabs **Quarterly plan / Backlog / Archive**, in-memory sample data.
 
-Cells are editable where columns are not `readOnly`; undo/redo and the formatting toolbar follow **[SPREADSHEET.md](SPREADSHEET.md)** and each sheet’s `enabledUiCapabilities`.
+Cells are editable where columns are not `readOnly`; undo/redo, merged cells, and the formatting toolbar follow **[SPREADSHEET.md](SPREADSHEET.md)** and each sheet’s `enabledUiCapabilities`.
 
 ## 7. Build for production (static files)
 

@@ -1,6 +1,7 @@
 import type {
   CellPresenceClearEvent,
   CellPresenceEvent,
+  CellSpansCommittedEvent,
   CellStyleCommittedEvent,
   CellValueCommittedEvent,
   RowDeletedEvent,
@@ -8,7 +9,8 @@ import type {
 import { normalizeSheetTruthPayload, type SheetTruthNormalized } from './map-sheet-payload.ts';
 import { PARTNER_TOKEN_PARAM, getPartnerToken } from './partner-token.ts';
 import { sanitizeCellStyle } from '../spreadsheet/cell-style.ts';
-import type { SpreadsheetCellStyleDeclarations, SpreadsheetColumn } from '../spreadsheet/types.ts';
+import { normalizeCellSpans } from '../spreadsheet/cell-span.ts';
+import type { CellSpan, SpreadsheetCellStyleDeclarations, SpreadsheetColumn } from '../spreadsheet/types.ts';
 
 export function collabWsUrl(sheetPath?: string | null): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -126,6 +128,7 @@ export interface CollabConnection {
   sendCommitted(ev: CellValueCommittedEvent): void;
   sendStyleCommitted(ev: CellStyleCommittedEvent): void;
   sendRowDeleted(ev: RowDeletedEvent): void;
+  sendCellSpans(ev: CellSpansCommittedEvent): void;
   sendPresence(ev: CellPresenceEvent): void;
   sendPresenceClear(ev: CellPresenceClearEvent): void;
   subscribeSheet(sheetPath: string): void;
@@ -216,6 +219,8 @@ export function openCollabWs(opts: {
   onSheetTruth?: (truth: SheetTruthNormalized) => void;
   /** Remote peer cleared a row via `row.deleted`. */
   onRemoteRowDeleted?: (row: number) => void;
+  /** Peer or partner replaced the sheet's merge list. */
+  onRemoteSpans?: (spans: readonly CellSpan[]) => void;
   /** Connection lifecycle; fired on every state transition (including initial `connecting`). */
   onConnectionState?: (state: CollabConnectionState) => void;
   /** Authentication or authorization failed (e.g. 4401/4403 or server unauthorized error). */
@@ -305,6 +310,16 @@ export function openCollabWs(opts: {
       if (active === null) return;
       if (parsed.sheetPath !== active) return;
       opts.onSheetTruth?.(parsed);
+      return;
+    }
+
+    if (rec.type === 'cell.spans_committed') {
+      const clientId = typeof rec.clientId === 'string' ? rec.clientId : null;
+      if (clientId !== null && clientId === opts.localClientId) return;
+      const active = opts.getActiveSheetPath();
+      const sheetPath = typeof rec.sheetPath === 'string' ? rec.sheetPath : null;
+      if (sheetPath !== null && active !== null && sheetPath !== active) return;
+      opts.onRemoteSpans?.(normalizeCellSpans(rec.cellSpans));
       return;
     }
 
@@ -432,6 +447,10 @@ export function openCollabWs(opts: {
     queueSend(JSON.stringify(ev));
   }
 
+  function sendCellSpans(ev: CellSpansCommittedEvent): void {
+    queueSend(JSON.stringify(ev));
+  }
+
   function sendPresence(ev: CellPresenceEvent): void {
     queueSend(JSON.stringify(ev));
   }
@@ -451,6 +470,7 @@ export function openCollabWs(opts: {
     sendCommitted,
     sendStyleCommitted,
     sendRowDeleted,
+    sendCellSpans,
     sendPresence,
     sendPresenceClear,
     subscribeSheet,

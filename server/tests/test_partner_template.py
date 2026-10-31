@@ -71,6 +71,28 @@ def test_parse_keeps_cell_styles_and_rejects_unsafe_maps():
         )
 
 
+def test_parse_keeps_cell_spans_and_rejects_overlaps():
+    t = parse_template_response(
+        {
+            "version": 1,
+            "columns": COLUMNS + [{"id": "note", "header": "Note", "widthPx": 80}],
+            "cellSpans": [{"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2}],
+        }
+    )
+    assert t["cellSpans"] == [{"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2}]
+    with pytest.raises(PartnerTemplateError):
+        parse_template_response(
+            {
+                "version": 1,
+                "columns": COLUMNS,
+                "cellSpans": [
+                    {"row": 1, "col": 1, "rowSpan": 2, "colSpan": 1},
+                    {"row": 2, "col": 1, "rowSpan": 1, "colSpan": 1},
+                ],
+            }
+        )
+
+
 def test_parse_rejects_non_object():
     with pytest.raises(PartnerTemplateError):
         parse_template_response([1, 2, 3])

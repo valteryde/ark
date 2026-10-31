@@ -50,6 +50,17 @@ Deno.test('push/undo/redo round trips', () => {
   assertEquals(redone?.after.get('1:1'), { value: 'x' });
 });
 
+Deno.test('a span-only change is its own undo step', () => {
+  const h = createSpreadsheetHistory();
+  const before = [{ row: 1, col: 1, rowSpan: 1, colSpan: 2 }];
+  h.pushRecord(map({}), map({}), { before, after: [] });
+  assertEquals(h.canUndo(), true);
+  const undone = h.undo();
+  assertEquals(undone?.spansBefore, before);
+  assertEquals(undone?.spansAfter, []);
+  assertEquals(h.redo()?.spansAfter, []);
+});
+
 Deno.test('no-op records are ignored', () => {
   const h = createSpreadsheetHistory();
   h.pushRecord(map({ '1:1': { value: 'a' } }), map({ '1:1': { value: 'a' } }));

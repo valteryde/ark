@@ -38,6 +38,15 @@ function domTest(name: string, fn: (env: DomEnv) => void): void {
   });
 }
 
+domTest('merge buttons stay disabled until the selection can merge', (env) => {
+  const { toolbar, handle } = mountSheet(env);
+  const merge = buttonByTitle(toolbar, 'Merge cells');
+  const unmerge = buttonByTitle(toolbar, 'Unmerge cells');
+  assertEquals(merge.disabled, true);
+  assertEquals(unmerge.disabled, true);
+  assertEquals(handle.canMergeCells(), false);
+});
+
 domTest('toolbar renders a zoom control and formatting buttons', (env) => {
   const { toolbar } = mountSheet(env);
 

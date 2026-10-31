@@ -19,6 +19,8 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer
 
+from .cell_span import CellSpanError, parse_cell_spans
+
 MAX_PDF_DATA_ROWS = 10_000
 _TOOLBAR_BORDER = "inset 0 0 0 1px #64748b"
 _CELL_KEY_RE = re.compile(r"^[1-9]\d*:[1-9]\d*$")
@@ -60,6 +62,8 @@ class PdfModel:
     headers: tuple[str, ...]
     col_widths_px: tuple[float, ...]
     rows: tuple[tuple[PdfCellModel, ...], ...]
+    # ReportLab SPAN boxes: (col0, table_row, col1, table_row). Header is row 0.
+    spans: tuple[tuple[int, int, int, int], ...] = ()
 
 
 def parse_pdf_color(value: Any) -> tuple[float, float, float] | None:
@@ -246,13 +250,77 @@ def build_pdf_model(payload: dict[str, Any]) -> PdfModel:
             )
         body.append(tuple(cells))
 
+    spans = _pdf_spans(
+        payload.get("cellSpans"),
+        [index for index, _column in visible],
+        row_count,
+    )
+    for col0, row0, col1, row1 in spans:
+        for table_row in range(row0, row1 + 1):
+            line = list(body[table_row - 1])
+            for col in range(col0, col1 + 1):
+                if table_row == row0 and col == col0:
+                    continue
+                cleared = line[col]
+                line[col] = PdfCellModel(
+                    text="",
+                    fill=cleared.fill,
+                    text_color=cleared.text_color,
+                    align=cleared.align,
+                    bold=cleared.bold,
+                    italic=cleared.italic,
+                    underline=cleared.underline,
+                    strike=cleared.strike,
+                    toolbar_border=cleared.toolbar_border,
+                )
+            body[table_row - 1] = tuple(line)
+
     return PdfModel(
         title=title.strip(),
         filename=pdf_filename(payload),
         headers=tuple(headers),
         col_widths_px=tuple(widths),
         rows=tuple(body),
+        spans=tuple(spans),
     )
+
+
+def _pdf_spans(
+    raw: Any,
+    visible_cols: list[int],
+    row_count: int,
+) -> list[tuple[int, int, int, int]]:
+    """Map grid spans onto visible PDF columns. Skip a span whose anchor is hidden."""
+    if not raw or row_count < 1 or not visible_cols:
+        return []
+    try:
+        # Bounds here are only a sanity cap. Export skips spans that fall
+        # outside the painted rows or whose anchor column is hidden.
+        spans = parse_cell_spans(raw, max_rows=1_000_000, max_cols=1_000_000)
+    except CellSpanError:
+        return []
+    index = {col: i for i, col in enumerate(visible_cols)}
+    out: list[tuple[int, int, int, int]] = []
+    for span in spans:
+        if span["col"] not in index:
+            continue
+        if span["row"] < 1 or span["row"] + span["rowSpan"] - 1 > row_count:
+            continue
+        cols = [
+            col
+            for col in range(span["col"], span["col"] + span["colSpan"])
+            if col in index
+        ]
+        if not cols:
+            continue
+        col0 = index[cols[0]]
+        col1 = index[cols[-1]]
+        row0 = span["row"]
+        row1 = span["row"] + span["rowSpan"] - 1
+        if col0 == col1 and row0 == row1:
+            continue
+        out.append((col0, row0, col1, row1))
+    return out
 
 
 def _font_name(cell: PdfCellModel) -> str:
@@ -309,6 +377,8 @@ def render_sheet_pdf(payload: dict[str, Any]) -> tuple[bytes, str]:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("GRID", (0, 0), (-1, -1), 0.3, _GRID),
     ]
+    for col0, row0, col1, row1 in model.spans:
+        commands.append(("SPAN", (col0, row0), (col1, row1)))
     for r, row in enumerate(model.rows, start=1):
         line: list[Any] = []
         for c, cell in enumerate(row):

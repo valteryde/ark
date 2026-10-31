@@ -113,6 +113,35 @@ def test_cell_style_wins_over_select_chip_and_number_align():
     assert other_border.toolbar_border is False
 
 
+def test_merged_cells_span_visible_columns_and_blank_covered_text():
+    model = build_pdf_model(
+        {
+            "title": "Merged",
+            "columns": COLUMNS,
+            "rows": [
+                {"name": "Acme", "priority": "HIGH", "amount": 12, "secret": "nope"},
+                {"name": "Beta", "priority": "HIGH"},
+            ],
+            "cellSpans": [
+                {"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2},
+                {"row": 1, "col": 4, "rowSpan": 2, "colSpan": 1},
+            ],
+        }
+    )
+    assert model.spans == ((0, 1, 1, 1),)
+    assert model.rows[0][0].text == "Acme"
+    assert model.rows[0][1].text == ""
+    body, _filename = render_sheet_pdf(
+        {
+            "title": "Merged",
+            "columns": COLUMNS,
+            "rows": [{"name": "Acme", "priority": "HIGH"}],
+            "cellSpans": [{"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2}],
+        }
+    )
+    assert body.startswith(b"%PDF")
+
+
 def test_too_many_rows():
     payload = {
         "title": "Big",

@@ -13,6 +13,7 @@ export type UiToolbarCapability =
   | 'align'
   | 'link'
   | 'comment'
+  | 'merge-cells'
   | 'functions';
 
 /** Stored cell value is always the canonical `value` string. */
@@ -80,6 +81,20 @@ export interface SpreadsheetColumn {
  */
 export type SpreadsheetCellStyleDeclarations = Record<string, string>;
 
+/**
+ * A merged rectangle. The value, style, and comment live on the anchor
+ * (`row`, `col`). `rowSpan` and `colSpan` include the anchor, and at least
+ * one of them is greater than 1. Covered coordinates are empty.
+ */
+export interface CellSpan {
+  /** 1-based anchor row. */
+  row: number;
+  /** 1-based anchor column. */
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+}
+
 /** One cell in a payload / `createInMemoryDataStore` initial map. */
 export interface SpreadsheetCellInit {
   value: string | number;
@@ -113,6 +128,13 @@ export interface SpreadsheetDataStore {
   forEachStoredCell?(
     visit: (cell: { row: number; col: number; style?: SpreadsheetCellStyleDeclarations }) => void,
   ): void;
+  /**
+   * Merged rectangles for the sheet. The anchor cell holds the value.
+   * Absent when the store does not support spanning merges.
+   */
+  getCellSpans?(): readonly CellSpan[];
+  /** Replace the sheet's merge list. Does not clear covered cells; the caller does. */
+  setCellSpans?(spans: readonly CellSpan[]): void;
 }
 
 export interface SpreadsheetConfig {
@@ -184,6 +206,7 @@ export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
   'align',
   'link',
   'comment',
+  'merge-cells',
   'functions',
 ];
 
@@ -315,6 +338,25 @@ export interface SpreadsheetMountHandle {
   findInSheet(options: { query: string; forward: boolean }): boolean;
   /** Current display zoom factor (1 = 100%). */
   getZoom(): number;
+  /**
+   * Merge the current selection into one cell. Keeps the top-left value and
+   * clears the other cells in the rectangle. Returns false when the selection
+   * cannot be merged.
+   */
+  mergeCells(): boolean;
+  /** Remove every merge that intersects the current selection. */
+  unmergeCells(): boolean;
+  /** True when the selection is a mergeable rectangle and the store supports spans. */
+  canMergeCells(): boolean;
+  /** True when the selection intersects a merge. */
+  canUnmergeCells(): boolean;
+  /** Current merge rectangles. Empty when the store does not support spans. */
+  getCellSpans(): readonly CellSpan[];
+  /**
+   * Replace merges from outside local editing (collab / partner push).
+   * Does not create undo history.
+   */
+  applyExternalSpans(spans: readonly CellSpan[]): boolean;
   /** Set the display zoom factor (clamped to 0.5–2). Returns the applied value. */
   setZoom(factor: number): number;
   /** Subscribe to zoom changes (e.g. to sync a toolbar control). */

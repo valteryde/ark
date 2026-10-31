@@ -122,6 +122,23 @@ Deno.test('rowsToInitialMap merges cellStyles onto values and empty cells', () =
   assertEquals(initial['2:2'], { value: '', style: { 'font-weight': '700' } });
 });
 
+Deno.test('normalizePartnerSheetPayload keeps in-bounds cellSpans', () => {
+  const result = normalizePartnerSheetPayload({
+    columns: [
+      { id: 'name', header: 'Name' },
+      { id: 'note', header: 'Note' },
+    ],
+    rows: [{ name: 'Ada' }],
+    rowCount: 4,
+    cellSpans: [
+      { row: 1, col: 1, rowSpan: 1, colSpan: 2 },
+      { row: 1, col: 1, rowSpan: 1, colSpan: 1 },
+      { row: 9, col: 1, rowSpan: 2, colSpan: 1 },
+    ],
+  });
+  assertEquals(result?.cellSpans, [{ row: 1, col: 1, rowSpan: 1, colSpan: 2 }]);
+});
+
 Deno.test('normalizePartnerSheetPayload keeps sanitized cellStyles', () => {
   const result = normalizePartnerSheetPayload({
     columns: [{ id: 'name', header: 'Name' }],

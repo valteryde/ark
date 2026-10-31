@@ -1,11 +1,20 @@
-import type { SpreadsheetCellInit } from './types.ts';
+import { cellSpansEqual, cloneCellSpans } from './cell-span.ts';
+import type { CellSpan, SpreadsheetCellInit } from './types.ts';
 
 /** Map key is `row:col`. Value `undefined` means the cell key is absent from the store. */
 export type HistoryCellMap = Map<string, SpreadsheetCellInit | undefined>;
 
+export type HistorySpanChange = {
+  before: readonly CellSpan[];
+  after: readonly CellSpan[];
+};
+
 export type HistoryRecord = {
   before: HistoryCellMap;
   after: HistoryCellMap;
+  /** Present only when this step changed the sheet's merge list. */
+  spansBefore?: CellSpan[];
+  spansAfter?: CellSpan[];
 };
 
 const DEFAULT_MAX_DEPTH = 100;
@@ -64,7 +73,7 @@ export function cellStatesEqual(
 }
 
 export type SpreadsheetHistoryApi = {
-  pushRecord(before: HistoryCellMap, after: HistoryCellMap): void;
+  pushRecord(before: HistoryCellMap, after: HistoryCellMap, spans?: HistorySpanChange): void;
   /** Pop undo stack; returns record so caller applies `before` to the store. */
   undo(): HistoryRecord | null;
   /** Pop redo stack; returns record so caller applies `after` to the store. */
@@ -88,6 +97,8 @@ export function createSpreadsheetHistory(
   let batchDepth = 0;
   let batchBefore: HistoryCellMap | null = null;
   let batchAfter: HistoryCellMap | null = null;
+  let batchSpansBefore: CellSpan[] | null = null;
+  let batchSpansAfter: CellSpan[] | null = null;
 
   function notify(): void {
     for (const fn of listeners) fn();
@@ -103,12 +114,23 @@ export function createSpreadsheetHistory(
     }
   }
 
-  function pushRecordInternal(before: HistoryCellMap, after: HistoryCellMap): void {
-    if (before.size === 0 && after.size === 0) return;
-    if (cellMapsEqual(before, after)) return;
+  function pushRecordInternal(
+    before: HistoryCellMap,
+    after: HistoryCellMap,
+    spans?: HistorySpanChange,
+  ): void {
+    const spanChange = spans !== undefined && !cellSpansEqual(spans.before, spans.after);
+    if (!spanChange && before.size === 0 && after.size === 0) return;
+    if (!spanChange && cellMapsEqual(before, after)) return;
     undoStack.push({
       before: cloneCellMap(before),
       after: cloneCellMap(after),
+      ...(spanChange
+        ? {
+            spansBefore: cloneCellSpans(spans!.before),
+            spansAfter: cloneCellSpans(spans!.after),
+          }
+        : {}),
     });
     redoStack.length = 0;
     trimUndo();
@@ -116,7 +138,7 @@ export function createSpreadsheetHistory(
   }
 
   return {
-    pushRecord(before: HistoryCellMap, after: HistoryCellMap) {
+    pushRecord(before: HistoryCellMap, after: HistoryCellMap, spans?: HistorySpanChange) {
       if (batchDepth > 0) {
         if (batchBefore === null) batchBefore = new Map();
         if (batchAfter === null) batchAfter = new Map();
@@ -124,9 +146,13 @@ export function createSpreadsheetHistory(
           if (!batchBefore!.has(k)) batchBefore!.set(k, v);
         }
         mergeMaps(batchAfter!, after);
+        if (spans) {
+          if (batchSpansBefore === null) batchSpansBefore = cloneCellSpans(spans.before);
+          batchSpansAfter = cloneCellSpans(spans.after);
+        }
         return;
       }
-      pushRecordInternal(before, after);
+      pushRecordInternal(before, after, spans);
     },
 
     beginBatch() {
@@ -134,6 +160,8 @@ export function createSpreadsheetHistory(
       if (batchDepth === 1) {
         batchBefore = null;
         batchAfter = null;
+        batchSpansBefore = null;
+        batchSpansAfter = null;
       }
     },
 
@@ -143,12 +171,20 @@ export function createSpreadsheetHistory(
       if (batchDepth === 0 && batchBefore !== null && batchAfter !== null) {
         const b = batchBefore;
         const a = batchAfter;
+        const spanChange =
+          batchSpansBefore !== null && batchSpansAfter !== null
+            ? { before: batchSpansBefore, after: batchSpansAfter }
+            : undefined;
         batchBefore = null;
         batchAfter = null;
-        pushRecordInternal(b, a);
+        batchSpansBefore = null;
+        batchSpansAfter = null;
+        pushRecordInternal(b, a, spanChange);
       } else if (batchDepth === 0) {
         batchBefore = null;
         batchAfter = null;
+        batchSpansBefore = null;
+        batchSpansAfter = null;
       }
     },
 

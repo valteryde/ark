@@ -77,6 +77,23 @@ Deno.test('remote apply does not notify', () => {
   assertEquals(store.getCellStyle?.(1, 2), { color: '#111827' });
 });
 
+Deno.test('setCellSpans notifies the full list and remote apply stays quiet', () => {
+  const batches: unknown[] = [];
+  const store = createPartnerNotifyDataStore(columns, {}, () => {}, undefined, {
+    onCellSpans: (spans) => batches.push(spans),
+  });
+  assertEquals(store.getCellSpans?.(), []);
+  store.setCellSpans?.([
+    { row: 1, col: 2, rowSpan: 1, colSpan: 2 },
+  ]);
+  assertEquals(batches, [[{ row: 1, col: 2, rowSpan: 1, colSpan: 2 }]]);
+  store.withRemoteApply(() => {
+    store.setCellSpans?.([]);
+  });
+  assertEquals(batches.length, 1);
+  assertEquals(store.getCellSpans?.(), []);
+});
+
 Deno.test('forEachStoredCell walks the inner store', () => {
   const store = createPartnerNotifyDataStore(
     columns,

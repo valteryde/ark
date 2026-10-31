@@ -518,3 +518,83 @@ domTest('hidden columns are omitted from the grid but kept in the store', (env) 
   assertEquals(cfg.data.get(1, 1), 99);
   assertEquals(container.querySelector('.sheet-cell[data-col="1"]'), null);
 });
+
+domTest('a seeded span widens the anchor and hides covered cells', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'Hello', '2:1': 'Down' }, [
+    { row: 1, col: 1, rowSpan: 1, colSpan: 2 },
+    { row: 2, col: 1, rowSpan: 2, colSpan: 1 },
+  ]);
+  mountSpreadsheet(container, config({}, { data }));
+
+  const anchor = container.querySelector('.sheet-cell[data-row="1"][data-col="1"]') as HTMLElement;
+  const covered = container.querySelector('.sheet-cell[data-row="1"][data-col="2"]') as HTMLElement;
+  assertEquals(anchor.classList.contains('sheet-cell--span-anchor'), true);
+  assertEquals(anchor.style.width, '260px');
+  assertEquals(anchor.getAttribute('aria-colspan'), '2');
+  assertEquals(covered.classList.contains('sheet-cell--span-covered'), true);
+  assertEquals(covered.getAttribute('aria-hidden'), 'true');
+
+  const vertical = container.querySelector('.sheet-cell[data-row="2"][data-col="1"]') as HTMLElement;
+  assertEquals(vertical.classList.contains('sheet-cell--span-rows'), true);
+  assertEquals(vertical.style.height, '56px');
+  assertEquals(vertical.textContent?.includes('Down'), true);
+});
+
+domTest('merge keeps the anchor value and undo restores covered cells', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'Keep', '1:2': 'Drop' });
+  const handle = mountSpreadsheet(container, config({}, { data }));
+  assertEquals(handle.canMergeCells(), false);
+
+  const cell = container.querySelector('.sheet-cell[data-row="1"][data-col="2"]') as HTMLElement;
+  cell.dispatchEvent(
+    new env.window.MouseEvent('pointerdown', { bubbles: true, button: 0, shiftKey: true }),
+  );
+  assertEquals(handle.canMergeCells(), true);
+  assertEquals(handle.mergeCells(), true);
+  assertEquals(data.get(1, 1), 'Keep');
+  assertEquals(data.get(1, 2), undefined);
+  assertEquals(handle.getCellSpans(), [{ row: 1, col: 1, rowSpan: 1, colSpan: 2 }]);
+  const anchor = container.querySelector('.sheet-cell[data-row="1"][data-col="1"]') as HTMLElement;
+  assertEquals(anchor.style.width, '260px');
+  assertEquals(handle.canUnmergeCells(), true);
+
+  handle.undo();
+  assertEquals(data.get(1, 2), 'Drop');
+  assertEquals(handle.getCellSpans(), []);
+
+  handle.redo();
+  assertEquals(data.get(1, 2), undefined);
+  assertEquals(handle.unmergeCells(), true);
+  assertEquals(handle.getCellSpans(), []);
+  assertEquals(data.get(1, 1), 'Keep');
+});
+
+domTest('arrow keys step off a merged cell', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'Hello' }, [
+    { row: 1, col: 1, rowSpan: 1, colSpan: 2 },
+  ]);
+  mountSpreadsheet(container, config({}, { data }));
+  const viewport = container.querySelector('.sheet-viewport') as HTMLElement;
+  viewport.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  const active = container.querySelector('.sheet-cell-active') as HTMLElement;
+  assertEquals(active.dataset.row, '1');
+  assertEquals(active.dataset.col, '3');
+});
+
+domTest('a selection that includes a read-only column cannot merge', (env) => {
+  const container = env.makeContainer();
+  const cols: SpreadsheetColumn[] = [
+    { id: 'name', header: 'Name', widthPx: 120 },
+    { id: 'id', header: 'ID', widthPx: 80, readOnly: true },
+  ];
+  const handle = mountSpreadsheet(container, config({}, { columns: cols, rowCount: 2 }));
+  const cell = container.querySelector('.sheet-cell[data-row="1"][data-col="2"]') as HTMLElement;
+  cell.dispatchEvent(
+    new env.window.MouseEvent('pointerdown', { bubbles: true, button: 0, shiftKey: true }),
+  );
+  assertEquals(handle.canMergeCells(), false);
+  assertEquals(handle.mergeCells(), false);
+});
