@@ -224,12 +224,13 @@ def build_pdf_model(
     *,
     headers: bool = True,
     empty_columns: bool = True,
+    empty_rows: bool = True,
 ) -> PdfModel:
-    """Visible columns and data rows, including style-only cells.
+    """Visible columns and data rows, including cells that only carry a style.
 
     `headers` is false when the file should leave the column header row out.
-    `empty_columns` is false when columns that hold nothing should be dropped:
-    auto-hide, which is off unless the caller asks for it.
+    `empty_columns` and `empty_rows` are false to drop the parts of the sheet that
+    hold nothing: auto-hide, which is off unless the caller asks for it.
     """
     columns = payload.get("columns") if isinstance(payload.get("columns"), list) else []
     rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
@@ -240,10 +241,6 @@ def build_pdf_model(
         visible.append((index, column))
 
     cell_styles = payload.get("cellStyles")
-    if not empty_columns and visible:
-        filled = _columns_with_content(columns, rows, cell_styles)
-        visible = [column for column in visible if column[0] in filled]
-
     visible_cols = {index for index, _column in visible}
     max_style_row = 0
     if isinstance(cell_styles, dict):
@@ -263,16 +260,33 @@ def build_pdf_model(
         path = payload.get("path")
         title = path.strip() if isinstance(path, str) and path.strip() else "Sheet"
 
+    # Merge rectangles first, in sheet coordinates: they decide what counts as
+    # content, because the anchor of a merge paints the whole rectangle.
+    spans = _sheet_spans(payload, visible_cols, row_count, len(columns))
+
+    sheet_rows = list(range(1, row_count + 1))
+    if not empty_columns or not empty_rows:
+        used_cols, used_rows = _sheet_content(payload, columns, visible, spans, row_count)
+        if not empty_columns:
+            visible = [column for column in visible if used_cols[column[0]]]
+        if not empty_rows:
+            sheet_rows = [row for row in sheet_rows if used_rows[row]]
+
+    col_map = {index: position for position, (index, _column) in enumerate(visible)}
+    # Positions are 0-based here; `_print_spans` puts the header row in front.
+    row_map = {row: position for position, row in enumerate(sheet_rows)}
+    spans = _print_spans(spans, col_map, row_map)
+
     headers_out: list[str] = []
     widths: list[float] = []
-    body: list[tuple[PdfCellModel, ...]] = []
     for _index, column in visible:
         header = column.get("header")
         headers_out.append(header if isinstance(header, str) else str(column.get("id", "")))
         width = column.get("widthPx")
         widths.append(float(width) if isinstance(width, (int, float)) and width > 0 else 120.0)
 
-    for row_index in range(1, row_count + 1):
+    body: list[tuple[PdfCellModel, ...]] = []
+    for row_index in sheet_rows:
         source = rows[row_index - 1] if row_index - 1 < len(rows) else {}
         if not isinstance(source, dict):
             source = {}
@@ -285,11 +299,6 @@ def build_pdf_model(
             )
         body.append(tuple(cells))
 
-    spans = _pdf_spans(
-        payload.get("cellSpans"),
-        [index for index, _column in visible],
-        row_count,
-    )
     merged: set[tuple[int, int]] = set()
     for col0, row0, col1, row1 in spans:
         for table_row in range(row0, row1 + 1):
@@ -315,76 +324,147 @@ def build_pdf_model(
     )
 
 
-def _columns_with_content(
-    columns: list[Any],
-    rows: list[Any],
-    cell_styles: Any,
-) -> set[int]:
-    """Original 1-based indexes of columns that hold a value or a stored style.
+@dataclass(frozen=True)
+class _SheetSpan:
+    """One merged rectangle in sheet coordinates: 1-based column and data row."""
 
-    A column that is only painted still counts as having content: a band, a
-    blocked-out grade cell, or a bordered cell is a reason to print the column.
-    Header text is not content, and neither is a merge that covers the column
-    without anything on it.
+    col0: int
+    row0: int
+    col1: int
+    row1: int
+
+
+def _sheet_spans(
+    payload: dict[str, Any],
+    visible_cols: set[int],
+    row_count: int,
+    column_count: int,
+) -> list[_SheetSpan]:
+    """Merge rectangles that reach the export, in sheet coordinates.
+
+    A rectangle whose anchor sits in a hidden column is left out, as the grid
+    leaves it out. The bounds passed to `parse_cell_spans` are only a sanity cap:
+    rows are clipped to the printed sheet and columns to the columns the sheet
+    has, and a rectangle that runs past the printed rows is left out whole rather
+    than drawn over rows that do not exist.
     """
-    filled: set[int] = set()
-    for index, column in enumerate(columns, start=1):
-        if not isinstance(column, dict):
+    raw = payload.get("cellSpans")
+    if not raw or row_count < 1 or not visible_cols:
+        return []
+    try:
+        parsed = parse_cell_spans(raw, max_rows=1_000_000, max_cols=1_000_000)
+    except CellSpanError:
+        return []
+    out: list[_SheetSpan] = []
+    for span in parsed:
+        col, row = span["col"], span["row"]
+        if col not in visible_cols or row < 1 or row + span["rowSpan"] - 1 > row_count:
             continue
-        col_id = column.get("id")
-        if not isinstance(col_id, str):
-            filled.add(index)  # a column the export cannot read is kept
+        col1 = min(col + span["colSpan"] - 1, column_count)
+        out.append(_SheetSpan(col, row, col1, row + span["rowSpan"] - 1))
+    return out
+
+
+def _span_paints(payload: dict[str, Any], columns: list[Any], span: _SheetSpan) -> bool:
+    """Whether a merged rectangle draws anything: text, a fill, or a border.
+
+    The anchor cell decides the look of the whole rectangle, so this decides
+    whether the strip of sheet the rectangle covers is worth printing.
+    """
+    column = columns[span.col0 - 1] if 1 <= span.col0 <= len(columns) else None
+    if not isinstance(column, dict):
+        return False
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    source = rows[span.row0 - 1] if 1 <= span.row0 <= len(rows) else None
+    col_id = column.get("id")
+    value = source.get(col_id) if isinstance(source, dict) and isinstance(col_id, str) else None
+    cell = resolve_pdf_cell(
+        column, value, _style_for_key(payload.get("cellStyles"), span.row0, span.col0)
+    )
+    return bool(cell.text) or cell.fill is not None or cell.toolbar_border
+
+
+def _sheet_content(
+    payload: dict[str, Any],
+    columns: list[Any],
+    visible: list[tuple[int, dict[str, Any]]],
+    spans: list[_SheetSpan],
+    row_count: int,
+) -> tuple[bytearray, bytearray]:
+    """Which columns and rows hold something, indexed by sheet coordinate.
+
+    A value or a stored style counts, and so does every cell inside a merged
+    rectangle that draws something: a band over forty empty rows is content, and
+    dropping those rows would erase the work someone did in the sheet. A cell in a
+    hidden column is not printed, so it is not content either.
+    """
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    cell_styles = payload.get("cellStyles")
+    used_cols = bytearray(len(columns) + 1)
+    used_rows = bytearray(row_count + 1)
+    visible_cols = {index for index, _column in visible}
+
+    for row_index in range(1, row_count + 1):
+        source = rows[row_index - 1] if row_index - 1 < len(rows) else None
+        if not isinstance(source, dict):
             continue
-        for source in rows:
-            if not isinstance(source, dict):
+        for index, column in visible:
+            col_id = column.get("id")
+            value = source.get(col_id) if isinstance(col_id, str) else None
+            if value is None or value == "":
                 continue
-            value = source.get(col_id)
-            if value is not None and value != "":
-                filled.add(index)
-                break
+            used_cols[index] = 1
+            used_rows[row_index] = 1
+
     if isinstance(cell_styles, dict):
         for key, style in cell_styles.items():
             if not isinstance(key, str) or not _CELL_KEY_RE.fullmatch(key):
                 continue
-            if isinstance(style, dict) and style:
-                filled.add(int(key.split(":")[1]))
-    return filled
+            if not isinstance(style, dict) or not style:
+                continue
+            row_s, col_s = key.split(":")
+            row, col = int(row_s), int(col_s)
+            if col in visible_cols and row <= row_count:
+                used_cols[col] = 1
+                used_rows[row] = 1
+
+    for span in spans:
+        if not _span_paints(payload, columns, span):
+            continue
+        for col in range(span.col0, span.col1 + 1):
+            used_cols[col] = 1
+        for row in range(span.row0, span.row1 + 1):
+            used_rows[row] = 1
+    return used_cols, used_rows
 
 
-def _pdf_spans(
-    raw: Any,
-    visible_cols: list[int],
-    row_count: int,
+def _print_spans(
+    spans: list[_SheetSpan],
+    col_map: dict[int, int],
+    row_map: dict[int, int],
 ) -> list[tuple[int, int, int, int]]:
-    """Map grid spans onto visible PDF columns. Skip a span whose anchor is hidden."""
-    if not raw or row_count < 1 or not visible_cols:
-        return []
-    try:
-        # Bounds here are only a sanity cap. Export skips spans that fall
-        # outside the painted rows or whose anchor column is hidden.
-        spans = parse_cell_spans(raw, max_rows=1_000_000, max_cols=1_000_000)
-    except CellSpanError:
-        return []
-    index = {col: i for i, col in enumerate(visible_cols)}
+    """Rectangles in one table's coordinates: header row 0, printed rows from 1.
+
+    A rectangle that crosses a column or a row the export dropped keeps the part
+    that is printed, which is what lets a band end at the edge of the printed
+    sheet instead of leaving a hole where the dropped strip used to be. A
+    rectangle whose own anchor was dropped is left out, because the anchor is
+    where its text and its look come from.
+    """
     out: list[tuple[int, int, int, int]] = []
     for span in spans:
-        if span["col"] not in index:
+        anchor_col = col_map.get(span.col0)
+        anchor_row = row_map.get(span.row0)
+        if anchor_col is None or anchor_row is None:
             continue
-        if span["row"] < 1 or span["row"] + span["rowSpan"] - 1 > row_count:
+        cols = [col_map[col] for col in range(span.col0, span.col1 + 1) if col in col_map]
+        rows = [row_map[row] for row in range(span.row0, span.row1 + 1) if row in row_map]
+        if not cols or not rows:
             continue
-        cols = [
-            col
-            for col in range(span["col"], span["col"] + span["colSpan"])
-            if col in index
-        ]
-        if not cols:
-            continue
-        col0 = index[cols[0]]
-        col1 = index[cols[-1]]
-        row0 = span["row"]
-        row1 = span["row"] + span["rowSpan"] - 1
+        col0, col1 = min(cols), max(cols)
+        row0, row1 = min(rows) + 1, max(rows) + 1
         if col0 == col1 and row0 == row1:
-            continue
+            continue  # one cell needs no rectangle
         out.append((col0, row0, col1, row1))
     return out
 
@@ -715,6 +795,7 @@ def render_sheet_pdf(
     *,
     headers: bool = True,
     empty_columns: bool = True,
+    empty_rows: bool = True,
 ) -> tuple[bytes, str]:
     """Return `(pdf_bytes, filename)`. Raises PdfTooLarge before drawing.
 
@@ -723,10 +804,16 @@ def render_sheet_pdf(
     anchor. Raises PdfLayoutError when even that cannot be laid out.
 
     `headers` is false for a file without the column header row, and
-    `empty_columns` is false to leave out columns that hold no value and no
-    style. Both default to printing what the sheet shows.
+    `empty_columns` and `empty_rows` are false to leave out the columns and rows
+    that hold no value and no style. All three default to printing what the sheet
+    shows.
     """
-    model = build_pdf_model(payload, headers=headers, empty_columns=empty_columns)
+    model = build_pdf_model(
+        payload,
+        headers=headers,
+        empty_columns=empty_columns,
+        empty_rows=empty_rows,
+    )
     try:
         body = _draw(_story_for(model), model.title)
     except LayoutError as exc:
