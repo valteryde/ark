@@ -33,6 +33,8 @@ _JUSTIFY = frozenset(
 _TEXT_ALIGN = frozenset({"left", "right", "center", "start", "end", "justify"})
 _BORDER_STYLE = frozenset({"none", "solid", "dashed", "dotted", "double"})
 _DECORATION = frozenset({"none", "underline", "overline", "line-through"})
+# Wrap keywords only; `pre` / `pre-line` stay out so hard breaks can't reshape a grid row.
+_WHITE_SPACE = frozenset({"normal", "nowrap", "pre-wrap"})
 _BOX_SHADOW_RE = re.compile(r"^inset\s+0\s+0\s+0\s+1px\s+(.+)$")
 _FONT_SIZE_RE = re.compile(r"^(\d{1,2}(?:\.\d{1,2})?)px$")
 _BORDER_WIDTH_RE = re.compile(r"^(\d(?:\.\d)?)px$")
@@ -141,6 +143,7 @@ _SANITIZERS = {
     "font-size": _font_size,
     "text-decoration-line": _decoration,
     "text-align": lambda v: _keyword(v, _TEXT_ALIGN),
+    "white-space": lambda v: _keyword(v, _WHITE_SPACE),
     "justify-content": lambda v: _keyword(v, _JUSTIFY),
     "align-items": lambda v: _keyword(v, _JUSTIFY),
     "box-shadow": _box_shadow,

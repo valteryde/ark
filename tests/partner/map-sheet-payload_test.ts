@@ -5,6 +5,8 @@ import {
   partnerEffectiveRowCount,
   rowsToInitialMap,
 } from '../../src/partner/map-sheet-payload.ts';
+import { sheetPayloadToConfig } from '../../src/partner/map-sheet-payload.ts';
+import { createInMemoryDataStore } from '../../src/spreadsheet/data-store.ts';
 import type { SpreadsheetColumn } from '../../src/spreadsheet/types.ts';
 
 const columns: SpreadsheetColumn[] = [
@@ -227,4 +229,51 @@ Deno.test('normalizeSheetTruthPayload requires columns when no fallback', () => 
     ),
     null,
   );
+});
+
+Deno.test('partner payload carries cellOverflow through to the config', () => {
+  const clipped = normalizePartnerSheetPayload({
+    columns: [{ id: 'notes', header: 'Notes', widthPx: 180 }],
+    rows: [{ notes: 'a long note' }],
+    cellOverflow: 'clip',
+  });
+  assertEquals(clipped?.cellOverflow, 'clip');
+  const data = createInMemoryDataStore();
+  assertEquals(sheetPayloadToConfig(clipped!, data).cellOverflow, 'clip');
+
+  // Junk modes drop instead of reaching the grid; spill stays the default.
+  for (const junk of ['wrap', true, 3, '']) {
+    const parsed = normalizePartnerSheetPayload({
+      columns: [{ id: 'notes', header: 'Notes', widthPx: 180 }],
+      rows: [],
+      cellOverflow: junk,
+    });
+    assertEquals(parsed?.cellOverflow, undefined);
+    assertEquals(sheetPayloadToConfig(parsed!, data).cellOverflow, undefined);
+  }
+});
+
+Deno.test('cellStyles keep the wrap keyword and drop unsafe keys', () => {
+  const result = normalizePartnerSheetPayload({
+    columns: [{ id: 'notes', header: 'Notes', widthPx: 180 }],
+    rows: [{ notes: 'wrapped note' }],
+    cellStyles: {
+      '1:1': { 'white-space': 'pre-wrap', position: 'fixed', 'white-space;': 'x' },
+    },
+  });
+  assertEquals(result?.cellStyles, { '1:1': { 'white-space': 'pre-wrap' } });
+});
+
+Deno.test('sheet.truth push keeps cellOverflow so a remount preserves the mode', () => {
+  const truth = normalizeSheetTruthPayload(
+    {
+      type: 'sheet.truth',
+      sheetPath: 'clients/99',
+      columns: [{ id: 'notes', header: 'Notes', widthPx: 180 }],
+      rows: [{ notes: 'x' }],
+      cellOverflow: 'clip',
+    },
+    null,
+  );
+  assertEquals(truth?.payload.cellOverflow, 'clip');
 });

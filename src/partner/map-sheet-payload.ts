@@ -3,6 +3,7 @@ import { sanitizeCellStyle } from '../spreadsheet/cell-style.ts';
 import { cellKey, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
 import { sanitizePhosphorIconName } from '../spreadsheet/cell-display.ts';
 import type {
+  SheetCellOverflowMode,
   SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
   SpreadsheetConfig,
@@ -11,6 +12,12 @@ import type {
 } from '../spreadsheet/types.ts';
 import { normalizePartnerChromeActions } from './chrome-actions.ts';
 import type { PartnerSheetPayload } from './types.ts';
+
+function normalizeCellOverflow(value: unknown): SheetCellOverflowMode | undefined {
+  if (typeof value !== 'string') return undefined;
+  const mode = value.trim().toLowerCase();
+  return mode === 'clip' || mode === 'spill' ? mode : undefined;
+}
 
 function normalizeSelectOption(x: unknown): SpreadsheetSelectOption | null {
   if (!x || typeof x !== 'object') return null;
@@ -106,6 +113,7 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
           : typeof o.defaultRowHeightPx === 'number' && o.defaultRowHeightPx > 0
             ? o.defaultRowHeightPx
             : undefined,
+      cellOverflow: i.cellOverflow ?? o.cellOverflow,
       enabledUiCapabilities: i.enabledUiCapabilities ?? o.enabledUiCapabilities,
       chromeActions: i.chromeActions ?? o.chromeActions,
       cells: i.cells ?? o.cells,
@@ -147,6 +155,9 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
       typeof src.defaultRowHeightPx === 'number' && src.defaultRowHeightPx > 0
         ? src.defaultRowHeightPx
         : undefined,
+    ...(normalizeCellOverflow(src.cellOverflow) !== undefined
+      ? { cellOverflow: normalizeCellOverflow(src.cellOverflow) }
+      : {}),
     enabledUiCapabilities: Array.isArray(src.enabledUiCapabilities)
       ? (src.enabledUiCapabilities.filter((s): s is UiToolbarCapability => typeof s === 'string') as UiToolbarCapability[])
       : undefined,
@@ -259,6 +270,7 @@ export function sheetPayloadToConfig(
     rowCount: rc,
     ...(gc !== undefined && gc > 0 ? { ghostRowCount: gc } : {}),
     defaultRowHeightPx,
+    ...(payload.cellOverflow === 'clip' ? { cellOverflow: 'clip' as const } : {}),
     data,
     enabledUiCapabilities,
   };
@@ -321,6 +333,9 @@ export function normalizeSheetTruthPayload(
     ...(ghostRowCount !== undefined ? { ghostRowCount } : {}),
     defaultRowHeightPx:
       typeof o.defaultRowHeightPx === 'number' && o.defaultRowHeightPx > 0 ? o.defaultRowHeightPx : undefined,
+    ...(normalizeCellOverflow(o.cellOverflow) !== undefined
+      ? { cellOverflow: normalizeCellOverflow(o.cellOverflow) }
+      : {}),
     enabledUiCapabilities,
     ...(chromeActions !== undefined ? { chromeActions } : {}),
     ...(sparseCells !== undefined ? { cells: sparseCells } : {}),

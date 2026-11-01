@@ -378,7 +378,7 @@ async def put_sheet(path: str, request: Request) -> JSONResponse:
         "rowCount": payload["rowCount"],
         "columns": payload["columns"],
     }
-    for k in ("title", "description", "ghostRowCount", "defaultRowHeightPx",
+    for k in ("title", "description", "ghostRowCount", "defaultRowHeightPx", "cellOverflow",
               "enabledUiCapabilities", "chromeActions", "cells", "cellStyles", "cellSpans", "pdfExport"):
         if k in payload:
             truth[k] = payload[k]

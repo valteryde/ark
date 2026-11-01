@@ -55,3 +55,17 @@ def test_parse_cell_styles_map_keys():
         parse_cell_styles_map({"0:1": {"color": "#fff"}}, max_rows=10, max_cols=10)
     with pytest.raises(CellStyleError):
         parse_cell_styles_map(["nope"], max_rows=10, max_cols=10)
+
+
+def test_white_space_allows_wrap_keywords_only():
+    # Wrap state is a per-cell style so it persists, undoes, and syncs like colour.
+    assert coerce_cell_style({"white-space": "pre-wrap"}) == {"white-space": "pre-wrap"}
+    assert coerce_cell_style({"white-space": "NORMAL"}) == {"white-space": "normal"}
+    assert coerce_cell_style({"white-space": "nowrap"}) == {"white-space": "nowrap"}
+    # `pre` / `pre-line` would honour hard breaks and reshape a row; not allowed.
+    assert coerce_cell_style({"white-space": "pre"}) is None
+    assert coerce_cell_style({"white-space": "pre-line"}) is None
+    assert coerce_cell_style({"white-space": "pre-wrap; position: fixed"}) is None
+    assert parse_cell_style({"white-space": "normal"}) == {"white-space": "normal"}
+    with pytest.raises(CellStyleError):
+        parse_cell_style({"white-space": "pre-line"})

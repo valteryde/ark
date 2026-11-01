@@ -550,3 +550,29 @@ def test_cell_spans_roundtrip_and_row_delete_drops_them(fresh_store):
     fresh_store.patch_sheet("clients", {"cellSpans": []})
     assert "cellSpans" not in fresh_store.get_sheet_payload("clients")
 
+
+
+def test_cell_overflow_mode_round_trips_and_validates(fresh_store):
+    cols = [{"id": "a", "header": "A", "widthPx": 100}]
+
+    clipped = fresh_store.replace_sheet("clipme", {"columns": cols, "cellOverflow": "clip"})
+    assert clipped["cellOverflow"] == "clip"
+
+    # 'spill' is the frontend default: not stored, so the browser keeps spill on.
+    spilled = fresh_store.replace_sheet("clipme", {"columns": cols, "cellOverflow": "spill"})
+    assert "cellOverflow" not in spilled
+
+    for bad in ("wrap", True, 3):
+        with pytest.raises(SheetValidationError):
+            fresh_store.replace_sheet("clipme", {"columns": cols, "cellOverflow": bad})
+
+
+def test_cell_overflow_comes_from_the_partner_template(fresh_store):
+    template = {
+        "version": 1,
+        "columns": [{"id": "notes", "header": "Notes", "widthPx": 180}],
+        "cellOverflow": "clip",
+    }
+    payload, created = fresh_store.get_or_create_sheet("clients/99", template)
+    assert created is True
+    assert payload["cellOverflow"] == "clip"

@@ -1,5 +1,6 @@
 import type {
   CellSpan,
+  SheetCellOverflowMode,
   SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
   UiToolbarCapability,
@@ -26,6 +27,11 @@ export interface PartnerSheetPayload {
   /** Non-editable padding rows after the data grid (see `SpreadsheetConfig.ghostRowCount`). */
   ghostRowCount?: number;
   defaultRowHeightPx?: number;
+  /**
+   * `'clip'` turns off text spill across empty columns (the grid default is `'spill'`).
+   * Omitted means the frontend default. Mirrors `SpreadsheetConfig.cellOverflow`.
+   */
+  cellOverflow?: SheetCellOverflowMode;
   enabledUiCapabilities?: ReadonlyArray<UiToolbarCapability>;
   /**
    * When `false`, the header Export PDF button is hidden and

@@ -23,6 +23,8 @@ const JUSTIFY = new Set([
 const TEXT_ALIGN = new Set(['left', 'right', 'center', 'start', 'end', 'justify']);
 const BORDER_STYLE = new Set(['none', 'solid', 'dashed', 'dotted', 'double']);
 const DECORATION = new Set(['none', 'underline', 'overline', 'line-through']);
+/** Wrap keywords only; `pre` / `pre-line` stay out so hard breaks can't reshape a grid row. */
+const WHITE_SPACE = new Set(['normal', 'nowrap', 'pre-wrap']);
 
 function sanitizeColor(value: string): string | null {
   const t = value.trim();
@@ -92,6 +94,7 @@ const SANITIZERS: Record<string, (value: string) => string | null> = {
   'font-size': fontSize,
   'text-decoration-line': decoration,
   'text-align': (v) => keyword(v, TEXT_ALIGN),
+  'white-space': (v) => keyword(v, WHITE_SPACE),
   'justify-content': (v) => keyword(v, JUSTIFY),
   'align-items': (v) => keyword(v, JUSTIFY),
   'box-shadow': boxShadow,
@@ -111,6 +114,12 @@ export function sanitizeCellStyle(raw: unknown): SpreadsheetCellStyleDeclaration
     if (safe) out[name] = safe;
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** True when a cell's sanitized style asks for wrapped text. */
+export function cellWantsWrap(style: SpreadsheetCellStyleDeclarations | undefined): boolean {
+  const v = sanitizeCellStyle(style)?.['white-space'];
+  return v === 'pre-wrap' || v === 'normal';
 }
 
 export function cellStylesEqual(

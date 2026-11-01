@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS sheets (
     template_name TEXT,
     template_version TEXT,
     cell_spans TEXT,
+    cell_overflow TEXT,
     revision INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -213,6 +214,26 @@ def _coerce_pdf_export(payload: dict[str, Any] | None) -> int | None:
     raise SheetValidationError("pdfExport must be a boolean")
 
 
+CELL_OVERFLOW_MODES = frozenset({"spill", "clip"})
+
+
+def _coerce_cell_overflow(payload: dict[str, Any] | None) -> str | None:
+    """NULL means the frontend default (`spill`): long text runs across empty columns.
+
+    Only `clip` is stored, because that is the one non-default value the UI needs.
+    """
+    if not payload or "cellOverflow" not in payload:
+        return None
+    value = payload["cellOverflow"]
+    if value is None:
+        return None
+    if isinstance(value, str):
+        mode = value.strip().lower()
+        if mode in CELL_OVERFLOW_MODES:
+            return None if mode == "spill" else mode
+    raise SheetValidationError("cellOverflow must be 'spill' or 'clip'")
+
+
 def _parse_json(raw: str | None) -> Any:
     if raw is None:
         return None
@@ -314,6 +335,7 @@ class SheetStore:
         self._ensure_cell_style_column()
         self._ensure_pdf_export_column()
         self._ensure_cell_spans_column()
+        self._ensure_cell_overflow_column()
         self._conn.commit()
 
     def _ensure_pdf_export_column(self) -> None:
@@ -325,6 +347,11 @@ class SheetStore:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sheets)")}
         if "cell_spans" not in cols:
             self._conn.execute("ALTER TABLE sheets ADD COLUMN cell_spans TEXT")
+
+    def _ensure_cell_overflow_column(self) -> None:
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sheets)")}
+        if "cell_overflow" not in cols:
+            self._conn.execute("ALTER TABLE sheets ADD COLUMN cell_overflow TEXT")
 
     def _ensure_cell_style_column(self) -> None:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(cells)")}
@@ -441,6 +468,7 @@ class SheetStore:
                 "enabled_ui_capabilities": _json_or_none(template.get("enabledUiCapabilities")),
                 "chrome_actions": _json_or_none(template.get("chromeActions")),
                 "pdf_export": _coerce_pdf_export(template),
+                "cell_overflow": _coerce_cell_overflow(template),
             }
             col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
         else:
@@ -454,6 +482,7 @@ class SheetStore:
                 "enabled_ui_capabilities": None,
                 "chrome_actions": None,
                 "pdf_export": None,
+                "cell_overflow": None,
             }
             col_index_by_id = {}
             cell_styles = {}
@@ -464,9 +493,9 @@ class SheetStore:
                     """
                     INSERT INTO sheets (path, title, description, columns, row_count,
                         ghost_row_count, default_row_height_px, enabled_ui_capabilities,
-                        chrome_actions, pdf_export, template_name, template_version,
+                        chrome_actions, pdf_export, cell_overflow, template_name, template_version,
                         revision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         path,
@@ -479,6 +508,7 @@ class SheetStore:
                         fields["enabled_ui_capabilities"],
                         fields["chrome_actions"],
                         fields["pdf_export"],
+                        fields["cell_overflow"],
                         template_name,
                         template_version,
                         now,
@@ -910,6 +940,7 @@ class SheetStore:
             raise SheetValidationError(f"rowCount must not exceed {MAX_ROWS}")
         cell_styles = _parse_styles_or_raise(payload.get("cellStyles"))
         pdf_export = _coerce_pdf_export(payload)
+        cell_overflow = _coerce_cell_overflow(payload)
         style_max_row = max((r for r, _c in cell_styles), default=0)
         effective_row_count = max(row_count or 0, len(rows), style_max_row, _BLANK_ROW_COUNT)
         cell_spans = _spans_or_raise(
@@ -959,7 +990,7 @@ class SheetStore:
                 UPDATE sheets SET title = ?, description = ?, columns = ?, row_count = ?,
                     ghost_row_count = ?, default_row_height_px = ?,
                     enabled_ui_capabilities = ?, chrome_actions = ?, pdf_export = ?,
-                    cell_spans = ?, revision = ?, updated_at = ?
+                    cell_overflow = ?, cell_spans = ?, revision = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -972,6 +1003,7 @@ class SheetStore:
                     _json_or_none(payload.get("enabledUiCapabilities")),
                     _json_or_none(payload.get("chromeActions")),
                     pdf_export,
+                    cell_overflow,
                     _dump_spans(cell_spans),
                     revision,
                     now,
@@ -1313,6 +1345,8 @@ class SheetStore:
             payload["chromeActions"] = actions
         if sheet["pdf_export"] == 0:
             payload["pdfExport"] = False
+        if sheet["cell_overflow"]:
+            payload["cellOverflow"] = sheet["cell_overflow"]
         if sheet["template_version"] is not None:
             template: dict[str, Any] = {"version": sheet["template_version"]}
             if sheet["template_name"] is not None:

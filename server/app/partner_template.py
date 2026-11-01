@@ -41,6 +41,7 @@ _TEMPLATE_PASSTHROUGH_KEYS = (
     "rowCount",
     "ghostRowCount",
     "defaultRowHeightPx",
+    "cellOverflow",
     "enabledUiCapabilities",
     "chromeActions",
     "cellStyles",
