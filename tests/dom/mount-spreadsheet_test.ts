@@ -598,3 +598,317 @@ domTest('a selection that includes a read-only column cannot merge', (env) => {
   assertEquals(handle.canMergeCells(), false);
   assertEquals(handle.mergeCells(), false);
 });
+
+/* --- text overflow: long text runs across empty neighbours ---------------- */
+
+function spillOf(container: HTMLElement, row: number, col: number): {
+  spills: boolean;
+  width: string;
+} {
+  const el = container.querySelector(`.sheet-cell[data-row="${row}"][data-col="${col}"]`) as HTMLElement;
+  return {
+    spills: el.classList.contains('sheet-cell--spill'),
+    width: el.style.getPropertyValue('--sheet-spill-w'),
+  };
+}
+
+domTest('long text spills into the empty columns to its right', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'a description that is far too long for one column' });
+  mountSpreadsheet(container, config({}, { data }));
+
+  // Name 160 + Count 100 + Status 120 = 380px mounted; 16px of cell padding.
+  assertEquals(spillOf(container, 1, 1), { spills: true, width: '364px' });
+});
+
+domTest('a neighbour that holds something stops the spill', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({
+    '1:1': 'a description that is far too long for one column',
+    '1:2': 7,
+  });
+  mountSpreadsheet(container, config({}, { data }));
+  assertEquals(spillOf(container, 1, 1).spills, false);
+});
+
+domTest('a styled or commented empty neighbour still blocks the spill', (env) => {
+  const container = env.makeContainer();
+  const filled = createInMemoryDataStore({
+    '1:1': 'long description text',
+    '1:2': { value: '', style: { color: '#111111' } },
+  });
+  mountSpreadsheet(container, config({}, { data: filled }));
+  assertEquals(spillOf(container, 1, 1).spills, false);
+
+  const commented = createInMemoryDataStore({
+    '1:1': 'long description text',
+    '1:3': { value: '', comment: 'heads up' },
+  });
+  const other = env.makeContainer();
+  mountSpreadsheet(other, config({}, { data: commented }));
+  // Column 2 is empty, so text runs to it but not past the commented column 3.
+  assertEquals(spillOf(other, 1, 1), { spills: true, width: '244px' });
+});
+
+domTest('merged neighbours block the spill', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'long description text' }, [
+    { row: 1, col: 2, rowSpan: 1, colSpan: 2 },
+  ]);
+  mountSpreadsheet(container, config({}, { data }));
+  assertEquals(spillOf(container, 1, 1).spills, false);
+});
+
+domTest('right-aligned numbers spill leftwards instead', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:2': 12345678901234 });
+  mountSpreadsheet(container, config({}, { data }));
+  // Count 100 + the empty Name column (160) to its left, minus 16px padding.
+  assertEquals(spillOf(container, 1, 2), { spills: true, width: '244px' });
+
+  const handle = mountSpreadsheet(env.makeContainer(), config({ '1:1': 'Ada', '1:2': 12345678901234 }));
+  assertEquals(handle.getActiveCellAddress(), 'A1');
+});
+
+domTest('cellOverflow: clip keeps every cell inside its own box', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'a description that is far too long' });
+  mountSpreadsheet(container, config({}, { data, cellOverflow: 'clip' }));
+  assertEquals(spillOf(container, 1, 1).spills, false);
+});
+
+domTest('filling a neighbour reclaims the spill from the cell on its left', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'a description that is far too long' });
+  const handle = mountSpreadsheet(container, config({}, { data }));
+  assertEquals(spillOf(container, 1, 1).spills, true);
+
+  assertEquals(handle.applyExternalValue(1, 2, 'now taken'), true);
+  assertEquals(spillOf(container, 1, 1).spills, false);
+  assertEquals(spillOf(container, 1, 1).width, '');
+});
+
+/* --- wrap: only while the wrapped lines fit the row height ----------------- */
+
+function domTestAsync(name: string, fn: (env: DomEnv) => Promise<void>): void {
+  Deno.test(name, async () => {
+    const env = setupDom();
+    try {
+      await fn(env);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    } finally {
+      teardownDom();
+    }
+  });
+}
+
+domTestAsync('white-space style wraps a cell, and falls back to spill when the lines do not fit', async (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({
+    '1:1': { value: 'wrapped text needs vertical room to be readable', style: { 'white-space': 'pre-wrap' } },
+  });
+  const handle = mountSpreadsheet(container, config({}, { data }));
+  const cell = container.querySelector('.sheet-cell[data-row="1"][data-col="1"]') as HTMLElement;
+
+  assertEquals(cell.classList.contains('sheet-cell--wrap'), true);
+  assertEquals(cell.classList.contains('sheet-cell--wrap-nofit'), false);
+  // While wrapped text fits, the cell does not spill.
+  assertEquals(cell.classList.contains('sheet-cell--spill'), false);
+
+  // jsdom has no layout: report a content box taller than the row to force the fallback.
+  Object.defineProperty(env.window.Element.prototype, 'scrollHeight', {
+    configurable: true,
+    get: () => 999,
+  });
+  handle.applyExternalValue(1, 1, 'wrapped text needs vertical room to be readable');
+  await Promise.resolve();
+
+  assertEquals(cell.classList.contains('sheet-cell--wrap-nofit'), true);
+  assertEquals(cell.classList.contains('sheet-cell--spill'), true);
+  assertEquals(cell.style.getPropertyValue('--sheet-spill-w'), '364px');
+});
+
+domTest('clearing the wrap style removes the wrap class', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({
+    '1:1': { value: 'text', style: { 'white-space': 'pre-wrap' } },
+  });
+  const handle = mountSpreadsheet(container, config({}, { data }));
+  const cell = container.querySelector('.sheet-cell[data-row="1"][data-col="1"]') as HTMLElement;
+  assertEquals(cell.classList.contains('sheet-cell--wrap'), true);
+
+  handle.applyExternalStyle(1, 1, null);
+  assertEquals(cell.classList.contains('sheet-cell--wrap'), false);
+});
+
+/* --- value bar ------------------------------------------------------------ */
+
+function barOf(container: HTMLElement): {
+  bar: HTMLElement;
+  input: HTMLInputElement;
+  address: HTMLElement;
+} {
+  const bar = container.querySelector('.sheet-input-bar') as HTMLElement;
+  assertExists(bar);
+  return {
+    bar,
+    input: bar.querySelector('.sheet-input-bar__input') as HTMLInputElement,
+    address: bar.querySelector('.sheet-input-bar__address') as HTMLElement,
+  };
+}
+
+domTest('value bar shows the active cell address and value', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'Ada Lovelace' });
+  const handle = mountSpreadsheet(container, config({}, { data }));
+  const { bar, input, address } = barOf(container);
+
+  assertEquals(input.value, 'Ada Lovelace');
+  assertEquals(address.textContent, 'A1');
+  assertEquals(bar.querySelector('.sheet-input-bar__hint')?.textContent, 'Name');
+  assertEquals(handle.getActiveCellAddress(), 'A1');
+  assertEquals(typeof handle.focusValueBar, 'function');
+});
+
+domTest('value bar commits on Enter and moves down', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'Ada' });
+  mountSpreadsheet(container, config({}, { data }));
+  const { input, address } = barOf(container);
+
+  input.focus();
+  input.value = 'Ada Lovelace';
+  input.dispatchEvent(new env.window.Event('input', { bubbles: true }));
+  input.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+  assertEquals(String(data.get(1, 1)), 'Ada Lovelace');
+  assertEquals(
+    container.querySelector('.sheet-cell[data-row="1"][data-col="1"] .sheet-cell-content')?.textContent,
+    'Ada Lovelace',
+  );
+  assertEquals(container.querySelector('.sheet-cell-active')?.getAttribute('data-row'), '2');
+  assertEquals(address.textContent, 'A2');
+  assertEquals(input.value, '');
+});
+
+domTest('value bar Escape reverts and does not write to the store', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'Ada' });
+  mountSpreadsheet(container, config({}, { data }));
+  const { input } = barOf(container);
+
+  input.focus();
+  input.value = 'typo';
+  input.dispatchEvent(new env.window.Event('input', { bubbles: true }));
+  input.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+  assertEquals(input.value, 'Ada');
+  assertEquals(data.get(1, 1), 'Ada');
+});
+
+domTest('a pending value bar edit commits when the selection moves away', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'Ada' });
+  mountSpreadsheet(container, config({}, { data }));
+  const { input } = barOf(container);
+  const viewport = container.querySelector('.sheet-viewport') as HTMLElement;
+
+  input.focus();
+  input.value = 'Grace Hopper';
+  input.dispatchEvent(new env.window.Event('input', { bubbles: true }));
+
+  viewport.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+
+  assertEquals(String(data.get(1, 1)), 'Grace Hopper');
+  assertEquals(container.querySelector('.sheet-cell-active')?.getAttribute('data-row'), '2');
+});
+
+domTest('in-cell typing mirrors into the value bar', (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:1': 'Ada' });
+  mountSpreadsheet(container, config({}, { data }));
+  const { input } = barOf(container);
+  const viewport = container.querySelector('.sheet-viewport') as HTMLElement;
+
+  viewport.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'F2', bubbles: true }));
+  const cellInput = container.querySelector('.sheet-cell-active .sheet-cell-input') as HTMLInputElement;
+  cellInput.value = 'Ada L';
+  cellInput.dispatchEvent(new env.window.Event('input', { bubbles: true }));
+
+  assertEquals(input.value, 'Ada L');
+});
+
+domTestAsync('a number column rejects a non-numeric value typed in the bar', async (env) => {
+  const container = env.makeContainer();
+  const data = createInMemoryDataStore({ '1:2': 12 });
+  // The cell-anchored rejection hint auto-hides on a 2.2s timer; keep it
+  // cancellable so the test does not leak it.
+  const realSetTimeout = env.window.setTimeout.bind(env.window);
+  const longTimers: number[] = [];
+  env.window.setTimeout = (cb: () => void, ms?: number) => {
+    const id = realSetTimeout(cb, ms) as unknown as number;
+    if ((ms ?? 0) >= 1000) longTimers.push(id);
+    return id;
+  };
+  try {
+    const handle = mountSpreadsheet(container, config({}, { data }));
+    const viewport = container.querySelector('.sheet-viewport') as HTMLElement;
+    viewport.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await Promise.resolve();
+
+    const { input, bar } = barOf(container);
+    assertEquals(input.value, '12');
+    input.focus();
+    input.value = 'twelve';
+    input.dispatchEvent(new env.window.Event('input', { bubbles: true }));
+    input.dispatchEvent(new env.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    assertEquals(input.value, '12');
+    assertEquals(data.get(1, 2), 12);
+    assertEquals(bar.classList.contains('sheet-input-bar--invalid'), true);
+    assertEquals(bar.querySelector('.sheet-input-bar__status')?.textContent, 'Enter a number');
+    // The rejected edit must not move the selection.
+    assertEquals(container.querySelector('.sheet-cell-active')?.getAttribute('data-col'), '2');
+    assertEquals(handle.getActiveCellAddress(), 'B1');
+  } finally {
+    for (const id of longTimers) env.window.clearTimeout(id);
+    env.window.setTimeout = realSetTimeout;
+  }
+});
+
+domTest('read-only columns show their value in the bar without editing', (env) => {
+  const container = env.makeContainer();
+  const cols: SpreadsheetColumn[] = [
+    { id: 'id', header: 'ID', widthPx: 60, readOnly: true },
+    { id: 'name', header: 'Name', widthPx: 160 },
+  ];
+  const data = createInMemoryDataStore({ '1:1': 'REC-7' });
+  mountSpreadsheet(container, config({}, { columns: cols, data, rowCount: 2 }));
+  const { input, bar } = barOf(container);
+
+  assertEquals(input.value, 'REC-7');
+  assertEquals(input.readOnly, true);
+  assertEquals(bar.classList.contains('sheet-input-bar--readonly'), true);
+});
+
+domTestAsync('a range selection labels the bar with its extent', async (env) => {
+  const container = env.makeContainer();
+  mountSpreadsheet(container, config());
+  const viewport = container.querySelector('.sheet-viewport') as HTMLElement;
+  const { address, bar } = barOf(container);
+
+  viewport.dispatchEvent(
+    new env.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, shiftKey: true }),
+  );
+  // The label follows the final selection, applied on the coalescing microtask.
+  await Promise.resolve();
+
+  assertEquals(address.textContent, 'A1:A2');
+  assertEquals(bar.classList.contains('sheet-input-bar--multi'), true);
+});
+
+domTest('showValueBar false omits the bar entirely', (env) => {
+  const container = env.makeContainer();
+  mountSpreadsheet(container, config({}, { showValueBar: false }));
+  assertEquals(container.querySelector('.sheet-input-bar'), null);
+});

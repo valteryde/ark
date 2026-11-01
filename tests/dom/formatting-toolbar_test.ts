@@ -203,6 +203,43 @@ domTest('text color menu sets text color and lists colors already on the sheet',
   assertEquals(handle.getCellStyleAt(1, 1)?.color, undefined);
 });
 
+domTest('wrap text button toggles the white-space style and reflects it back', (env) => {
+  const { toolbar, handle } = mountSheet(env);
+  const wrap = buttonByTitle(toolbar, 'Wrap text');
+  assertExists(wrap.querySelector('i.ph-arrow-elbow-down-right'));
+  assertEquals(wrap.getAttribute('aria-pressed'), 'false');
+
+  wrap.click();
+  assertEquals(handle.getCellStyleAt(1, 1)?.['white-space'], 'pre-wrap');
+  assertEquals(wrap.getAttribute('aria-pressed'), 'true');
+
+  wrap.click();
+  assertEquals(handle.getCellStyleAt(1, 1)?.['white-space'], undefined);
+  assertEquals(wrap.getAttribute('aria-pressed'), 'false');
+
+  // One undo step reverts the wrap, and the button follows the stored style.
+  wrap.click();
+  assertEquals(handle.undo(), true);
+  assertEquals(handle.getCellStyleAt(1, 1)?.['white-space'], undefined);
+  assertEquals(wrap.getAttribute('aria-pressed'), 'false');
+});
+
+domTest('wrap button is omitted when the backend does not expose the capability', (env) => {
+  const gridContainer = env.makeContainer();
+  const handle = mountSpreadsheet(gridContainer, {
+    columns: COLUMNS,
+    rowCount: 3,
+    data: createInMemoryDataStore(),
+    enabledUiCapabilities: ['undo', 'redo', 'align'],
+  });
+  const toolbar = env.makeContainer();
+  mountFormattingToolbar(toolbar, handle, resolveEnabledUiCapabilities(['undo', 'redo', 'align']));
+  assertEquals(
+    [...toolbar.querySelectorAll('button')].some((b) => b.getAttribute('title') === 'Wrap text'),
+    false,
+  );
+});
+
 domTest('clicking outside the color menu closes it', (env) => {
   const { toolbar } = mountSheet(env);
   openColorMenu(env, toolbar, 'Fill color');

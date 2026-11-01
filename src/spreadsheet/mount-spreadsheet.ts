@@ -11,6 +11,18 @@ import {
   parseCommittedCellValue,
   resolveSelectLabel,
 } from './cell-value.ts';
+import { cellAddress, cellRangeLabel } from './cell-address.ts';
+import {
+  SHEET_CELL_PAD_X_PX,
+  SHEET_SELECT_CARET_INSET_PX,
+  blocksSpill,
+  spillContentWidth,
+  spillDirectionFor,
+  spillRoom,
+  spills as spillWidensBox,
+  type SpillSlot,
+} from './cell-overflow.ts';
+import { createCellInputBar, type CellInputBar, type ValueBarMove } from './cell-input-bar.ts';
 import {
   escapeTsvField,
   getInternalClipboardPlain,
@@ -45,6 +57,7 @@ import {
   unmergeSpanList,
 } from './cell-span.ts';
 import { cellKey } from './data-store.ts';
+import { cellWantsWrap } from './cell-style.ts';
 import { cellMapsEqual, createSpreadsheetHistory, type HistoryCellMap } from './history.ts';
 import { jumpToEdge } from './navigation.ts';
 import { createPersistErrorController } from './persist-error.ts';
@@ -88,6 +101,8 @@ export function mountSpreadsheet(
   }
   const defaultRowHeight = config.defaultRowHeightPx ?? 28;
   const rowHeights = Array.from({ length: mountedRowCount }, () => defaultRowHeight);
+  /** `'spill'` (default): long text paints across empty columns to its right. */
+  const cellOverflowMode: 'spill' | 'clip' = config.cellOverflow === 'clip' ? 'clip' : 'spill';
   const columnWidthPersistenceKey = config.columnWidthPersistenceKey;
   const columnWidths = columns.map((c) => clampColumnWidth(c.widthPx));
   const persistedWidths = readPersistedColumnWidths(columnWidthPersistenceKey, columns.length);
@@ -415,6 +430,16 @@ export function mountSpreadsheet(
    */
   let tabAnchorCol: number | null = null;
 
+  /** Value bar above the grid (built once the grid exists; null when config disables it). */
+  let valueBar: CellInputBar | null = null;
+  /**
+   * Coordinate whose value-bar text is not committed yet. The bar mirrors its text
+   * into that cell's in-cell `<input>`, so the existing commit paths (selection
+   * change, paste, undo, toolbar, copy) pick a bar edit up without extra wiring.
+   */
+  let barDirtyCoord: string | null = null;
+  let valueBarSyncScheduled = false;
+
   const persistError = createPersistErrorController({ cells, dataRowCount, dataColumnCount });
 
   let remotePresenceList: RemoteCollabPeer[] = [];
@@ -520,6 +545,21 @@ export function mountSpreadsheet(
     for (const fn of selectionChangeListeners) {
       fn();
     }
+    syncValueBarSoon();
+  }
+
+  /**
+   * Coalesced bar refresh. Selection gestures mutate `active` / `selectArea` in
+   * several steps, so the bar reads the final state on the next microtask instead
+   * of mirroring an intermediate coordinate.
+   */
+  function syncValueBarSoon(): void {
+    if (valueBarSyncScheduled) return;
+    valueBarSyncScheduled = true;
+    queueMicrotask(() => {
+      valueBarSyncScheduled = false;
+      syncValueBar();
+    });
   }
 
   function notifyHistoryChange(): void {
@@ -573,6 +613,7 @@ export function mountSpreadsheet(
     // Scale the grid content only; popovers are siblings positioned via scaled rects.
     gridInner.style.setProperty('zoom', String(zoomFactor));
     syncGhostColumnsToViewport();
+    scheduleSpillRefreshAll();
     notifyZoomChange();
     return zoomFactor;
   }
@@ -654,37 +695,53 @@ export function mountSpreadsheet(
     return true;
   }
 
-  function persistActiveInput(): void {
-    if (!editMode) return;
-    if (isGhostRow(active.row) || isReadOnlyCol(active.col)) return;
-    const el = cells.get(cellKey(active.row, active.col));
+  function rejectionMessageFor(col: SpreadsheetColumn | undefined): string {
+    const vt = columnValueType(col);
+    if (vt === 'number') return 'Enter a number';
+    if (vt === 'link') return 'Enter a valid link';
+    return 'Pick a value from the list';
+  }
+
+  /**
+   * Commit whatever the editor of (row, col) holds. `editMode` covers in-cell
+   * editing; a value-bar edit marks its coordinate dirty and mirrors the text into
+   * the same `<input>`, so bar edits commit through here too — including after
+   * focus has left the cell (click-away, undo, toolbar, paste).
+   */
+  function persistCellEdit(row: number, col: number): void {
+    if (isGhostRow(row) || isReadOnlyCol(col)) return;
+    const key = cellKey(row, col);
+    if (!editMode && barDirtyCoord !== key) return;
+    const el = cells.get(key);
     if (!el) return;
     const input = getCellEditor(el);
     const content = el.querySelector<HTMLDivElement>('.sheet-cell-content');
     if (!input || !content) return;
-    const col = columnAt(active.col);
-    const parsed = parseCommittedCellValue(col, input.value);
+    const colDef = columnAt(col);
+    const parsed = parseCommittedCellValue(colDef, input.value);
     if (!parsed.ok) {
-      const stored = data.get(active.row, active.col);
+      const stored = data.get(row, col);
       input.value = stored !== undefined ? String(stored) : '';
-      const vt = columnValueType(col);
-      showInputRejectedHint(
-        active.row,
-        active.col,
-        vt === 'number' ? 'Enter a number' : vt === 'link' ? 'Enter a valid link' : 'Pick a value from the list',
-      );
+      showInputRejectedHint(row, col, rejectionMessageFor(colDef));
       return;
     }
-    const k = cellKey(active.row, active.col);
     const recordHistory = history !== null && !persistActiveInputSkipHistory;
-    const before = recordHistory ? captureSnapshot([k]) : null;
-    data.set(active.row, active.col, parsed.value);
-    applyCellDisplay(content, col, String(parsed.value));
-    syncCellChrome(active.row, active.col);
+    const before = recordHistory ? captureSnapshot([key]) : null;
+    data.set(row, col, parsed.value);
+    applyCellDisplay(content, colDef, String(parsed.value));
+    syncCellChrome(row, col);
+    if (barDirtyCoord === key) {
+      barDirtyCoord = null;
+      valueBar?.setStatus(null);
+    }
     if (recordHistory && before) {
-      const after = captureSnapshot([k]);
+      const after = captureSnapshot([key]);
       pushHistoryIfChanged(before, after);
     }
+  }
+
+  function persistActiveInput(): void {
+    persistCellEdit(active.row, active.col);
   }
 
   function flushActiveInputSkippingHistory(): void {
@@ -769,6 +826,10 @@ export function mountSpreadsheet(
     if (!el) return;
     applyCellInlineStyleRecord(el, data.getCellStyle?.(row, col));
     updateCommentIndicator(row, col);
+    // Style/value changes move both the wrap flag and what the row can spill into.
+    applyWrapClass(row, col);
+    refreshSpillAround(row, col);
+    scheduleTextFitPass();
   }
 
   let commentEditorAnchor: { row: number; col: number } | null = null;
@@ -1830,6 +1891,8 @@ export function mountSpreadsheet(
         }
       }
     }
+    // Padding columns are empty, so they extend how far long text can run.
+    scheduleSpillRefreshAll();
   }
 
   function syncGhostColumnsToViewport(): void {
@@ -1838,6 +1901,236 @@ export function mountSpreadsheet(
     const vpW = viewport.clientWidth / (zoomFactor || 1);
     const need = Math.ceil((vpW - rowHeaderWidthPx - dataSheetTotalWidth) / ghostColumnWidthPx);
     setGhostColumnCount(need);
+  }
+
+  /* --- text overflow (spill across empty neighbours) and wrapping -------- */
+
+  /** Bound on the walk left from a changed cell to re-anchor cells that spill into it. */
+  const SPILL_LEFT_WALK_LIMIT = 200;
+
+  /** Coordinates whose stored style asks for wrapped text (fit-checked each pass). */
+  const wrapCellKeys = new Set<string>();
+  let spillAllScheduled = false;
+  let textFitScheduled = false;
+
+  function clearCellSpill(el: HTMLElement): void {
+    el.classList.remove('sheet-cell--spill');
+    el.style.removeProperty('--sheet-spill-w');
+  }
+
+  /** Total width of the visible columns a merge covers. */
+  function spanWidthPx(span: CellSpan): number {
+    let w = 0;
+    for (let c = span.col; c < span.col + span.colSpan && c <= dataColumnCount; c++) {
+      if (isHiddenCol(c)) continue;
+      w += columnWidths[c - 1] ?? 0;
+    }
+    return w;
+  }
+
+  /** Total height of the rows a merge covers. */
+  function spanHeightPx(span: CellSpan): number {
+    let h = 0;
+    for (let r = span.row; r < span.row + span.rowSpan && r <= dataRowCount; r++) {
+      if (r < 1) continue;
+      h += rowHeights[r - 1] ?? 0;
+    }
+    return h;
+  }
+
+  /**
+   * Does the coordinate hold anything a spill must not run through? Anything
+   * stored counts: a value, a style (fill, borders, font), or a comment. Cells
+   * inside a merged rectangle also block, because the anchor paints its own box
+   * over the coordinates it covers.
+   */
+  function cellHoldsContent(row: number, col: number): boolean {
+    if (row < 1 || row > dataRowCount) return false;
+    if (col > dataColumnCount) return false; // ghost padding columns hold nothing
+    const stored = data.getStoredCell?.(row, col);
+    const raw = stored !== undefined ? stored.value : data.get(row, col);
+    const style = stored?.style ?? data.getCellStyle?.(row, col);
+    return blocksSpill({
+      displayText: cellPlainTextForSearch(columnAt(col), raw),
+      hasStyle: Boolean(style && Object.keys(style).length > 0),
+      hasComment: Boolean(stored?.comment?.trim()),
+      inSpan: coveringSpan(row, col) !== null,
+    });
+  }
+
+  /** Mounted neighbour widths, walking away from `fromCol` in `delta` steps. */
+  function spillNeighbours(row: number, fromCol: number, delta: number): SpillSlot[] {
+    const slots: SpillSlot[] = [];
+    const lastMounted = dataColumnCount + ghostColumnCount;
+    for (let c = fromCol + delta; c >= 1 && c <= lastMounted; c += delta) {
+      if (isHiddenCol(c)) continue; // zero layout width, paints nothing
+      slots.push({
+        widthPx: widthOfMountedCol1Based(c),
+        blocks: cellHoldsContent(row, c),
+      });
+    }
+    return slots;
+  }
+
+  /**
+   * Recompute one cell's spill allowance: when long text has empty mounted columns
+   * to run through, widen its content box (`--sheet-spill-w`) so the text paints
+   * across those columns and only ellipsizes at the blocker boundary.
+   */
+  function refreshCellSpill(row: number, col: number): void {
+    const el = cells.get(cellKey(row, col));
+    if (!el) return;
+    if (cellOverflowMode === 'clip') {
+      clearCellSpill(el);
+      return;
+    }
+    if (isLinkColumn(columnAt(col))) {
+      clearCellSpill(el); // icon buttons size themselves; no spill
+      return;
+    }
+    if (el.classList.contains('sheet-cell--span-covered')) {
+      clearCellSpill(el);
+      return;
+    }
+    // Wrapped text that still fits its row stays wrapped; spill is the fallback.
+    if (
+      el.classList.contains('sheet-cell--wrap') &&
+      !el.classList.contains('sheet-cell--wrap-nofit')
+    ) {
+      clearCellSpill(el);
+      return;
+    }
+
+    const raw = data.get(row, col);
+    const ownText = cellPlainTextForSearch(columnAt(col), raw);
+    const span = coveringSpan(row, col);
+    const isAnchor = Boolean(span && span.row === row && span.col === col);
+    if (!ownText && !isAnchor) {
+      clearCellSpill(el);
+      return;
+    }
+
+    const startCol = isAnchor ? span!.col : col;
+    const ownLeft = cumulativeColumnWidths[startCol - 1] ?? 0;
+    const ownWidth = isAnchor ? spanWidthPx(span!) : widthOfMountedCol1Based(col);
+    const endCol = isAnchor ? Math.min(span!.col + span!.colSpan - 1, dataColumnCount) : col;
+
+    const rightRoom = Math.min(
+      spillRoom(spillNeighbours(row, endCol, 1)),
+      mountedSheetCellsWidth - (ownLeft + ownWidth),
+    );
+    const leftRoom = Math.min(spillRoom(spillNeighbours(row, startCol, -1)), ownLeft);
+    const inset =
+      SHEET_CELL_PAD_X_PX * 2 +
+      (isSelectColumn(columnAt(col)) ? SHEET_SELECT_CARET_INSET_PX : 0);
+    const direction = spillDirectionFor({
+      style: data.getCellStyle?.(row, col),
+      numberColumn: columnValueType(columnAt(col)) === 'number',
+    });
+    const contentWidth = spillContentWidth({
+      ownWidthPx: ownWidth,
+      direction,
+      rightPx: Math.max(0, rightRoom),
+      leftPx: Math.max(0, leftRoom),
+      contentInsetPx: inset,
+    });
+
+    if (contentWidth <= 0 || !spillWidensBox(ownWidth, contentWidth, inset)) {
+      clearCellSpill(el);
+      return;
+    }
+    el.style.setProperty('--sheet-spill-w', `${Math.round(contentWidth)}px`);
+    el.classList.add('sheet-cell--spill');
+  }
+
+  /**
+   * Refresh a changed coordinate and the run of cells to its left that could have
+   * been spilling into it. Walking stops at the first cell that holds something:
+   * cells further left were already clipped by it, so their allowance is unchanged.
+   */
+  function refreshSpillAround(row: number, col: number): void {
+    refreshCellSpill(row, col);
+    for (let c = col - 1, steps = 0; c >= 1 && steps < SPILL_LEFT_WALK_LIMIT; c--, steps++) {
+      if (isHiddenCol(c)) continue;
+      refreshCellSpill(row, c);
+      if (cellHoldsContent(row, c)) break;
+    }
+  }
+
+  function refreshAllSpill(): void {
+    for (let row = 1; row <= mountedRowCount; row++) {
+      for (let col = 1; col <= dataColumnCount; col++) {
+        if (isHiddenCol(col)) continue;
+        refreshCellSpill(row, col);
+      }
+    }
+  }
+
+  /**
+   * Coalesced full re-measure (column resize, merges, zoom, ghost-column churn).
+   * A microtask, not a frame: it batches everything the current gesture changed
+   * without deferring past the next paint, and it leaves no timer behind.
+   */
+  function scheduleSpillRefreshAll(): void {
+    if (spillAllScheduled) return;
+    spillAllScheduled = true;
+    queueMicrotask(() => {
+      spillAllScheduled = false;
+      refreshAllSpill();
+      scheduleTextFitPass();
+    });
+  }
+
+  /** Wrap on/off straight from the stored `white-space` style key. */
+  function applyWrapClass(row: number, col: number): void {
+    const el = cells.get(cellKey(row, col));
+    if (!el) return;
+    const wantsWrap = cellWantsWrap(data.getCellStyle?.(row, col));
+    el.classList.toggle('sheet-cell--wrap', wantsWrap);
+    const k = cellKey(row, col);
+    if (wantsWrap) {
+      wrapCellKeys.add(k);
+    } else {
+      wrapCellKeys.delete(k);
+      el.classList.remove('sheet-cell--wrap-nofit');
+    }
+  }
+
+  /** Vertical room the text has: the row's height, or the whole merge rectangle. */
+  function availableTextHeightPx(row: number, col: number): number {
+    const span = coveringSpan(row, col);
+    const height =
+      span && span.row === row && span.col === col
+        ? spanHeightPx(span)
+        : rowHeights[row - 1] ?? defaultRowHeight;
+    return Math.max(0, height - 1);
+  }
+
+  /**
+   * Wrapping is only allowed while the wrapped lines still fit the row. Anything
+   * that needs more height falls back to a single line that spills into empty
+   * neighbours (or ellipsizes in place), which is why the fallback re-runs spill.
+   */
+  function runTextFitPass(): void {
+    for (const k of wrapCellKeys) {
+      const el = cells.get(k);
+      if (!el) {
+        wrapCellKeys.delete(k);
+        continue;
+      }
+      const { row, col } = keyToRowCol(k);
+      const content = el.querySelector<HTMLElement>('.sheet-cell-content');
+      if (!content) continue;
+      const fits = content.scrollHeight <= availableTextHeightPx(row, col) + 1;
+      el.classList.toggle('sheet-cell--wrap-nofit', !fits);
+      refreshCellSpill(row, col);
+    }
+  }
+
+  function scheduleTextFitPass(): void {
+    if (textFitScheduled) return;
+    textFitScheduled = true;
+    queueMicrotask(runTextFitPass);
   }
 
   /**
@@ -1862,6 +2155,7 @@ export function mountSpreadsheet(
         cell.removeAttribute('aria-rowspan');
         cell.removeAttribute('aria-colspan');
         if (!isGhostRow(row)) cell.removeAttribute('aria-hidden');
+        applyWrapClass(row, col);
       }
     }
     for (const span of currentSpans()) {
@@ -1902,6 +2196,7 @@ export function mountSpreadsheet(
       }
     }
     paintRemotePresenceOverlays();
+    scheduleSpillRefreshAll();
   }
 
   /**
@@ -1941,6 +2236,133 @@ export function mountSpreadsheet(
   }
 
   layoutCellSpans();
+  refreshAllSpill();
+
+  /* --- value bar: single-line editor for the active cell ----------------- */
+
+  if (config.showValueBar !== false) {
+    valueBar = createCellInputBar({
+      root,
+      onInput: (text) => {
+        const key = cellKey(active.row, active.col);
+        if (isGhostRow(active.row) || !isEditableCol(active.col)) {
+          // The field is read-only; guard anyway because autofill can bypass it.
+          const raw = data.get(active.row, active.col);
+          valueBar?.setValue(raw !== undefined ? String(raw) : '');
+          return;
+        }
+        barDirtyCoord = key;
+        const cellEl = cells.get(key);
+        const inp = cellEl ? getCellEditor(cellEl) : null;
+        if (inp && inp.value !== text) inp.value = text;
+        valueBar?.setStatus(null);
+        valueBar?.setPending(true);
+      },
+      onCommitMove: (move) => commitValueBar(move),
+      onCommit: () => commitValueBar(null),
+      onRevert: () => revertValueBar(),
+      onFocusIn: () => valueBar?.setStatus(null),
+      onFocusOut: () => {},
+    });
+    // The active coordinate is seeded before listeners can fire, so paint the bar once.
+    syncValueBar();
+  }
+
+  /**
+   * Text staged in the cell's editor — in-cell edit mode, or mirrored from the
+   * value bar — or `null` when nothing is pending for that coordinate.
+   */
+  function pendingEditText(row: number, col: number): string | null {
+    if (row !== active.row || col !== active.col) return null;
+    const key = cellKey(row, col);
+    if (!editMode && barDirtyCoord !== key) return null;
+    const el = cells.get(key);
+    const inp = el ? getCellEditor(el) : null;
+    return inp ? inp.value : null;
+  }
+
+  /** Reflect the active coordinate in the bar: label, text, editability, pending state. */
+  function syncValueBar(): void {
+    if (!valueBar) return;
+    const row = active.row;
+    const col = active.col;
+    const rect = currentSelectionRect();
+    const multi = rect.rowSpan > 1 || rect.colSpan > 1;
+    const header = columnAt(col)?.header?.trim() ?? '';
+    valueBar.setLabel(
+      cellRangeLabel(rect),
+      multi ? `${header} · ${rect.rowSpan * rect.colSpan} cells` : header,
+      multi,
+    );
+
+    const pending = pendingEditText(row, col);
+    if (pending !== null) {
+      valueBar.setValue(pending);
+    } else {
+      const raw = isGhostRow(row) ? undefined : data.get(row, col);
+      valueBar.setValue(raw !== undefined ? String(raw) : '');
+    }
+    valueBar.setEditable(!isGhostRow(row) && isEditableCol(col));
+    valueBar.setPending(editMode || barDirtyCoord === cellKey(row, col));
+  }
+
+  /** Drop whatever is staged and go back to the stored value. */
+  function revertValueBar(): void {
+    const key = cellKey(active.row, active.col);
+    barDirtyCoord = null;
+    const cellEl = cells.get(key);
+    const inp = cellEl ? getCellEditor(cellEl) : null;
+    const raw = data.get(active.row, active.col);
+    const stored = raw !== undefined ? String(raw) : '';
+    if (inp) inp.value = stored;
+    valueBar?.setValue(stored);
+    valueBar?.setStatus(null);
+    valueBar?.setPending(false);
+  }
+
+  /**
+   * Commit the bar's text, then move the selection the way the grid's Enter/Tab
+   * would (`move` is null for a plain commit, e.g. blur). A value the column
+   * rejects does not move: the bar explains it inline instead.
+   */
+  function commitValueBar(move: ValueBarMove | null): void {
+    if (!valueBar) return;
+    const row = active.row;
+    const col = active.col;
+    const key = cellKey(row, col);
+
+    if (barDirtyCoord === key) {
+      const cellEl = cells.get(key);
+      const inp = cellEl ? getCellEditor(cellEl) : null;
+      if (inp && !editMode) inp.value = valueBar.getValue();
+      persistCellEdit(row, col);
+      if (barDirtyCoord === key) {
+        // Still staged => the column rejected it. Keep the coordinate, say why.
+        const raw = data.get(row, col);
+        valueBar.setStatus(rejectionMessageFor(columnAt(col)));
+        valueBar.setValue(raw !== undefined ? String(raw) : '');
+        valueBar.setPending(false);
+        return;
+      }
+    }
+
+    if (move === null) {
+      syncValueBar();
+      return;
+    }
+    if (move === 'down' || move === 'up') {
+      const targetCol = clampColVisible(tabAnchorCol ?? col);
+      tabAnchorCol = null;
+      const next = cellAfterStep(row, targetCol, move === 'down' ? 1 : -1, 0);
+      setActive(next.row, next.col);
+    } else {
+      if (tabAnchorCol === null) tabAnchorCol = col;
+      const next = cellAfterStep(row, col, 0, move === 'right' ? 1 : -1);
+      setActive(next.row, next.col);
+    }
+    valueBar.blur();
+    syncValueBar();
+  }
 
   function setColumnWidth(colIndex: number, nextWidth: number, opts?: { persist?: boolean }): void {
     if (colIndex < 1 || colIndex > dataColumnCount) return;
@@ -2308,6 +2730,17 @@ export function mountSpreadsheet(
   container.appendChild(root);
 
   let disconnectLayout: (() => void) | undefined;
+  // Webfont metrics decide both the wrapped line count and how far text reaches,
+  // so re-measure once the sheet's font has actually loaded.
+  const docFonts = (document as Document & { fonts?: { ready?: Promise<unknown> } }).fonts;
+  if (docFonts?.ready && typeof docFonts.ready.then === 'function') {
+    docFonts.ready
+      .then(() => {
+        scheduleSpillRefreshAll();
+      })
+      .catch(() => {});
+  }
+
   if (ghostColumnsEnabled) {
     const ro = new ResizeObserver(() => {
       syncGhostColumnsToViewport();
@@ -2412,6 +2845,14 @@ export function mountSpreadsheet(
     }
   });
 
+  // Long text typed in-cell shows up in the value bar as it is typed.
+  viewport.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement) || !t.classList.contains('sheet-cell-input')) return;
+    if (valueBar && !valueBar.hasFocus()) valueBar.setValue(t.value);
+    valueBar?.setPending(true);
+  });
+
   viewport.addEventListener('input', (e) => {
     const t = e.target;
     if (!(t instanceof HTMLInputElement) || t.dataset.sheetValueType !== 'select') return;
@@ -2494,6 +2935,7 @@ export function mountSpreadsheet(
     } catch {
       /* setSelectionRange may throw for non-text inputs; safe to ignore */
     }
+    syncValueBar();
   }
 
   function blurActiveInput(): void {
@@ -2641,6 +3083,9 @@ export function mountSpreadsheet(
 
     active = { row, col };
     editMode = false;
+    // Whatever was staged for the previous coordinate has already been committed
+    // (or reverted) above; a stale flag would stage it again on the next commit.
+    if (barDirtyCoord && barDirtyCoord !== cellKey(row, col)) barDirtyCoord = null;
     const next = cells.get(cellKey(row, col));
     next?.classList.add('sheet-cell-active');
     next?.setAttribute('aria-selected', 'true');
@@ -2650,6 +3095,9 @@ export function mountSpreadsheet(
       const stored = data.get(row, col);
       inp.value = stored !== undefined ? String(stored) : '';
     }
+    // The selection notify above still describes the previous coordinate, so the
+    // bar needs an explicit sync once `active` and its editor buffer are updated.
+    syncValueBar();
     announceActiveCell();
     focusActiveCell();
     scrollActiveIntoView();
@@ -3234,6 +3682,7 @@ export function mountSpreadsheet(
     if (e.key === 'Escape') {
       e.preventDefault();
       hideSuggestions();
+      barDirtyCoord = null;
       if (editMode) {
         const cellEl = cells.get(cellKey(active.row, active.col));
         const inp = cellEl ? getCellEditor(cellEl) : null;
@@ -3655,6 +4104,13 @@ export function mountSpreadsheet(
     subscribeZoomChange(cb) {
       zoomChangeListeners.add(cb);
       return () => zoomChangeListeners.delete(cb);
+    },
+    getActiveCellAddress() {
+      const rect = currentSelectionRect();
+      return rect.rowSpan > 1 || rect.colSpan > 1 ? cellRangeLabel(rect) : cellAddress(rect.row, rect.col);
+    },
+    focusValueBar() {
+      valueBar?.focus();
     },
     ...(disconnectLayout ? { disconnectLayout } : {}),
   };

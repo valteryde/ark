@@ -11,10 +11,14 @@ export type UiToolbarCapability =
   | 'fill'
   | 'borders'
   | 'align'
+  | 'wrap-text'
   | 'link'
   | 'comment'
   | 'merge-cells'
   | 'functions';
+
+/** How text wider than a cell's box behaves. Default `'spill'`. */
+export type SheetCellOverflowMode = 'spill' | 'clip';
 
 /** Stored cell value is always the canonical `value` string. */
 export interface SpreadsheetSelectOption {
@@ -193,6 +197,17 @@ export interface SpreadsheetConfig {
    * rendered only when this key is provided.
    */
   columnWidthPersistenceKey?: string;
+  /**
+   * Long text in a cell paints across empty columns to its right (default `'spill'`,
+   * like Excel / Google Sheets). `'clip'` keeps every cell inside its own box with an
+   * ellipsis. Wrapping (`white-space` cell style) is independent of this flag.
+   */
+  cellOverflow?: SheetCellOverflowMode;
+  /**
+   * Show the value bar above the grid (default true): the active cell's text in a
+   * plain input, so the caret can be placed mid-string with the mouse.
+   */
+  showValueBar?: boolean;
 }
 
 export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
@@ -204,6 +219,7 @@ export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
   'fill',
   'borders',
   'align',
+  'wrap-text',
   'link',
   'comment',
   'merge-cells',
@@ -361,4 +377,11 @@ export interface SpreadsheetMountHandle {
   setZoom(factor: number): number;
   /** Subscribe to zoom changes (e.g. to sync a toolbar control). */
   subscribeZoomChange(cb: () => void): () => void;
+  /**
+   * A1-style address of the active coordinate (`A1:C3` when a range is selected).
+   * Empty string when nothing is selectable.
+   */
+  getActiveCellAddress(): string;
+  /** Move keyboard focus to the value bar above the grid (no-op when it is hidden). */
+  focusValueBar(): void;
 }

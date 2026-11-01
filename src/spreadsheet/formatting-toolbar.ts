@@ -2,6 +2,13 @@ import type { SpreadsheetMountHandle, UiToolbarCapability } from './types.ts';
 import { dismissOpenColorMenu, mountToolbarColorMenu } from './color-menu.ts';
 
 const BORDER_INSET = 'inset 0 0 0 1px #64748b';
+/** Per-cell wrap state lives in the style map so it survives persistence and undo. */
+const WRAP_CSS_PROP = 'white-space';
+
+function isWrapValue(v: string | undefined): boolean {
+  const t = (v ?? '').trim().toLowerCase();
+  return t === 'pre-wrap' || t === 'normal';
+}
 
 const CAP_ICONS: Record<UiToolbarCapability, string> = {
   undo: 'ph-arrow-counter-clockwise',
@@ -9,6 +16,7 @@ const CAP_ICONS: Record<UiToolbarCapability, string> = {
   'format-bold': 'ph-text-b',
   'format-italic': 'ph-text-italic',
   'format-strikethrough': 'ph-text-strikethrough',
+  'wrap-text': 'ph-arrow-elbow-down-right',
   fill: 'ph-paint-bucket',
   borders: 'ph-grid-four',
   align: 'ph-text-align-left',
@@ -23,7 +31,7 @@ const TOOLBAR_GROUPS: UiToolbarCapability[][] = [
   ['undo', 'redo'],
   ['format-bold', 'format-italic', 'format-strikethrough'],
   ['fill', 'borders'],
-  ['align'],
+  ['align', 'wrap-text'],
   ['merge-cells'],
   ['link', 'comment'],
   ['functions'],
@@ -115,6 +123,7 @@ export function mountFormattingToolbar(
     alignL?: HTMLButtonElement;
     alignC?: HTMLButtonElement;
     alignR?: HTMLButtonElement;
+    wrap?: HTMLButtonElement;
     merge?: HTMLButtonElement;
     unmerge?: HTMLButtonElement;
   } = {};
@@ -216,6 +225,17 @@ export function mountFormattingToolbar(
           });
         });
         ui.strike = b;
+        host.appendChild(b);
+        continue;
+      }
+
+      if (cap === 'wrap-text') {
+        const b = iconButton(CAP_ICONS[cap], 'Wrap text');
+        b.addEventListener('click', () => {
+          const on = sheet.everyTargetCellStyle(WRAP_CSS_PROP, isWrapValue);
+          sheet.mergeCellStyleOnSelection({ [WRAP_CSS_PROP]: on ? undefined : 'pre-wrap' });
+        });
+        ui.wrap = b;
         host.appendChild(b);
         continue;
       }
@@ -383,6 +403,11 @@ export function mountFormattingToolbar(
       );
       ui.alignR.classList.toggle('app-toolbar__icon--active', on);
       ui.alignR.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    if (ui.wrap) {
+      const on = sheet.everyTargetCellStyle(WRAP_CSS_PROP, isWrapValue);
+      ui.wrap.classList.toggle('app-toolbar__icon--active', on);
+      ui.wrap.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
   }
 

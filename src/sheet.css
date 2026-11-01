@@ -763,6 +763,9 @@ a.app-sheet-tabs__tab {
   --sheet-radius: 0;
   --sheet-shadow: none;
   --sheet-input-top-margin: 1px;
+  /* Horizontal padding inside a cell; JS mirrors it (SHEET_CELL_PAD_X_PX) when it
+     works out how far long text may run across empty columns. */
+  --sheet-cell-pad-x: 0.5rem;
   /* Ghost padding columns: keep column structure with very faint dividers (low alpha ≈ “nearly transparent”) */
   --sheet-ghost-grid-line: rgb(0 0 0 / 0.045);
 
@@ -785,6 +788,117 @@ a.app-sheet-tabs__tab {
 .sheet-root *::before,
 .sheet-root *::after {
   box-sizing: border-box;
+}
+
+/* --- Value bar: the active cell's text in a plain input, above the grid ---- */
+
+/*
+ * A single-line `<input>` on purpose: clicking places the caret mid-string and
+ * native text selection / browser undo work like any form field, which is what
+ * makes long values editable (in-cell editing keeps its own caret rules).
+ */
+.sheet-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding: 0.3rem 0.5rem;
+  background: var(--sheet-header-bg);
+  border-bottom: 1px solid var(--sheet-border);
+  font-size: 0.75rem;
+  color: var(--sheet-header-text);
+}
+
+.sheet-input-bar__address {
+  flex: 0 0 auto;
+  min-width: 3.5rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--sheet-border);
+  border-radius: 4px;
+  background: var(--sheet-surface);
+  font-weight: 600;
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--sheet-cell-text);
+}
+
+.sheet-input-bar__hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-size: 0.625rem;
+  font-weight: 600;
+  opacity: 0.72;
+}
+
+.sheet-input-bar__field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--sheet-surface);
+  border: 1px solid var(--sheet-border);
+  border-radius: 4px;
+}
+
+.sheet-input-bar__field:focus-within {
+  border-color: var(--sheet-accent);
+  box-shadow: 0 0 0 2px var(--sheet-accent-bg);
+}
+
+.sheet-input-bar__glyph {
+  flex: 0 0 auto;
+  padding: 0 0.35rem 0 0.45rem;
+  font-size: 0.95rem;
+  opacity: 0.45;
+}
+
+.sheet-input-bar--pending .sheet-input-bar__glyph {
+  opacity: 0.9;
+  color: var(--sheet-accent);
+}
+
+.sheet-input-bar__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.3rem 0.45rem 0.3rem 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  color: var(--sheet-cell-text);
+}
+
+.sheet-input-bar--readonly .sheet-input-bar__input {
+  color: #4a5058;
+}
+
+.sheet-input-bar--readonly .sheet-input-bar__field {
+  background: #e8eaef;
+}
+
+.sheet-input-bar__status {
+  flex: 0 0 auto;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #b42318;
+}
+
+.sheet-input-bar__status[hidden] {
+  display: none;
+}
+
+.sheet-input-bar--invalid .sheet-input-bar__field {
+  border-color: #f97066;
+  box-shadow: 0 0 0 2px rgb(180 35 24 / 12%);
 }
 
 .sheet-grid-inner {
@@ -987,7 +1101,7 @@ a.app-sheet-tabs__tab {
   height: 100%;
   display: flex;
   align-items: center;
-  padding: 0 0.5rem;
+  padding: 0 var(--sheet-cell-pad-x);
   font-size: 0.8125rem;
   color: var(--sheet-cell-text);
   border-right: 1px solid rgb(232 232 232 / 0.85);
@@ -1105,6 +1219,59 @@ a.app-sheet-tabs__tab {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* --- Text overflow: long text runs across the empty columns to its right --- */
+
+/*
+ * `--sheet-spill-w` is set by JS (see cell-overflow.ts) to the content width the
+ * cell may use: its own box plus the empty, unstyled, uncommented columns next
+ * to it. The content element is already `z-index: 1` and the cell is not a
+ * stacking context, so the text paints over the neighbours' backgrounds without
+ * any extra layer. Ellipsis still applies, but only at the blocker boundary.
+ */
+.sheet-cell--spill {
+  overflow: visible;
+}
+
+.sheet-cell--spill .sheet-cell-content {
+  /* Stop being a shrinkable flex item: the box is allowed to grow past the
+     cell's own width, and `--sheet-spill-w` (set by JS) is what caps it, so the
+     ellipsis still lands at the first occupied neighbour. */
+  flex: 0 0 auto;
+  max-width: var(--sheet-spill-w, 100%);
+}
+
+/* Number columns keep their right alignment, so their text escapes leftwards
+   instead — same mechanism, the flex alignment places the widened content. */
+
+/* --- Text wrap: only while the wrapped lines still fit the row ------------- */
+
+/*
+ * Wrap state comes from the stored `white-space` style key. JS measures the
+ * result and adds `--wrap-nofit` when the lines no longer fit the row height
+ * (or the whole merged rectangle); then the cell falls back to a single line
+ * that spills or ellipsizes.
+ */
+.sheet-cell--wrap:not(.sheet-cell--wrap-nofit) .sheet-cell-content {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  text-overflow: clip;
+}
+
+.sheet-cell--wrap.sheet-cell--wrap-nofit .sheet-cell-content {
+  white-space: nowrap;
+}
+
+/* A merged rectangle that wraps lines fills the whole span, not just its first row. */
+.sheet-cell--span-anchor.sheet-cell--wrap:not(.sheet-cell--wrap-nofit) {
+  align-items: flex-start;
+}
+
+.sheet-cell--span-anchor.sheet-cell--wrap:not(.sheet-cell--wrap-nofit) .sheet-cell-content {
+  width: 100%;
 }
 
 /* Number columns: right-align by default (explicit toolbar alignment overrides
