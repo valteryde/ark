@@ -645,6 +645,25 @@ def test_partner_pdf_export(client):
     assert client.put("/api/partner/sheets/clients", json=bad, headers=AUTH).status_code == 400
 
 
+def test_partner_pdf_layout_error_is_a_clean_error(client, monkeypatch):
+    """A sheet ReportLab cannot lay out answers 422, not an unhandled 500."""
+    from app import partner_api
+    from app.pdf_export import PdfLayoutError
+
+    def cannot_lay_out(payload):
+        raise PdfLayoutError("pdf layout failed")
+
+    body = _styled_sheet()
+    assert client.put("/api/partner/sheets/clients", json=body, headers=AUTH).status_code == 200
+    monkeypatch.setattr(partner_api, "render_sheet_pdf", cannot_lay_out)
+
+    response = client.get("/api/partner/sheets/clients/pdf", headers=AUTH)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "pdf_layout_failed"
+    logs = client.get("/api/partner/audit-logs?action=sheet.export", headers=AUTH).json()
+    assert logs["total"] == 0
+
+
 def test_partner_pdf_disabled_without_token(fresh_store, monkeypatch):
     monkeypatch.delenv("ARK_PARTNER_API_TOKEN", raising=False)
     c = TestClient(main_module.app)

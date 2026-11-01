@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from app.pdf_export import (
@@ -163,3 +165,69 @@ def test_render_starts_with_pdf_magic():
     )
     assert body.startswith(b"%PDF")
     assert filename == "Client-21.pdf"
+
+
+_PAGE_RE = re.compile(rb"/Type\s*/Page[^s]")
+
+
+def _page_count(body: bytes) -> int:
+    return len(_PAGE_RE.findall(body))
+
+
+def _tall_sheet(rows: int) -> dict:
+    """Four columns. Only B carries text, so every row keeps a real height.
+
+    The other columns are empty and get merged into tall bands, which is what a
+    grade sheet template looks like.
+    """
+    return {
+        "title": "Grade sheet",
+        "path": "karakter/d/1",
+        "columns": [
+            {"id": "a", "header": "A", "widthPx": 48},
+            {"id": "b", "header": "B", "widthPx": 320},
+            {"id": "c", "header": "C", "widthPx": 48},
+            {"id": "d", "header": "D", "widthPx": 48},
+        ],
+        "rows": [{"a": "", "b": f"row {i}", "c": "", "d": ""} for i in range(1, rows + 1)],
+        "cellStyles": {
+            f"{row}:{col}": {"background-color": "#cfe2f3"}
+            for row in range(1, rows + 1)
+            for col in (1, 3, 4)
+        },
+    }
+
+
+def test_merge_taller_than_one_page_still_exports():
+    """A merge covering more rows than fit on one page must not kill the export.
+
+    ReportLab keeps a merged rectangle whole when it breaks a table between
+    rows, so a merge taller than one page leaves no legal break at all. The
+    build then raises LayoutError and the caller gets a 500 instead of a PDF.
+    """
+    payload = _tall_sheet(80)
+    payload["cellSpans"] = [{"row": 1, "col": 1, "rowSpan": 80, "colSpan": 1}]
+    body, _ = render_sheet_pdf(payload)
+    assert body.startswith(b"%PDF")
+    assert _page_count(body) >= 2
+
+
+def test_grade_sheet_merges_like_the_karakter_template_export():
+    """The merge shape the karakter template seeds: two full-height bands."""
+    payload = _tall_sheet(45)
+    payload["cellSpans"] = [
+        {"row": 1, "col": 1, "rowSpan": 1, "colSpan": 4},
+        {"row": 2, "col": 4, "rowSpan": 44, "colSpan": 1},
+        {"row": 3, "col": 1, "rowSpan": 43, "colSpan": 1},
+        {"row": 7, "col": 3, "rowSpan": 29, "colSpan": 1},
+    ]
+    body, _ = render_sheet_pdf(payload)
+    assert body.startswith(b"%PDF")
+    assert _page_count(body) >= 2
+
+
+def test_merge_that_fits_one_page_stays_on_one_page():
+    payload = _tall_sheet(12)
+    payload["cellSpans"] = [{"row": 2, "col": 1, "rowSpan": 11, "colSpan": 1}]
+    body, _ = render_sheet_pdf(payload)
+    assert _page_count(body) == 1

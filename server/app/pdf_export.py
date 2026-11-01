@@ -18,6 +18,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus.doctemplate import LayoutError
 
 from .cell_span import CellSpanError, parse_cell_spans
 
@@ -40,6 +41,10 @@ _BORDER = Color(100 / 255, 116 / 255, 139 / 255)  # #64748b
 
 class PdfTooLarge(Exception):
     """The sheet has more data rows than a single export allows."""
+
+
+class PdfLayoutError(Exception):
+    """The sheet could not be laid out on paper, even after splitting."""
 
 
 @dataclass(frozen=True)
@@ -362,9 +367,8 @@ def _column_widths(widths_px: tuple[float, ...]) -> list[float]:
     return [w / total * _PAGE_WIDTH for w in widths_px]
 
 
-def render_sheet_pdf(payload: dict[str, Any]) -> tuple[bytes, str]:
-    """Return `(pdf_bytes, filename)`. Raises PdfTooLarge before drawing."""
-    model = build_pdf_model(payload)
+def _story_for(model: PdfModel, *, split_in_row: bool) -> list[Any]:
+    """Title, spacer, and the sheet table. Builds fresh flowables when called."""
     cache: dict[tuple[Any, ...], ParagraphStyle] = {}
     header_cell = PdfCellModel(text="", bold=True)
     data: list[list[Any]] = [[_paragraph(header, header_cell, cache) for header in model.headers]]
@@ -401,10 +405,20 @@ def render_sheet_pdf(payload: dict[str, Any]) -> tuple[bytes, str]:
         Spacer(1, 6),
     ]
     if model.headers:
-        table = LongTable(data, colWidths=_column_widths(model.col_widths_px), repeatRows=1)
+        table = LongTable(
+            data,
+            colWidths=_column_widths(model.col_widths_px),
+            repeatRows=1,
+            splitByRow=1,
+            splitInRow=1 if split_in_row else 0,
+        )
         table.setStyle(commands)
         story.append(table)
+    return story
 
+
+def _draw(story: list[Any], title: str) -> bytes:
+    """Lay the story out on landscape A4 and return the PDF bytes."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -413,7 +427,27 @@ def render_sheet_pdf(payload: dict[str, Any]) -> tuple[bytes, str]:
         rightMargin=36,
         topMargin=36,
         bottomMargin=36,
-        title=model.title,
+        title=title,
     )
     doc.build(story)
-    return buffer.getvalue(), model.filename
+    return buffer.getvalue()
+
+
+def render_sheet_pdf(payload: dict[str, Any]) -> tuple[bytes, str]:
+    """Return `(pdf_bytes, filename)`. Raises PdfTooLarge before drawing.
+
+    A page break normally goes between rows, and ReportLab keeps every merged
+    rectangle whole. A merge taller than one page therefore leaves no legal
+    break at all and the build raises LayoutError; that sheet is drawn again
+    with the break allowed to run through the merge, so the merge (its fill and
+    border) continues on the next page instead of failing the whole export.
+    """
+    model = build_pdf_model(payload)
+    try:
+        body = _draw(_story_for(model, split_in_row=False), model.title)
+    except LayoutError:
+        try:
+            body = _draw(_story_for(model, split_in_row=True), model.title)
+        except LayoutError as exc:
+            raise PdfLayoutError(f"pdf layout failed: {exc}") from exc
+    return body, model.filename

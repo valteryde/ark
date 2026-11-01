@@ -124,6 +124,7 @@ Returns the stored sheet as a PDF attachment (`Content-Type: application/pdf`, `
 | **404** | No document at `{path}`. Neither route creates a sheet. |
 | **403** | Browser route only, when the document has `pdfExport: false` (`{ "detail": "pdf_export_disabled" }`). |
 | **413** | More than 10,000 data rows (`{ "detail": "pdf_too_large" }`). |
+| **422** | The sheet could not be laid out on paper even after splitting (`{ "detail": "pdf_layout_failed" }`). |
 
 The file is landscape A4. It includes the sheet title (or the path), a repeating header row, and visible columns only (`hidden` columns are left out). Select cells print the option **label**. Link cells print the URL. Column widths follow `widthPx`. Empty rows between values stay; trailing empty `rowCount` padding does not. A cell that has a style and no value is still printed.
 
@@ -370,7 +371,7 @@ The toolbar capability is **`merge-cells`**. Merging keeps the anchor value and 
 
 `PATCH` may include `cellSpans` to replace the list without rewriting every cell. `[]` clears merges. `PUT` replaces the document: omit `cellSpans` and the stored list is cleared. Templates may include `cellSpans`. A span that starts on a hidden column is kept in the document and omitted from the PDF, because the anchor value is not in a visible column.
 
-PDF export draws each in-range span as one table cell. The anchor's text and style fill the rectangle. Covered cells are left blank in the file.
+PDF export draws each in-range span as one table cell. The anchor's text and style fill the rectangle. Covered cells are left blank in the file. A taller sheet breaks between rows, with the header row repeated. A merged rectangle taller than one page leaves no legal break between rows, so that merge is broken at the page edge instead: its fill and border continue on the next page, and the anchor text prints where the merge starts.
 
 ## Browser-facing API (for reference)
 

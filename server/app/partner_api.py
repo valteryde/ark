@@ -22,7 +22,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from .collab import hub
-from .pdf_export import PdfTooLarge, render_sheet_pdf
+from .pdf_export import PdfLayoutError, PdfTooLarge, render_sheet_pdf
 from .store import SheetValidationError, get_store, normalize_sheet_path
 
 router = APIRouter(prefix="/api/partner")
@@ -186,6 +186,8 @@ def _pdf_download(payload: dict[str, Any]) -> Response:
         body, filename = render_sheet_pdf(payload)
     except PdfTooLarge:
         return JSONResponse({"detail": "pdf_too_large"}, status_code=413)
+    except PdfLayoutError:
+        return JSONResponse({"detail": "pdf_layout_failed"}, status_code=422)
     return Response(
         content=body,
         media_type="application/pdf",
