@@ -1,10 +1,15 @@
+import base64
 import re
+import zlib
 
 import pytest
 
 from app.pdf_export import (
     MAX_PDF_DATA_ROWS,
     PdfTooLarge,
+    _Page,
+    _page_commands,
+    _plan_pages,
     build_pdf_model,
     parse_pdf_color,
     render_sheet_pdf,
@@ -231,3 +236,147 @@ def test_merge_that_fits_one_page_stays_on_one_page():
     payload["cellSpans"] = [{"row": 2, "col": 1, "rowSpan": 11, "colSpan": 1}]
     body, _ = render_sheet_pdf(payload)
     assert _page_count(body) == 1
+
+
+_HEADER_HEIGHT = 18.0
+_ROW_HEIGHT = 18.0
+_TOOLBAR_BORDER = "inset 0 0 0 1px #64748b"
+
+
+def _band_sheet(rows: int) -> dict:
+    """Two columns: a merged band running down one of them, and a plain one.
+
+    Only the anchor carries the fill and border, because that is how a merge is
+    stored and how the grid paints it. Green is exact in the PDF operators, so
+    the test can look for `0 1 0 rg` without worrying about rounding.
+    """
+    return {
+        "title": "Band",
+        "path": "karakter/d/1",
+        "columns": [
+            {"id": "a", "header": "A", "widthPx": 60},
+            {"id": "b", "header": "B", "widthPx": 320},
+        ],
+        "rows": [{"a": "", "b": f"row {i}"} for i in range(1, rows + 1)],
+        "cellStyles": {"2:1": {"background-color": "#00ff00", "box-shadow": _TOOLBAR_BORDER}},
+        "cellSpans": [{"row": 2, "col": 1, "rowSpan": rows - 1, "colSpan": 1}],
+    }
+
+
+_STREAM_RE = re.compile(rb"stream\r?\n(.*?)endstream", re.S)
+
+
+def _drawing_ops(body: bytes) -> bytes:
+    """The drawing operators of a generated PDF.
+
+    ReportLab writes each page stream as ASCII85 around raw Deflate, so the
+    operators are only readable after undoing both.
+    """
+    parts = []
+    for raw in _STREAM_RE.findall(body):
+        raw = raw.strip()
+        try:
+            raw = base64.a85decode(raw, adobe=True)
+        except ValueError:
+            pass  # an uncompressed or unrelated stream is used as it is
+        try:
+            raw = zlib.decompressobj().decompress(raw)
+        except zlib.error:
+            pass
+        parts.append(raw)
+    return b" ".join(parts)
+
+
+def _fills(commands: list[tuple]) -> list[tuple]:
+    """BACKGROUND commands as (start, stop, 0xrrggbb). Color has no __eq__."""
+    return [(c[1], c[2], c[3].hexval()) for c in commands if c[0] == "BACKGROUND"]
+
+
+def _band_heights(ops: bytes) -> list[float]:
+    """Heights of the green rectangles the export painted, in document order."""
+    return [
+        abs(float(match[3]))
+        for match in re.findall(
+            rb"0 1 0 rg\s*\nn ([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) re f\*", ops
+        )
+    ]
+
+
+def test_header_row_prints_once_on_every_page():
+    """No page may start twice.
+
+    Letting ReportLab split one long table was the old export. A merge that had
+    to stay whole could end a page after two rows, and the rest of the table
+    carried on underneath, header row drawn a second time on the same page.
+    """
+    body, _ = render_sheet_pdf(_band_sheet(45))
+    pages = _page_count(body)
+    assert pages == 2
+    ops = _drawing_ops(body)
+    assert ops.count(b"(A) Tj") == pages
+    assert ops.count(b"(B) Tj") == pages
+
+
+def test_band_that_runs_past_a_page_keeps_fill_and_border_on_the_next():
+    """The merge is cut at the page edge, and its style keeps running below it.
+
+    The fill and border live on the anchor cell only. When the merge was painted
+    from that one cell, the part on the second page came out plain white.
+    """
+    body, _ = render_sheet_pdf(_band_sheet(45))
+    pages = _page_count(body)
+    ops = _drawing_ops(body)
+
+    # One fragment of the band per page, and all of its 44 rows still painted.
+    band_heights = _band_heights(ops)
+    assert len(band_heights) == pages
+    assert abs(sum(band_heights) - 44 * _ROW_HEIGHT) < 1.0
+    # The toolbar border is drawn around the fragment on each page as well.
+    # ReportLab drops the leading zero, so accept either spelling.
+    assert len(re.findall(rb"\.?392157 \.?454902 \.?545098 RG", ops)) == pages
+
+
+def _page_plan(first: int, last: int) -> _Page:
+    """A planned page of equal-height rows, for the style command tests."""
+    heights = (_HEADER_HEIGHT,) * (1 + last - first)
+    return _Page(first, last, heights, sum(heights), False)
+
+
+def test_pages_hold_every_row_with_one_header_row_each():
+    pages = _plan_pages(_HEADER_HEIGHT, [_ROW_HEIGHT] * 45, 479.3, 523.3)
+    assert [(page.first, page.last) for page in pages] == [(0, 25), (25, 45)]
+    for index, page in enumerate(pages):
+        room = 479.3 if index == 0 else 523.3
+        assert page.heights == (_HEADER_HEIGHT, *([_ROW_HEIGHT] * (page.last - page.first)))
+        assert page.height <= room
+        assert page.break_in_row is False
+        if page.last < 45:
+            # Packing stops only when no further row would have fitted.
+            assert page.height + _ROW_HEIGHT > room
+
+
+def test_one_row_taller_than_a_page_breaks_inside_that_row():
+    pages = _plan_pages(_HEADER_HEIGHT, [900.0, _ROW_HEIGHT], 479.3, 523.3)
+    assert [(page.first, page.last) for page in pages] == [(0, 1), (1, 2)]
+    assert pages[0].break_in_row is True
+    assert pages[1].break_in_row is False
+
+
+def test_merge_is_clipped_to_the_rows_a_page_prints():
+    model = build_pdf_model(_band_sheet(20))
+    top_commands = _page_commands(model, _page_plan(0, 12))
+    bottom_commands = _page_commands(model, _page_plan(12, 20))
+    assert ("SPAN", (0, 2), (0, 12)) in top_commands
+    assert ("SPAN", (0, 1), (0, 8)) in bottom_commands
+    assert ((0, 2), (0, 12), "0x00ff00") in _fills(top_commands)
+    assert ((0, 1), (0, 8), "0x00ff00") in _fills(bottom_commands)
+    for commands, start, stop in (
+        (top_commands, (0, 2), (0, 12)),
+        (bottom_commands, (0, 1), (0, 8)),
+    ):
+        boxes = [c for c in commands if c[0] == "BOX"]
+        assert [(c[1], c[2]) for c in boxes] == [(start, stop)]
+        assert boxes[0][3] == 0.75
+    # Cells the merge covers keep no style commands of their own.
+    assert len(_fills(top_commands)) == 2  # the header band and the merge fragment
+    assert len(_fills(bottom_commands)) == 2

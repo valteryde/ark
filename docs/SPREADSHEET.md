@@ -87,7 +87,7 @@ The grid models two modes per cell, mirroring Google Sheets / Excel:
 
 The bundled app shows an **Export PDF** button in the header. It is on when the sheet payload omits **`pdfExport`**. Set **`pdfExport`** to **`false`** to hide the button; the browser download route then returns **403**. The partner route `GET /api/partner/sheets/{path}/pdf` still returns the file. See **[PARTNER_API.md](PARTNER_API.md)** for the PDF contents and cell styles it paints.
 
-A sheet taller than one page breaks between rows, and the header row is repeated. A merged rectangle taller than one page is broken at the page edge instead, so its fill and border continue on the next page and the merged text prints on the page where the merge starts.
+A sheet taller than one page is packed into pages by row height, so the header row prints once at the top of each page and never twice on the same page. A merge that reaches the page edge is cut there: its fill and border keep running on the next page, and the merged text prints on the page where the merge starts.
 
 ## Zoom
 
