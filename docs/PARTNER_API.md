@@ -200,7 +200,7 @@ Optional partner request header:
 
 ### `PUT /api/partner/sheets/{path}` (create / replace)
 
-Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`, `cellSpans`, `pdfExport`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**). `cellSpans` seeds merged rectangles (see **Merged cells**). Omitting `cellSpans` on `PUT` clears merges, because `PUT` replaces the document. `pdfExport: false` turns off the in-app export button; omitting it leaves export on.
+Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `cellOverflow`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`, `cellSpans`, `pdfExport`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**). `cellSpans` seeds merged rectangles (see **Merged cells**). Omitting `cellSpans` on `PUT` clears merges, because `PUT` replaces the document. `pdfExport: false` turns off the in-app export button; omitting it leaves export on.
 
 ### `PATCH /api/partner/sheets/{path}` (partial update)
 
@@ -247,6 +247,7 @@ Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `col
 | `cellStyles` | Sparse per-cell styles keyed `"row:col"` (1-based). Present only when at least one cell has formatting. See **Cell styles**. |
 | `cellSpans` | Merged rectangles. Present only when the sheet has at least one. See **Merged cells**. |
 | `defaultRowHeightPx` | Passed through to config |
+| `cellOverflow` | **`"clip"`** turns text spill off (each cell is clipped with an ellipsis). Omitted or **`"spill"`** keeps the default: long text paints across the columns to its right while those are empty. See SPREADSHEET.md, **Text overflow and wrap**. |
 | `enabledUiCapabilities` | Toolbar flags (see SPREADSHEET.md) |
 | `pdfExport` | Present only as **`false`**, which hides the header **Export PDF** button and makes `GET /api/sheets/{path}/pdf` return **403**. Omitted means export is allowed. The partner route ignores this flag. |
 | `chromeActions` | Up to **8** header links (top right). Each item is an object (see below). Invalid or unsafe URLs are skipped. |
@@ -344,7 +345,7 @@ Omit **`icon`** for the same open-in-new glyph. Omit **`label`** to use the colu
 
 ## Cell styles
 
-Any cell can store presentation CSS. Styles survive refresh, partner `GET`/`PUT`/`PATCH`, and live collab. The toolbar (bold, italic, strikethrough, fill, text color, borders, alignment, link underline) writes this same object.
+Any cell can store presentation CSS. Styles survive refresh, partner `GET`/`PUT`/`PATCH`, and live collab. The toolbar (bold, italic, strikethrough, fill, text color, borders, alignment, wrap, link underline) writes this same object.
 
 `cellStyles` is a map of **`"row:col"`** (1-based grid indices, same keys as sparse `cells`) to a style object. Keys use kebab-case CSS properties. Unknown properties and unsafe values are rejected or dropped so a payload cannot inject URLs or layout CSS.
 
@@ -356,6 +357,7 @@ Any cell can store presentation CSS. Styles survive refresh, partner `GET`/`PUT`
 | `font-size` | `8px`–`96px` |
 | `text-decoration-line` | `underline`, `line-through`, `overline`, `none` (space-separated) |
 | `text-align` | `left`, `right`, `center`, `start`, `end`, `justify` |
+| `white-space` | `normal`, `nowrap`, `pre-wrap` — the **Wrap text** toolbar toggle writes `pre-wrap` (`pre` / `pre-line` are not allowed: hard breaks would reshape the row) |
 | `justify-content`, `align-items` | `flex-start`, `center`, `flex-end`, `start`, `end`, and the other flex keywords the toolbar uses |
 | `box-shadow` | `inset 0 0 0 1px` plus a color (the toolbar border) |
 | `border-width` | `0px`–`8px` |

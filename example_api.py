@@ -30,7 +30,7 @@ logger = logging.getLogger("example-partner")
 app = FastAPI()
 
 # Bump when you change a template below; Ark records it on each new document.
-TEMPLATE_VERSION = 1
+TEMPLATE_VERSION = 2
 
 
 def _optional_example_partner_token(request: Request) -> None:
@@ -50,14 +50,62 @@ CLIENTS_TEMPLATE = {
     "chromeActions": [
         {"label": "Records", "href": "/records", "icon": "table"},
     ],
+    # Columns chosen so the text-overflow behaviour is visible without any setup:
+    # long values spill across empty neighbours and stop at a filled one.
     "columns": [
         {"id": "id", "header": "ID", "widthPx": 72, "readOnly": True},
-        {"id": "name", "header": "Name", "widthPx": 240},
+        {"id": "name", "header": "Name", "widthPx": 180},
+        {"id": "notes", "header": "Notes", "widthPx": 200},
+        {
+            "id": "status",
+            "header": "Status",
+            "widthPx": 130,
+            "valueType": "select",
+            "selectOptions": [
+                {"value": "prospect", "label": "Prospect", "backgroundColor": "#eef2ff", "color": "#3730a3"},
+                {"value": "active", "label": "Active", "backgroundColor": "#d8f3dc", "color": "#1b4332"},
+                {"value": "churned", "label": "Churned", "backgroundColor": "#fde2e1", "color": "#7f1d1d"},
+            ],
+        },
     ],
     "rows": [
-        {"id": 1, "name": "Client 1"},
-        {"id": 2, "name": "Client 2"},
+        {
+            "id": 1,
+            "name": "Acme Industrial",
+            # Empty Status next to it -> this note spills across that column.
+            "notes": "Renewed after the Q3 review; expansion into the Nordics is pending legal sign-off.",
+        },
+        {
+            "id": 2,
+            "name": "Beta Logistics",
+            # Status holds a chip -> the note clips with an ellipsis at that edge.
+            "notes": "Multi-site rollout scheduled for spring, contingent on the new depot lease.",
+            "status": "active",
+        },
+        {
+            "id": 3,
+            "name": "Cobalt Studios",
+            "notes": "Renewal at 90% of list; ask for a two-year term.",
+            "status": "prospect",
+        },
+        {
+            # Row 4 asks for wrapped text in a single 28px row: it does not fit, so the
+            # cell falls back to a single line that spills. Row 5 is part of the merge
+            # below, so its Name stays empty.
+            "id": 4,
+            "name": "Delta Foods Group International Ltd",
+            "notes": "Contact moved to the procurement team; the old account manager email bounces.",
+            "status": "churned",
+        },
+        {"id": 5},
     ],
+    # Wrap on: row 4's Notes (spills, not enough row height) and the merged Name
+    # below, which has two rows of height and therefore does wrap.
+    "cellStyles": {
+        "4:3": {"white-space": "pre-wrap"},
+        "4:2": {"white-space": "pre-wrap"},
+    },
+    "cellSpans": [{"row": 4, "col": 2, "rowSpan": 2, "colSpan": 1}],
 }
 
 RECORDS_TEMPLATE = {
