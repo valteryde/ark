@@ -117,6 +117,17 @@ All routes require **`Authorization: Bearer <ARK_PARTNER_API_TOKEN>`**.
 
 Returns the stored sheet as a PDF attachment (`Content-Type: application/pdf`, `Content-Disposition: attachment`). The same file is what the header **Export PDF** button downloads from **`GET /api/sheets/{path}/pdf`** (browser `ark_token`, same auth as a sheet read).
 
+The partner route takes two query flags. Both are `true` unless the URL says otherwise, so a partner that sends nothing gets the whole sheet:
+
+| Flag | Effect |
+| ---- | ------ |
+| `headers=false` | Leaves the column header row out, on the first page and on every other. Those labels are not data, so a file without them starts at the first data row and every page gains the height the header used to take. |
+| `empty_columns=false` (`emptyColumns=false`) | Drops a column that holds nothing: no value in any row and no stored style of its own. A column that is only painted — a fill, a border, a merge band — counts as content and stays. Header text is not content, so a labelled column with no data goes. Hidden columns are left out either way. |
+
+Any of `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` spell a flag; `headers=` with no value keeps the default. A value the server cannot read is a **400** with `{ "detail": "headers must be true or false" }`. The two flags are recorded in the `sheet.export` audit entry as `details.headers` and `details.emptyColumns`.
+
+The browser route does not take the flags: in-app export always shows headers and every visible column.
+
 | Status | When |
 | ------ | ---- |
 | **200** | PDF body, starting with `%PDF`. |
@@ -124,13 +135,14 @@ Returns the stored sheet as a PDF attachment (`Content-Type: application/pdf`, `
 | **404** | No document at `{path}`. Neither route creates a sheet. |
 | **403** | Browser route only, when the document has `pdfExport: false` (`{ "detail": "pdf_export_disabled" }`). |
 | **413** | More than 10,000 data rows (`{ "detail": "pdf_too_large" }`). |
-| **422** | The sheet could not be laid out on paper even after splitting (`{ "detail": "pdf_layout_failed" }`). |
+| **422** | The sheet could not be laid out on paper (`{ "detail": "pdf_layout_failed" }`). |
+| **400** | Partner route, when `headers` or `empty_columns` is neither true nor false. |
 
-The file is landscape A4. It includes the sheet title (or the path), a repeating header row, and visible columns only (`hidden` columns are left out). Select cells print the option **label**. Link cells print the URL. Column widths follow `widthPx`. Empty rows between values stay; trailing empty `rowCount` padding does not. A cell that has a style and no value is still printed.
+The file is landscape A4. It includes the sheet title (or the path), a repeating header row, and visible columns only (`hidden` columns are left out). With a header row, every page of a long sheet prints it once, and a merge that crosses a page break is cut there so its fill and border carry on down the next page. Select cells print the option **label**. Link cells print the URL. Column widths follow `widthPx`. Empty rows between values stay; trailing empty `rowCount` padding does not. A cell that has a style and no value is still printed.
 
 Painted cell styles are the toolbar declarations stored in `cellStyles`: `background-color`, `color` (`#rgb`, `#rrggbb`, `#rrggbbaa` with alpha dropped), bold (`font-weight` 600/700/`bold`/`bolder`), italic, underline, and strikethrough (`text-decoration-line` tokens), alignment (`justify-content`: `center`, `flex-end`/`end`, otherwise left — this overrides the default right alignment of number columns), and the toolbar border (`box-shadow: inset 0 0 0 1px #64748b`). Other CSS keys are ignored. A select option's `color` and `backgroundColor` are used when the cell has no style of its own for that property. Merged rectangles in `cellSpans` are drawn as one table cell from the anchor. A span whose anchor column is hidden is omitted.
 
-If a document's path is literally `{path}/pdf`, that URL returns the JSON document instead of a PDF of the parent, same collision rule as audit logs.
+If a document's path is literally `{path}/pdf`, that URL returns the JSON document instead of a PDF of the parent, same collision rule as audit logs. The flags above belong to the export, so they are not read on that JSON response.
 
 A successful download is audited as **`sheet.export`**.
 
@@ -371,7 +383,7 @@ The toolbar capability is **`merge-cells`**. Merging keeps the anchor value and 
 
 `PATCH` may include `cellSpans` to replace the list without rewriting every cell. `[]` clears merges. `PUT` replaces the document: omit `cellSpans` and the stored list is cleared. Templates may include `cellSpans`. A span that starts on a hidden column is kept in the document and omitted from the PDF, because the anchor value is not in a visible column.
 
-PDF export draws each in-range span as one table cell. The anchor's text and style fill the rectangle. Covered cells are left blank in the file. A taller sheet breaks between rows, with the header row repeated. A merged rectangle taller than one page leaves no legal break between rows, so that merge is broken at the page edge instead: its fill and border continue on the next page, and the anchor text prints where the merge starts.
+PDF export draws each in-range span as one table cell. The anchor's text and style fill the rectangle. Covered cells are left blank in the file. Rows are packed into pages by their measured height, so the header row prints once at the top of every page and never twice on the same page. A merge that reaches a page edge is cut there, and its fill and border keep running on the next page; its text stays on the page where the merge starts. Only a single row taller than a whole page breaks inside itself.
 
 ## Browser-facing API (for reference)
 

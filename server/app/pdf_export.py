@@ -3,6 +3,10 @@
 Reads the same payload the browser and partner GET routes return, including
 `cellStyles` (kebab-case CSS). Only the declarations the formatting toolbar
 writes are painted. Unknown keys are ignored.
+
+Rows are measured and packed into pages here rather than left to ReportLab's
+table splitting, so every page gets exactly one header row and a merge that
+crosses a page edge is cut at that edge with its style on both sides.
 """
 
 from __future__ import annotations
@@ -17,8 +21,8 @@ from reportlab.lib.colors import Color, black
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer
-from reportlab.platypus.doctemplate import LayoutError
+from reportlab.platypus import Frame, PageTemplate, Paragraph, Spacer, Table
+from reportlab.platypus.doctemplate import BaseDocTemplate, LayoutError
 
 from .cell_span import CellSpanError, parse_cell_spans
 
@@ -33,7 +37,13 @@ _RGBA_RE = re.compile(
 _FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _BOLD = frozenset({"700", "600", "bold", "bolder"})
 _ALIGN = {"left": TA_LEFT, "center": TA_CENTER, "right": TA_RIGHT}
-_PAGE_WIDTH = landscape(A4)[0] - 72  # 36pt margins on each side
+_PAGE_MARGIN = 36.0
+_PAGE_SIZE = landscape(A4)
+# The frame covers exactly the box inside the margins, so one page holds
+# `_PAGE_HEIGHT` points and the table can be as wide as the frame.
+_PAGE_WIDTH = _PAGE_SIZE[0] - 2 * _PAGE_MARGIN
+_PAGE_HEIGHT = _PAGE_SIZE[1] - 2 * _PAGE_MARGIN
+_TITLE_GAP = 6.0
 _GRID = Color(0.82, 0.82, 0.82)
 _HEADER_FILL = Color(0.96, 0.96, 0.96)
 _BORDER = Color(100 / 255, 116 / 255, 139 / 255)  # #64748b
@@ -69,6 +79,12 @@ class PdfModel:
     rows: tuple[tuple[PdfCellModel, ...], ...]
     # ReportLab SPAN boxes: (col0, table_row, col1, table_row). Header is row 0.
     spans: tuple[tuple[int, int, int, int], ...] = ()
+    # Coordinates inside a merge rectangle, anchor included, as (col, table_row).
+    # The anchor's style paints the whole rectangle, so these cells carry no
+    # fill or border of their own.
+    merged_cells: frozenset[tuple[int, int]] = frozenset()
+    # False when the caller asked for a file without the column header row.
+    show_headers: bool = True
 
 
 def parse_pdf_color(value: Any) -> tuple[float, float, float] | None:
@@ -203,8 +219,18 @@ def _style_for_key(cell_styles: Any, row: int, col: int) -> dict[str, Any] | Non
     return raw if isinstance(raw, dict) else None
 
 
-def build_pdf_model(payload: dict[str, Any]) -> PdfModel:
-    """Visible columns and data rows, including style-only cells."""
+def build_pdf_model(
+    payload: dict[str, Any],
+    *,
+    headers: bool = True,
+    empty_columns: bool = True,
+) -> PdfModel:
+    """Visible columns and data rows, including style-only cells.
+
+    `headers` is false when the file should leave the column header row out.
+    `empty_columns` is false when columns that hold nothing should be dropped:
+    auto-hide, which is off unless the caller asks for it.
+    """
     columns = payload.get("columns") if isinstance(payload.get("columns"), list) else []
     rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
     visible: list[tuple[int, dict[str, Any]]] = []
@@ -214,6 +240,10 @@ def build_pdf_model(payload: dict[str, Any]) -> PdfModel:
         visible.append((index, column))
 
     cell_styles = payload.get("cellStyles")
+    if not empty_columns and visible:
+        filled = _columns_with_content(columns, rows, cell_styles)
+        visible = [column for column in visible if column[0] in filled]
+
     visible_cols = {index for index, _column in visible}
     max_style_row = 0
     if isinstance(cell_styles, dict):
@@ -233,12 +263,12 @@ def build_pdf_model(payload: dict[str, Any]) -> PdfModel:
         path = payload.get("path")
         title = path.strip() if isinstance(path, str) and path.strip() else "Sheet"
 
-    headers: list[str] = []
+    headers_out: list[str] = []
     widths: list[float] = []
     body: list[tuple[PdfCellModel, ...]] = []
     for _index, column in visible:
         header = column.get("header")
-        headers.append(header if isinstance(header, str) else str(column.get("id", "")))
+        headers_out.append(header if isinstance(header, str) else str(column.get("id", "")))
         width = column.get("widthPx")
         widths.append(float(width) if isinstance(width, (int, float)) and width > 0 else 120.0)
 
@@ -260,34 +290,65 @@ def build_pdf_model(payload: dict[str, Any]) -> PdfModel:
         [index for index, _column in visible],
         row_count,
     )
+    merged: set[tuple[int, int]] = set()
     for col0, row0, col1, row1 in spans:
         for table_row in range(row0, row1 + 1):
             line = list(body[table_row - 1])
             for col in range(col0, col1 + 1):
+                merged.add((col, table_row))
                 if table_row == row0 and col == col0:
                     continue
-                cleared = line[col]
-                line[col] = PdfCellModel(
-                    text="",
-                    fill=cleared.fill,
-                    text_color=cleared.text_color,
-                    align=cleared.align,
-                    bold=cleared.bold,
-                    italic=cleared.italic,
-                    underline=cleared.underline,
-                    strike=cleared.strike,
-                    toolbar_border=cleared.toolbar_border,
-                )
+                # Like the grid, a merge takes its look from the anchor, and a
+                # covered coordinate keeps no text of its own.
+                line[col] = PdfCellModel(text="")
             body[table_row - 1] = tuple(line)
 
     return PdfModel(
         title=title.strip(),
         filename=pdf_filename(payload),
-        headers=tuple(headers),
+        headers=tuple(headers_out),
         col_widths_px=tuple(widths),
         rows=tuple(body),
         spans=tuple(spans),
+        merged_cells=frozenset(merged),
+        show_headers=headers and bool(headers_out),
     )
+
+
+def _columns_with_content(
+    columns: list[Any],
+    rows: list[Any],
+    cell_styles: Any,
+) -> set[int]:
+    """Original 1-based indexes of columns that hold a value or a stored style.
+
+    A column that is only painted still counts as having content: a band, a
+    blocked-out grade cell, or a bordered cell is a reason to print the column.
+    Header text is not content, and neither is a merge that covers the column
+    without anything on it.
+    """
+    filled: set[int] = set()
+    for index, column in enumerate(columns, start=1):
+        if not isinstance(column, dict):
+            continue
+        col_id = column.get("id")
+        if not isinstance(col_id, str):
+            filled.add(index)  # a column the export cannot read is kept
+            continue
+        for source in rows:
+            if not isinstance(source, dict):
+                continue
+            value = source.get(col_id)
+            if value is not None and value != "":
+                filled.add(index)
+                break
+    if isinstance(cell_styles, dict):
+        for key, style in cell_styles.items():
+            if not isinstance(key, str) or not _CELL_KEY_RE.fullmatch(key):
+                continue
+            if isinstance(style, dict) and style:
+                filled.add(int(key.split(":")[1]))
+    return filled
 
 
 def _pdf_spans(
@@ -364,90 +425,310 @@ def _column_widths(widths_px: tuple[float, ...]) -> list[float]:
     if not widths_px:
         return []
     total = sum(widths_px) or 1.0
-    return [w / total * _PAGE_WIDTH for w in widths_px]
+    widths = [w / total * _PAGE_WIDTH for w in widths_px]
+    # Keep the rounding drift out of the last column, so the table is never a
+    # hair wider than the frame it is drawn into.
+    widths[-1] = _PAGE_WIDTH - sum(widths[:-1])
+    return widths
 
 
-def _story_for(model: PdfModel, *, split_in_row: bool) -> list[Any]:
-    """Title, spacer, and the sheet table. Builds fresh flowables when called."""
-    cache: dict[tuple[Any, ...], ParagraphStyle] = {}
-    header_cell = PdfCellModel(text="", bold=True)
-    data: list[list[Any]] = [[_paragraph(header, header_cell, cache) for header in model.headers]]
-    commands: list[tuple[Any, ...]] = [
-        ("BACKGROUND", (0, 0), (-1, 0), _HEADER_FILL),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("GRID", (0, 0), (-1, -1), 0.3, _GRID),
-    ]
-    for col0, row0, col1, row1 in model.spans:
-        commands.append(("SPAN", (col0, row0), (col1, row1)))
-    for r, row in enumerate(model.rows, start=1):
-        line: list[Any] = []
-        for c, cell in enumerate(row):
-            line.append(_paragraph(cell.text, cell, cache))
-            if cell.fill is not None:
-                commands.append(("BACKGROUND", (c, r), (c, r), Color(*cell.fill)))
-            if cell.toolbar_border:
-                commands.append(("BOX", (c, r), (c, r), 0.75, _BORDER))
-        data.append(line)
+_GRID_COMMANDS: tuple[tuple[Any, ...], ...] = (
+    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ("TOPPADDING", (0, 0), (-1, -1), 3),
+    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ("GRID", (0, 0), (-1, -1), 0.3, _GRID),
+)
+_HEADER_BAND: tuple[Any, ...] = ("BACKGROUND", (0, 0), (-1, 0), _HEADER_FILL)
 
-    story: list[Any] = [
-        Paragraph(escape(model.title), ParagraphStyle(
+_PROBE_HEIGHT = 1_000_000.0
+
+
+def _table_commands(header_row: bool) -> list[tuple[Any, ...]]:
+    """Whole-table commands, starting with the header band when it has one."""
+    return ([_HEADER_BAND] if header_row else []) + list(_GRID_COMMANDS)
+
+
+def _model_spans(model: PdfModel, shift: int) -> list[tuple[int, int, int, int]]:
+    """Merge rectangles in the row numbers of one table.
+
+    A model row numbers the header 0 and data rows from 1. A table that prints
+    no header row, or that only holds part of the sheet, numbers its own rows
+    from 0, so its rectangles sit `shift` model rows lower.
+    """
+    return [(col0, row0 - shift, col1, row1 - shift) for col0, row0, col1, row1 in model.spans]
+
+
+@dataclass(frozen=True)
+class _Page:
+    """One printed page: `model.rows[first:last]` and their row heights.
+
+    `heights` starts with the header row when the file prints one. A page whose
+    only row is taller than the page may break inside that row.
+    """
+
+    first: int
+    last: int
+    heights: tuple[float, ...]
+    height: float
+    break_in_row: bool
+
+
+def _title_flowable(model: PdfModel) -> Paragraph:
+    return Paragraph(
+        escape(model.title),
+        ParagraphStyle(
             name="ark-pdf-title",
             fontName="Helvetica-Bold",
             fontSize=14,
             leading=18,
             textColor=black,
             spaceAfter=8,
-        )),
-        Spacer(1, 6),
-    ]
-    if model.headers:
-        table = LongTable(
-            data,
-            colWidths=_column_widths(model.col_widths_px),
-            repeatRows=1,
-            splitByRow=1,
-            splitInRow=1 if split_in_row else 0,
+        ),
+    )
+
+
+def _flowables(
+    model: PdfModel,
+    cache: dict[tuple[Any, ...], ParagraphStyle],
+) -> tuple[list[Any], list[list[Any]]]:
+    """Header and body cells as flowables, built once and reused per page.
+
+    The header list is empty when the file leaves the column headers out.
+    """
+    header: list[Any] = []
+    if model.show_headers:
+        header_cell = PdfCellModel(text="", bold=True)
+        header = [_paragraph(header, header_cell, cache) for header in model.headers]
+    body = [[_paragraph(cell.text, cell, cache) for cell in row] for row in model.rows]
+    return header, body
+
+
+def _measure_heights(
+    header: list[Any],
+    body: list[list[Any]],
+    model: PdfModel,
+    widths: list[float],
+) -> tuple[float | None, list[float]]:
+    """The header row height (or None when it is not printed) and every data row.
+
+    One probe table holds the whole sheet with the real paddings and the real
+    merge rectangles, so a merge stretches the rows it covers the same way it
+    does on paper and the pages planned from these heights really do fit.
+    """
+    probe = Table(([header] if header else []) + body, colWidths=widths)
+    commands = _table_commands(bool(header))
+    for col0, row0, col1, row1 in _model_spans(model, 0 if header else 1):
+        commands.append(("SPAN", (col0, row0), (col1, row1)))
+    probe.setStyle(commands)
+    probe.wrap(_PAGE_WIDTH, _PROBE_HEIGHT)
+    # ReportLab keeps the per-row heights it worked out on the table itself.
+    heights = list(getattr(probe, "_rowHeights", ()) or ())
+    if len(heights) != len(body) + (1 if header else 0) or any(h is None for h in heights):
+        raise PdfLayoutError("pdf could not measure the sheet rows")
+    values = [float(h) for h in heights]
+    if not header:
+        return None, values
+    return values[0], values[1:]
+
+
+def _plan_pages(
+    header_height: float | None,
+    row_heights: list[float],
+    first_page_height: float,
+    other_page_height: float,
+) -> list[_Page]:
+    """Pack measured rows into pages. With a header row, every page carries it.
+
+    A merge that straddles a page edge is cut there rather than pushed whole to
+    the next page, so a tall band keeps running down the sheet.
+    """
+    leading: tuple[float, ...] = () if header_height is None else (header_height,)
+    header_space = sum(leading)
+    pages: list[_Page] = []
+    index = 0
+    total = len(row_heights)
+    available = first_page_height
+    while index < total:
+        budget = available - header_space
+        take = 0
+        used = 0.0
+        while index + take < total and used + row_heights[index + take] <= budget:
+            used += row_heights[index + take]
+            take += 1
+        if take == 0:
+            # One row taller than a page still gets its own page, and the table
+            # for it is allowed to break inside that row.
+            take, used = 1, row_heights[index]
+        pages.append(
+            _Page(
+                first=index,
+                last=index + take,
+                heights=(*leading, *row_heights[index:index + take]),
+                height=header_space + used,
+                break_in_row=used > budget,
+            )
         )
-        table.setStyle(commands)
-        story.append(table)
+        index += take
+        available = other_page_height
+    if not pages:
+        pages.append(
+            _Page(
+                first=0,
+                last=0,
+                heights=leading,
+                height=header_space,
+                break_in_row=False,
+            )
+        )
+    return pages
+
+
+def _page_commands(model: PdfModel, page: _Page) -> list[tuple[Any, ...]]:
+    """Paint one page: the header band, plain cell fills, and merge rectangles.
+
+    Every merge is clipped to the rows this page prints, which is what lets a
+    band that runs over a page edge keep its fill and border on the next page.
+    """
+    header_rows = 1 if model.show_headers else 0
+    # Model rows minus this page's own row numbers.
+    shift = page.first + 1 - header_rows
+    commands = _table_commands(bool(header_rows))
+    for col0, row0, col1, row1 in model.spans:  # model rows, header at 0
+        top = max(row0, page.first + 1)
+        bottom = min(row1, page.last)
+        if top > bottom:
+            continue
+        anchor = model.rows[row0 - 1][col0]
+        top -= shift
+        bottom -= shift
+        if top < bottom or col0 < col1:
+            commands.append(("SPAN", (col0, top), (col1, bottom)))
+        if anchor.fill is not None:
+            commands.append(("BACKGROUND", (col0, top), (col1, bottom), Color(*anchor.fill)))
+        if anchor.toolbar_border:
+            commands.append(("BOX", (col0, top), (col1, bottom), 0.75, _BORDER))
+    for index, row in enumerate(model.rows[page.first:page.last]):
+        table_row = index + header_rows
+        model_row = page.first + index + 1
+        for col, cell in enumerate(row):
+            if (col, model_row) in model.merged_cells:
+                continue
+            if cell.fill is not None:
+                commands.append(("BACKGROUND", (col, table_row), (col, table_row), Color(*cell.fill)))
+            if cell.toolbar_border:
+                commands.append(("BOX", (col, table_row), (col, table_row), 0.75, _BORDER))
+    return commands
+
+
+def _table_for_page(
+    model: PdfModel,
+    page: _Page,
+    header: list[Any],
+    body: list[list[Any]],
+    widths: list[float],
+) -> Table:
+    """One page as its own table.
+
+    A page never splits, because ReportLab would then squeeze the first rows of
+    the next page into the space left over and print the header row again under
+    the one it already printed. Only a single row taller than a whole page is
+    allowed to break, and that page has no header to repeat.
+    """
+    table = Table(
+        ([header] if header else []) + body[page.first:page.last],
+        colWidths=widths,
+        rowHeights=list(page.heights),
+        splitByRow=1 if page.break_in_row else 0,
+        splitInRow=1 if page.break_in_row else 0,
+    )
+    table.setStyle(_page_commands(model, page))
+    return table
+
+
+def _story_for(model: PdfModel) -> list[Any]:
+    """Title, spacer, and one table per page.
+
+    The sheet is paginated from measured row heights instead of letting ReportLab
+    split one long table, because that split can start a page with only a couple
+    of rows and then repeat the header row again below it on the same page. Here
+    a page holds as many rows as fit and prints the header exactly once.
+    """
+    title = _title_flowable(model)
+    story: list[Any] = [title, Spacer(1, _TITLE_GAP)]
+    if not model.headers:
+        return story
+    cache: dict[tuple[Any, ...], ParagraphStyle] = {}
+    header, body = _flowables(model, cache)
+    widths = _column_widths(model.col_widths_px)
+    header_height, row_heights = _measure_heights(header, body, model, widths)
+    used = (
+        title.wrap(_PAGE_WIDTH, _PAGE_HEIGHT)[1]
+        + title.getSpaceBefore()
+        + title.getSpaceAfter()
+        + _TITLE_GAP
+    )
+    pages = _plan_pages(header_height, row_heights, _PAGE_HEIGHT - used, _PAGE_HEIGHT)
+    for page in pages:
+        # A file with no header row and no data rows prints the title only.
+        if not page.heights:
+            continue
+        story.append(_table_for_page(model, page, header, body, widths))
     return story
 
 
 def _draw(story: list[Any], title: str) -> bytes:
-    """Lay the story out on landscape A4 and return the PDF bytes."""
+    """Lay the story out on landscape A4 and return the PDF bytes.
+
+    The frame is placed by hand with no extra padding, so the planned page
+    heights match the space the story is actually given.
+    """
     buffer = BytesIO()
-    doc = SimpleDocTemplate(
+    doc = BaseDocTemplate(
         buffer,
-        pagesize=landscape(A4),
-        leftMargin=36,
-        rightMargin=36,
-        topMargin=36,
-        bottomMargin=36,
+        pagesize=_PAGE_SIZE,
+        leftMargin=_PAGE_MARGIN,
+        rightMargin=_PAGE_MARGIN,
+        topMargin=_PAGE_MARGIN,
+        bottomMargin=_PAGE_MARGIN,
         title=title,
     )
+    frame = Frame(
+        _PAGE_MARGIN,
+        _PAGE_MARGIN,
+        _PAGE_WIDTH,
+        _PAGE_HEIGHT,
+        id="ark-sheet",
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+    )
+    doc.addPageTemplates([PageTemplate(id="ark-sheet", frames=[frame])])
     doc.build(story)
     return buffer.getvalue()
 
 
-def render_sheet_pdf(payload: dict[str, Any]) -> tuple[bytes, str]:
+def render_sheet_pdf(
+    payload: dict[str, Any],
+    *,
+    headers: bool = True,
+    empty_columns: bool = True,
+) -> tuple[bytes, str]:
     """Return `(pdf_bytes, filename)`. Raises PdfTooLarge before drawing.
 
-    A page break normally goes between rows, and ReportLab keeps every merged
-    rectangle whole. A merge taller than one page therefore leaves no legal
-    break at all and the build raises LayoutError; that sheet is drawn again
-    with the break allowed to run through the merge, so the merge (its fill and
-    border) continues on the next page instead of failing the whole export.
+    A merged rectangle that runs past a page edge is cut at that edge, and its
+    fill and border continue on the next page; only its text stays with the
+    anchor. Raises PdfLayoutError when even that cannot be laid out.
+
+    `headers` is false for a file without the column header row, and
+    `empty_columns` is false to leave out columns that hold no value and no
+    style. Both default to printing what the sheet shows.
     """
-    model = build_pdf_model(payload)
+    model = build_pdf_model(payload, headers=headers, empty_columns=empty_columns)
     try:
-        body = _draw(_story_for(model, split_in_row=False), model.title)
-    except LayoutError:
-        try:
-            body = _draw(_story_for(model, split_in_row=True), model.title)
-        except LayoutError as exc:
-            raise PdfLayoutError(f"pdf layout failed: {exc}") from exc
+        body = _draw(_story_for(model), model.title)
+    except LayoutError as exc:
+        raise PdfLayoutError(f"pdf layout failed: {exc}") from exc
     return body, model.filename

@@ -645,12 +645,54 @@ def test_partner_pdf_export(client):
     assert client.put("/api/partner/sheets/clients", json=bad, headers=AUTH).status_code == 400
 
 
+def test_partner_pdf_export_can_be_narrowed_by_the_partner(client, monkeypatch):
+    """`?headers=false` and `?empty_columns=false` reach the renderer."""
+    from app import partner_api
+
+    calls: list[dict] = []
+
+    def record(payload, **options):
+        calls.append(options)
+        return b"%PDF fake", "Clients.pdf"
+
+    body = _styled_sheet()
+    assert client.put("/api/partner/sheets/clients", json=body, headers=AUTH).status_code == 200
+    monkeypatch.setattr(partner_api, "render_sheet_pdf", record)
+
+    assert client.get("/api/partner/sheets/clients/pdf", headers=AUTH).status_code == 200
+    assert calls[-1] == {"headers": True, "empty_columns": True}
+
+    client.get("/api/partner/sheets/clients/pdf?headers=false&empty_columns=false", headers=AUTH)
+    assert calls[-1] == {"headers": False, "empty_columns": False}
+
+    # camelCase is accepted the way the rest of the partner API spells it.
+    client.get("/api/partner/sheets/clients/pdf?headers=0&emptyColumns=off", headers=AUTH)
+    assert calls[-1] == {"headers": False, "empty_columns": False}
+
+    client.get("/api/partner/sheets/clients/pdf?headers=true&empty_columns=1", headers=AUTH)
+    assert calls[-1] == {"headers": True, "empty_columns": True}
+
+    bad = client.get("/api/partner/sheets/clients/pdf?headers=maybe", headers=AUTH)
+    assert bad.status_code == 400
+    assert bad.json()["detail"] == "headers must be true or false"
+    assert not calls or len(calls) == 4  # the bad call never reached the renderer
+
+    logs = client.get("/api/partner/audit-logs?action=sheet.export", headers=AUTH).json()
+    # Newest first: the last export printed everything, the one before it nothing extra.
+    details = [log["details"] for log in logs["auditLogs"]]
+    assert [(d["headers"], d["emptyColumns"]) for d in details[:3]] == [
+        (True, True),
+        (False, False),
+        (False, False),
+    ]
+
+
 def test_partner_pdf_layout_error_is_a_clean_error(client, monkeypatch):
     """A sheet ReportLab cannot lay out answers 422, not an unhandled 500."""
     from app import partner_api
     from app.pdf_export import PdfLayoutError
 
-    def cannot_lay_out(payload):
+    def cannot_lay_out(payload, **options):
         raise PdfLayoutError("pdf layout failed")
 
     body = _styled_sheet()
@@ -725,7 +767,7 @@ def test_pdf_too_large_is_413(client, monkeypatch):
         headers=AUTH,
     )
 
-    def _boom(_payload):
+    def _boom(_payload, **options):
         raise PdfTooLarge("too big")
 
     monkeypatch.setattr("app.partner_api.render_sheet_pdf", _boom)
