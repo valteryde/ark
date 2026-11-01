@@ -181,9 +181,16 @@ async def get_sheet_audit_logs(path: str, request: Request) -> JSONResponse:
     return await _handle_audit_logs(request, path=path)
 
 
-def _pdf_download(payload: dict[str, Any]) -> Response:
+def _pdf_download(
+    payload: dict[str, Any],
+    *,
+    headers: bool = True,
+    empty_columns: bool = True,
+) -> Response:
     try:
-        body, filename = render_sheet_pdf(payload)
+        body, filename = render_sheet_pdf(
+            payload, headers=headers, empty_columns=empty_columns
+        )
     except PdfTooLarge:
         return JSONResponse({"detail": "pdf_too_large"}, status_code=413)
     except PdfLayoutError:
@@ -214,14 +221,63 @@ def _existing_sheet_at_suffix(request: Request, prefix: str) -> str | None:
     return None
 
 
+class _BadQueryValue(ValueError):
+    """A query flag was present but did not say true or false."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
+
+
+_TRUE_QUERY = frozenset({"1", "true", "yes", "on"})
+_FALSE_QUERY = frozenset({"0", "false", "no", "off"})
+
+
+def _bool_query(request: Request, name: str, default: bool) -> bool:
+    """A boolean query flag, accepting snake_case and camelCase spellings.
+
+    A flag that is absent, or present with an empty value, keeps the default, so
+    a partner that knows nothing about the option still gets the whole sheet.
+    """
+    for key in (name, _camel(name)):
+        raw = request.query_params.get(key)
+        if raw is None:
+            continue
+        text = raw.strip().lower()
+        if not text:
+            return default
+        if text in _TRUE_QUERY:
+            return True
+        if text in _FALSE_QUERY:
+            return False
+        raise _BadQueryValue(key)
+    return default
+
+
+def _camel(name: str) -> str:
+    """`empty_columns` as `emptyColumns`, the other spelling partners send."""
+    head, _, tail = name.partition("_")
+    return head + tail.title()
+
+
 @router.get("/sheets/{path:path}/pdf")
 async def export_sheet_pdf(path: str, request: Request) -> Response:
-    """PDF of a stored sheet. Does not auto-create. Ignores `pdfExport`."""
+    """PDF of a stored sheet. Does not auto-create. Ignores `pdfExport`.
+
+    `?headers=false` leaves the column header row out, and `?empty_columns=false`
+    drops columns that hold no value and no style. Both default to true: the file
+    holds everything the sheet shows.
+    """
     if err := _auth_error(request):
         return err
     existing = _existing_sheet_at_suffix(request, "/api/partner/sheets/")
     if existing is not None:
         return await get_sheet(existing, request)
+    try:
+        headers = _bool_query(request, "headers", True)
+        empty_columns = _bool_query(request, "empty_columns", True)
+    except _BadQueryValue as bad:
+        return JSONResponse({"detail": f"{bad.name} must be true or false"}, status_code=400)
     try:
         norm_path = normalize_sheet_path(path)
     except SheetValidationError as e:
@@ -229,7 +285,7 @@ async def export_sheet_pdf(path: str, request: Request) -> Response:
     payload = get_store().get_sheet_payload(norm_path)
     if payload is None:
         return JSONResponse({"detail": "sheet not found"}, status_code=404)
-    response = _pdf_download(payload)
+    response = _pdf_download(payload, headers=headers, empty_columns=empty_columns)
     if response.status_code == 200:
         get_store().log_audit_event(
             sheet_path=norm_path,
@@ -238,7 +294,12 @@ async def export_sheet_pdf(path: str, request: Request) -> Response:
             actor_id=_partner_actor_id(request),
             ip_address=_client_ip(request),
             revision=payload.get("revision"),
-            details={"format": "pdf", "client": "partner_api"},
+            details={
+                "format": "pdf",
+                "client": "partner_api",
+                "headers": headers,
+                "emptyColumns": empty_columns,
+            },
         )
     return response
 

@@ -355,6 +355,25 @@ def test_pages_hold_every_row_with_one_header_row_each():
             assert page.height + _ROW_HEIGHT > room
 
 
+def test_pages_without_a_header_row_pack_the_same_rows():
+    pages = _plan_pages(None, [_ROW_HEIGHT] * 45, 491.3, 523.3)
+    assert pages[0].first == 0
+    assert pages[-1].last == 45
+    assert [page.first for page in pages[1:]] == [page.last for page in pages[:-1]]
+    for index, page in enumerate(pages):
+        room = 491.3 if index == 0 else 523.3
+        # No header height in front, so the page is only its own data rows.
+        assert page.heights == (_ROW_HEIGHT,) * (page.last - page.first)
+        assert page.height <= room
+        assert page.break_in_row is False
+        if page.last < 45:
+            assert page.height + _ROW_HEIGHT > room
+
+
+def test_a_sheet_without_rows_or_headers_has_no_table_to_print():
+    assert _plan_pages(None, [], 491.3, 523.3) == [_Page(0, 0, (), 0.0, False)]
+
+
 def test_one_row_taller_than_a_page_breaks_inside_that_row():
     pages = _plan_pages(_HEADER_HEIGHT, [900.0, _ROW_HEIGHT], 479.3, 523.3)
     assert [(page.first, page.last) for page in pages] == [(0, 1), (1, 2)]
@@ -380,3 +399,108 @@ def test_merge_is_clipped_to_the_rows_a_page_prints():
     # Cells the merge covers keep no style commands of their own.
     assert len(_fills(top_commands)) == 2  # the header band and the merge fragment
     assert len(_fills(bottom_commands)) == 2
+
+
+def _mixed_sheet() -> dict:
+    """One column with text, one with nothing, one that is only painted, one hidden."""
+    return {
+        "title": "Mixed",
+        "path": "mixed/1",
+        "columns": [
+            {"id": "a", "header": "A", "widthPx": 60},
+            {"id": "b", "header": "B", "widthPx": 60},
+            {"id": "c", "header": "C", "widthPx": 60},
+            {"id": "d", "header": "D", "widthPx": 60, "hidden": True},
+        ],
+        "rows": [{"a": "text"}, {"a": "", "b": ""}, {"a": ""}],
+        # C holds no value at all, but it is painted, so it is not empty.
+        "cellStyles": {"2:3": {"background-color": "#00ff00"}},
+    }
+
+
+def test_export_can_leave_the_column_header_row_out():
+    model = build_pdf_model(_band_sheet(3), headers=False)
+    assert model.show_headers is False
+
+    body, _ = render_sheet_pdf(_band_sheet(3), headers=False)
+    ops = _drawing_ops(body)
+    assert _page_count(body) == 1
+    # Neither the labels nor the grey band they sit in are drawn. ReportLab
+    # drops the leading zero of a colour channel.
+    assert b"(A) Tj" not in ops
+    assert b"(B) Tj" not in ops
+    assert b".96 .96 .96 rg" not in ops
+    assert b"(row 1) Tj" in ops
+
+
+def test_export_without_headers_still_paginates_and_runs_a_band_down():
+    body, _ = render_sheet_pdf(_band_sheet(45), headers=False)
+    pages = _page_count(body)
+    assert pages == 2
+    ops = _drawing_ops(body)
+    assert b"(A) Tj" not in ops
+    band_heights = _band_heights(ops)
+    assert len(band_heights) == pages
+    assert abs(sum(band_heights) - 44 * _ROW_HEIGHT) < 1.0
+
+
+def test_a_page_without_a_header_row_numbers_its_rows_from_zero():
+    model = build_pdf_model(_band_sheet(20), headers=False)
+    commands = _page_commands(model, _page_plan(0, 12))
+    assert ("SPAN", (0, 1), (0, 11)) in commands
+    assert ((0, 1), (0, 11), "0x00ff00") in _fills(commands)
+    # No header band to paint, so only the merge fragment is filled.
+    assert len(_fills(commands)) == 1
+
+
+def test_empty_columns_print_unless_the_caller_asks_for_auto_hide():
+    assert build_pdf_model(_mixed_sheet()).headers == ("A", "B", "C")
+    assert build_pdf_model(_mixed_sheet(), empty_columns=False).headers == ("A", "C")
+
+    body, _ = render_sheet_pdf(_mixed_sheet(), empty_columns=False)
+    ops = _drawing_ops(body)
+    assert b"(B) Tj" not in ops
+    assert b"(C) Tj" in ops
+    assert b"0 1 0 rg" in ops  # the painted column is still there
+
+
+def test_auto_hide_keeps_a_column_that_only_carries_a_merge_band():
+    """A band with no text is still content, because it is drawn."""
+    model = build_pdf_model(_band_sheet(6), empty_columns=False)
+    assert model.headers == ("A", "B")
+
+
+def test_auto_hide_drops_a_column_a_merge_only_covers():
+    sheet = {
+        "title": "Covered",
+        "path": "covered/1",
+        "columns": [
+            {"id": "a", "header": "A", "widthPx": 60},
+            {"id": "b", "header": "B", "widthPx": 60},
+            {"id": "c", "header": "C", "widthPx": 60},
+        ],
+        "rows": [{"a": "", "b": "", "c": "text"} for _ in range(3)],
+        "cellStyles": {"1:1": {"background-color": "#00ff00"}},
+        "cellSpans": [{"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2}],
+    }
+    assert build_pdf_model(sheet).headers == ("A", "B", "C")
+    model = build_pdf_model(sheet, empty_columns=False)
+    assert model.headers == ("A", "C")
+    body, _ = render_sheet_pdf(sheet, empty_columns=False)
+    assert b"0 1 0 rg" in _drawing_ops(body)
+
+
+def test_auto_hide_of_an_empty_sheet_leaves_the_title_alone():
+    """No column survives, so there is no table to draw at all."""
+    sheet = {
+        "title": "Nothing",
+        "path": "nothing/1",
+        "columns": [{"id": "a", "header": "A", "widthPx": 60, "valueType": "string"}],
+        "rows": [{"a": ""}],
+    }
+    assert build_pdf_model(sheet, empty_columns=False).headers == ()
+    body, _ = render_sheet_pdf(sheet, empty_columns=False)
+    ops = _drawing_ops(body)
+    assert b"(Nothing) Tj" in ops
+    assert b"(A) Tj" not in ops
+    assert _page_count(body) == 1
