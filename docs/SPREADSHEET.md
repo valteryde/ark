@@ -87,6 +87,8 @@ The grid models two modes per cell, mirroring Google Sheets / Excel:
 
 The bundled app shows an **Export PDF** button in the header. It is on when the sheet payload omits **`pdfExport`**. Set **`pdfExport`** to **`false`** to hide the button; the browser download route then returns **403**. The partner route `GET /api/partner/sheets/{path}/pdf` still returns the file. See **[PARTNER_API.md](PARTNER_API.md)** for the PDF contents and cell styles it paints.
 
+A sheet taller than one page breaks between rows, and the header row is repeated. A merged rectangle taller than one page is broken at the page edge instead, so its fill and border continue on the next page and the merged text prints on the page where the merge starts.
+
 ## Zoom
 
 - **Handle**: `getZoom()`, `setZoom(factor)` (clamped 0.5–2, returns the applied value), and `subscribeZoomChange(cb)`. Zoom scales the grid content only; overlays/popovers stay 1:1. The bundled toolbar renders a zoom dropdown wired to these.
