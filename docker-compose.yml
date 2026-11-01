@@ -4,10 +4,14 @@ services:
     ports:
       - '${PORT:-8000}:${PORT:-8000}'
     environment:
-      # Optional: your partner base URL for auth + notifications (no trailing slash)
-      ARK_PARTNER_BASE_URL: ''
+      # Optional: your partner base URL for auth + notifications (no trailing slash).
+      # From .env: ARK_PARTNER_BASE_URL_DOCKER must be reachable *inside* the container,
+      # so a partner running on the host uses http://host.docker.internal:<port>.
+      ARK_PARTNER_BASE_URL: ${ARK_PARTNER_BASE_URL_DOCKER:-}
       # Optional: token for the partner CRUD API (/api/partner/...)
-      ARK_PARTNER_API_TOKEN: ''
+      ARK_PARTNER_API_TOKEN: ${ARK_PARTNER_API_TOKEN:-}
+      # Sheet URL segments served by the UI (defaults to clients,records)
+      ARK_UI_ROUTES: ${ARK_UI_ROUTES:-clients,records}
       # Persist Ark's sheet documents on a volume
       ARK_DB_PATH: /data/ark.db
       PORT: ${PORT:-8000}

@@ -39,6 +39,9 @@ __pycache__/
 
 # Ark document store (local dev)
 ark.db
+ark.dev.db
+ark.dev.db-wal
+ark.dev.db-shm
 
 # MkDocs
 /site/
