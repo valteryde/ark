@@ -87,7 +87,7 @@ The grid models two modes per cell, mirroring Google Sheets / Excel:
 
 The bundled app shows an **Export PDF** button in the header. It is on when the sheet payload omits **`pdfExport`**. Set **`pdfExport`** to **`false`** to hide the button; the browser download route then returns **403**. The partner route `GET /api/partner/sheets/{path}/pdf` still returns the file. See **[PARTNER_API.md](PARTNER_API.md)** for the PDF contents and cell styles it paints.
 
-The button always exports what the sheet shows: headers and every visible column. A partner integration can leave the header row out, or drop columns that hold no value and no style, with the query flags on that route.
+The button always exports what the sheet shows: headers and every visible column and row. A partner integration can leave the header row out, or drop the columns and rows that hold no value and no style, with the query flags on that route.
 
 A sheet taller than one page is packed into pages by row height, so the header row prints once at the top of each page and never twice on the same page. A merge that reaches the page edge is cut there: its fill and border keep running on the next page, and the merged text prints on the page where the merge starts.
 

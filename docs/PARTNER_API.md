@@ -117,16 +117,19 @@ All routes require **`Authorization: Bearer <ARK_PARTNER_API_TOKEN>`**.
 
 Returns the stored sheet as a PDF attachment (`Content-Type: application/pdf`, `Content-Disposition: attachment`). The same file is what the header **Export PDF** button downloads from **`GET /api/sheets/{path}/pdf`** (browser `ark_token`, same auth as a sheet read).
 
-The partner route takes two query flags. Both are `true` unless the URL says otherwise, so a partner that sends nothing gets the whole sheet:
+The partner route takes three query flags. All are `true` unless the URL says otherwise, so a partner that sends nothing gets the whole sheet:
 
 | Flag | Effect |
 | ---- | ------ |
 | `headers=false` | Leaves the column header row out, on the first page and on every other. Those labels are not data, so a file without them starts at the first data row and every page gains the height the header used to take. |
-| `empty_columns=false` (`emptyColumns=false`) | Drops a column that holds nothing: no value in any row and no stored style of its own. A column that is only painted — a fill, a border, a merge band — counts as content and stays. Header text is not content, so a labelled column with no data goes. Hidden columns are left out either way. |
+| `empty_columns=false` (`emptyColumns=false`) | Drops a column that holds nothing: no value in any row and no stored style of its own. Header text is not content, so a labelled column nobody filled in goes. Hidden columns are left out either way. |
+| `empty_rows=false` (`emptyRows=false`) | Same rule down the sheet: a row with no value and no style in any visible column is left out, and so is the empty padding a template keeps below the last used row. |
 
-Any of `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` spell a flag; `headers=` with no value keeps the default. A value the server cannot read is a **400** with `{ "detail": "headers must be true or false" }`. The two flags are recorded in the `sheet.export` audit entry as `details.headers` and `details.emptyColumns`.
+A column or a row counts as holding something when a cell in it has a value or a stored style, **or** when it lies inside a merged rectangle that draws something. The anchor of a merge paints the whole rectangle, so the strip of sheet a band runs through is content and stays: a forty-row grade block does not collapse into one row, and a banner does not shrink to its first column. A rectangle with neither text nor style draws nothing, so the columns and rows it sits in are still blank and do go. Cell content in a hidden column is not printed and does not count.
 
-The browser route does not take the flags: in-app export always shows headers and every visible column.
+Any of `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` spell a flag; `headers=` with no value keeps the default. A value the server cannot read is a **400** with `{ "detail": "headers must be true or false" }`. The three flags are recorded in the `sheet.export` audit entry as `details.headers`, `details.emptyColumns`, and `details.emptyRows`.
+
+The browser route does not take the flags: in-app export always shows headers and every visible column and row.
 
 | Status | When |
 | ------ | ---- |
@@ -136,7 +139,7 @@ The browser route does not take the flags: in-app export always shows headers an
 | **403** | Browser route only, when the document has `pdfExport: false` (`{ "detail": "pdf_export_disabled" }`). |
 | **413** | More than 10,000 data rows (`{ "detail": "pdf_too_large" }`). |
 | **422** | The sheet could not be laid out on paper (`{ "detail": "pdf_layout_failed" }`). |
-| **400** | Partner route, when `headers` or `empty_columns` is neither true nor false. |
+| **400** | Partner route, when `headers`, `empty_columns`, or `empty_rows` is neither true nor false. |
 
 The file is landscape A4. It includes the sheet title (or the path), a repeating header row, and visible columns only (`hidden` columns are left out). With a header row, every page of a long sheet prints it once, and a merge that crosses a page break is cut there so its fill and border carry on down the next page. Select cells print the option **label**. Link cells print the URL. Column widths follow `widthPx`. Empty rows between values stay; trailing empty `rowCount` padding does not. A cell that has a style and no value is still printed.
 

@@ -302,6 +302,14 @@ def _band_heights(ops: bytes) -> list[float]:
     ]
 
 
+_HLINE_RE = re.compile(r"[-\d.]+ ([-\d.]+) m [-\d.]+ \1 l S")
+
+
+def _horizontal_lines(ops: bytes) -> list[float]:
+    """The height of every horizontal grid line segment ReportLab stroked."""
+    return [float(match[1]) for match in _HLINE_RE.finditer(ops.decode("latin-1"))]
+
+
 def test_header_row_prints_once_on_every_page():
     """No page may start twice.
 
@@ -470,8 +478,9 @@ def test_auto_hide_keeps_a_column_that_only_carries_a_merge_band():
     assert model.headers == ("A", "B")
 
 
-def test_auto_hide_drops_a_column_a_merge_only_covers():
-    sheet = {
+def _covered_sheet(*, painted: bool = True) -> dict:
+    """Three columns where only C holds text, and one merge over A and B."""
+    return {
         "title": "Covered",
         "path": "covered/1",
         "columns": [
@@ -480,14 +489,82 @@ def test_auto_hide_drops_a_column_a_merge_only_covers():
             {"id": "c", "header": "C", "widthPx": 60},
         ],
         "rows": [{"a": "", "b": "", "c": "text"} for _ in range(3)],
-        "cellStyles": {"1:1": {"background-color": "#00ff00"}},
+        "cellStyles": {"1:1": {"background-color": "#00ff00"}} if painted else {},
         "cellSpans": [{"row": 1, "col": 1, "rowSpan": 1, "colSpan": 2}],
     }
-    assert build_pdf_model(sheet).headers == ("A", "B", "C")
-    model = build_pdf_model(sheet, empty_columns=False)
-    assert model.headers == ("A", "C")
-    body, _ = render_sheet_pdf(sheet, empty_columns=False)
+
+
+def test_auto_hide_keeps_a_column_only_because_a_painted_band_covers_it():
+    """A band is content for every column it crosses, so it keeps its width."""
+    assert build_pdf_model(_covered_sheet()).headers == ("A", "B", "C")
+    model = build_pdf_model(_covered_sheet(), empty_columns=False)
+    assert model.headers == ("A", "B", "C")
+    assert model.spans == ((0, 1, 1, 1),)
+    body, _ = render_sheet_pdf(_covered_sheet(), empty_columns=False)
     assert b"0 1 0 rg" in _drawing_ops(body)
+
+
+def test_auto_hide_drops_a_column_a_merge_only_covers_when_it_paints_nothing():
+    """A rectangle with neither text nor style draws nothing, so it is still blank."""
+    model = build_pdf_model(_covered_sheet(painted=False), empty_columns=False)
+    assert model.headers == ("C",)
+    assert model.spans == ()
+
+
+def _band_and_gaps_sheet() -> dict:
+    """Six rows: two hold text, and a green band runs through three of the rest.
+
+    Only the band anchor carries the style, which is how a merge is stored.
+    """
+    return {
+        "title": "Band and gaps",
+        "path": "band/1",
+        "columns": [
+            {"id": "a", "header": "A", "widthPx": 60},
+            {"id": "b", "header": "B", "widthPx": 320},
+        ],
+        "rows": [
+            {"a": "", "b": "one"},
+            {"a": "", "b": ""},
+            {"a": "", "b": ""},
+            {"a": "", "b": ""},
+            {"a": "", "b": ""},
+            {"a": "", "b": "six"},
+        ],
+        "cellStyles": {"2:1": {"background-color": "#00ff00"}},
+        "cellSpans": [{"row": 2, "col": 1, "rowSpan": 3, "colSpan": 1}],
+        "rowCount": 6,
+    }
+
+
+def test_auto_hide_drops_blank_rows_but_not_ones_a_band_runs_through():
+    assert len(build_pdf_model(_band_and_gaps_sheet()).rows) == 6
+    model = build_pdf_model(_band_and_gaps_sheet(), empty_rows=False)
+    # Row 5 holds nothing, while rows 2 to 4 belong to the band.
+    assert [row[1].text for row in model.rows] == ["one", "", "", "", "six"]
+    assert model.spans == ((0, 2, 0, 4),)
+    full = _drawing_ops(render_sheet_pdf(_band_and_gaps_sheet())[0])
+    narrow = _drawing_ops(render_sheet_pdf(_band_and_gaps_sheet(), empty_rows=False)[0])
+    assert b"0 1 0 rg" in narrow
+    # One grid line less on paper: the blank row is gone, the band is not.
+    assert len(_horizontal_lines(narrow)) == len(_horizontal_lines(full)) - 1
+
+
+def test_auto_hide_drops_rows_a_band_covers_when_the_band_paints_nothing():
+    sheet = _band_and_gaps_sheet()
+    sheet["cellStyles"] = {}
+    model = build_pdf_model(sheet, empty_rows=False)
+    assert [row[1].text for row in model.rows] == ["one", "six"]
+    assert model.spans == ()
+
+
+def test_auto_hide_can_narrow_both_columns_and_rows_at_once():
+    model = build_pdf_model(
+        _band_and_gaps_sheet(), headers=False, empty_columns=False, empty_rows=False
+    )
+    assert model.headers == ("A", "B")
+    assert len(model.rows) == 5
+    assert model.show_headers is False
 
 
 def test_auto_hide_of_an_empty_sheet_leaves_the_title_alone():

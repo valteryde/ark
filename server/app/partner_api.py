@@ -186,10 +186,14 @@ def _pdf_download(
     *,
     headers: bool = True,
     empty_columns: bool = True,
+    empty_rows: bool = True,
 ) -> Response:
     try:
         body, filename = render_sheet_pdf(
-            payload, headers=headers, empty_columns=empty_columns
+            payload,
+            headers=headers,
+            empty_columns=empty_columns,
+            empty_rows=empty_rows,
         )
     except PdfTooLarge:
         return JSONResponse({"detail": "pdf_too_large"}, status_code=413)
@@ -265,8 +269,8 @@ async def export_sheet_pdf(path: str, request: Request) -> Response:
     """PDF of a stored sheet. Does not auto-create. Ignores `pdfExport`.
 
     `?headers=false` leaves the column header row out, and `?empty_columns=false`
-    drops columns that hold no value and no style. Both default to true: the file
-    holds everything the sheet shows.
+    and `?empty_rows=false` drop the columns and rows that hold no value and no
+    style. All three default to true: the file holds everything the sheet shows.
     """
     if err := _auth_error(request):
         return err
@@ -276,6 +280,7 @@ async def export_sheet_pdf(path: str, request: Request) -> Response:
     try:
         headers = _bool_query(request, "headers", True)
         empty_columns = _bool_query(request, "empty_columns", True)
+        empty_rows = _bool_query(request, "empty_rows", True)
     except _BadQueryValue as bad:
         return JSONResponse({"detail": f"{bad.name} must be true or false"}, status_code=400)
     try:
@@ -285,7 +290,12 @@ async def export_sheet_pdf(path: str, request: Request) -> Response:
     payload = get_store().get_sheet_payload(norm_path)
     if payload is None:
         return JSONResponse({"detail": "sheet not found"}, status_code=404)
-    response = _pdf_download(payload, headers=headers, empty_columns=empty_columns)
+    response = _pdf_download(
+        payload,
+        headers=headers,
+        empty_columns=empty_columns,
+        empty_rows=empty_rows,
+    )
     if response.status_code == 200:
         get_store().log_audit_event(
             sheet_path=norm_path,
@@ -299,6 +309,7 @@ async def export_sheet_pdf(path: str, request: Request) -> Response:
                 "client": "partner_api",
                 "headers": headers,
                 "emptyColumns": empty_columns,
+                "emptyRows": empty_rows,
             },
         )
     return response

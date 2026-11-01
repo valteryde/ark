@@ -660,30 +660,33 @@ def test_partner_pdf_export_can_be_narrowed_by_the_partner(client, monkeypatch):
     monkeypatch.setattr(partner_api, "render_sheet_pdf", record)
 
     assert client.get("/api/partner/sheets/clients/pdf", headers=AUTH).status_code == 200
-    assert calls[-1] == {"headers": True, "empty_columns": True}
+    assert calls[-1] == {"headers": True, "empty_columns": True, "empty_rows": True}
 
-    client.get("/api/partner/sheets/clients/pdf?headers=false&empty_columns=false", headers=AUTH)
-    assert calls[-1] == {"headers": False, "empty_columns": False}
+    client.get(
+        "/api/partner/sheets/clients/pdf?headers=false&empty_columns=false&empty_rows=false",
+        headers=AUTH,
+    )
+    assert calls[-1] == {"headers": False, "empty_columns": False, "empty_rows": False}
 
     # camelCase is accepted the way the rest of the partner API spells it.
-    client.get("/api/partner/sheets/clients/pdf?headers=0&emptyColumns=off", headers=AUTH)
-    assert calls[-1] == {"headers": False, "empty_columns": False}
+    client.get("/api/partner/sheets/clients/pdf?headers=0&emptyColumns=off&emptyRows=no", headers=AUTH)
+    assert calls[-1] == {"headers": False, "empty_columns": False, "empty_rows": False}
 
     client.get("/api/partner/sheets/clients/pdf?headers=true&empty_columns=1", headers=AUTH)
-    assert calls[-1] == {"headers": True, "empty_columns": True}
+    assert calls[-1] == {"headers": True, "empty_columns": True, "empty_rows": True}
 
-    bad = client.get("/api/partner/sheets/clients/pdf?headers=maybe", headers=AUTH)
+    bad = client.get("/api/partner/sheets/clients/pdf?emptyRows=maybe", headers=AUTH)
     assert bad.status_code == 400
-    assert bad.json()["detail"] == "headers must be true or false"
-    assert not calls or len(calls) == 4  # the bad call never reached the renderer
+    assert bad.json()["detail"] == "emptyRows must be true or false"
+    assert len(calls) == 4  # the bad call never reached the renderer
 
     logs = client.get("/api/partner/audit-logs?action=sheet.export", headers=AUTH).json()
     # Newest first: the last export printed everything, the one before it nothing extra.
     details = [log["details"] for log in logs["auditLogs"]]
-    assert [(d["headers"], d["emptyColumns"]) for d in details[:3]] == [
-        (True, True),
-        (False, False),
-        (False, False),
+    assert [(d["headers"], d["emptyColumns"], d["emptyRows"]) for d in details[:3]] == [
+        (True, True, True),
+        (False, False, False),
+        (False, False, False),
     ]
 
 
