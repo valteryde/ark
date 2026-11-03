@@ -61,6 +61,14 @@ Deleting a row clears that row and does not shift later rows. Any span that incl
 
 Stores that implement **`getCellSpans` / `setCellSpans`** (the in-memory store and the partner store) can merge. The bundled server persists the list on the sheet. See **[PARTNER_API.md](PARTNER_API.md)**.
 
+## Floating images
+
+Pictures are a list on the sheet, **`floatingImages`**, not a cell value. Each one is `{ id, x, y, width, height, src }`. **`x`** and **`y`** are pixels from the top-left of cell A1: below the column headers and to the right of the row-number gutter. They scroll and zoom with the grid and stay where you dropped them when a column is resized.
+
+The toolbar button **Insert image** (capability **`insert-image`**, included when the payload omits the list) reads a PNG, JPEG, or GIF. The longer side starts at most 240px, at the current scroll position. Drag the picture to move it. The corner handles resize it; Shift keeps the aspect ratio. Click selects it and brings it to the front. Delete or Backspace removes the selection when a cell is not being edited. Escape clears the selection. A sheet holds at most 20 images, each under about 1.5 MB.
+
+One gesture is one undo step. Undo and redo are saved with the sheet. A move sends the new box only; the file bytes stay on the server until the picture is new or restored. See **[PARTNER_API.md](PARTNER_API.md)**.
+
 ## Text overflow and wrap
 
 Long values are handled in three layers, in this order.

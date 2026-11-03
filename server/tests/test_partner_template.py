@@ -93,6 +93,35 @@ def test_parse_keeps_cell_spans_and_rejects_overlaps():
         )
 
 
+PNG = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def test_parse_keeps_floating_images_and_rejects_a_bad_src():
+    t = parse_template_response(
+        {
+            "version": 1,
+            "columns": COLUMNS,
+            "floatingImages": [
+                {"id": "pic", "x": 4, "y": 8, "width": 40, "height": 24, "src": PNG},
+            ],
+        }
+    )
+    assert t["floatingImages"][0]["src"] == PNG
+    with pytest.raises(PartnerTemplateError):
+        parse_template_response(
+            {
+                "version": 1,
+                "columns": COLUMNS,
+                "floatingImages": [
+                    {"id": "pic", "x": 0, "y": 0, "width": 40, "height": 24, "src": "data:image/svg+xml;base64,PHN2Zy8+"},
+                ],
+            }
+        )
+
+
 def test_parse_rejects_non_object():
     with pytest.raises(PartnerTemplateError):
         parse_template_response([1, 2, 3])

@@ -19,6 +19,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .cell_span import CellSpanError, load_cell_spans, parse_cell_spans, spans_after_clearing_row
+from .floating_image import (
+    FloatingImageError,
+    dump_floating_images,
+    floating_image_geometry,
+    load_floating_images,
+    merge_floating_images,
+    parse_floating_images,
+)
 from .cell_style import (
     CellStyleError,
     dump_style,
@@ -188,6 +196,13 @@ def _spans_or_raise(raw: Any, *, max_rows: int, max_cols: int) -> list[dict[str,
         raise SheetValidationError(str(e)) from e
 
 
+def _images_or_raise(raw: Any, *, require_src: bool) -> list[dict[str, Any]]:
+    try:
+        return parse_floating_images(raw, require_src=require_src)
+    except FloatingImageError as e:
+        raise SheetValidationError(str(e)) from e
+
+
 def _parse_styles_or_raise(
     raw: Any,
 ) -> dict[tuple[int, int], dict[str, str]]:
@@ -335,6 +350,7 @@ class SheetStore:
         self._ensure_cell_style_column()
         self._ensure_pdf_export_column()
         self._ensure_cell_spans_column()
+        self._ensure_floating_images_column()
         self._ensure_cell_overflow_column()
         self._conn.commit()
 
@@ -347,6 +363,11 @@ class SheetStore:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sheets)")}
         if "cell_spans" not in cols:
             self._conn.execute("ALTER TABLE sheets ADD COLUMN cell_spans TEXT")
+
+    def _ensure_floating_images_column(self) -> None:
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sheets)")}
+        if "floating_images" not in cols:
+            self._conn.execute("ALTER TABLE sheets ADD COLUMN floating_images TEXT")
 
     def _ensure_cell_overflow_column(self) -> None:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sheets)")}
@@ -458,6 +479,7 @@ class SheetStore:
                 max_rows=row_count,
                 max_cols=len(columns),
             )
+            floating_images = _images_or_raise(template.get("floatingImages"), require_src=True)
             fields = {
                 "title": _validate_title(template.get("title")),
                 "description": _validate_description(template.get("description")),
@@ -487,6 +509,7 @@ class SheetStore:
             col_index_by_id = {}
             cell_styles = {}
             cell_spans = []
+            floating_images = []
         with self._lock:
             try:
                 cur = self._conn.execute(
@@ -537,6 +560,11 @@ class SheetStore:
                     self._conn.execute(
                         "UPDATE sheets SET cell_spans = ? WHERE id = ?",
                         (_dump_spans(cell_spans), sheet_id),
+                    )
+                if floating_images:
+                    self._conn.execute(
+                        "UPDATE sheets SET floating_images = ? WHERE id = ?",
+                        (dump_floating_images(floating_images), sheet_id),
                     )
                 self._log_event(
                     sheet_id,
@@ -911,6 +939,64 @@ class SheetStore:
             self._conn.commit()
         return revision, stored
 
+    def apply_floating_images(
+        self,
+        path: str,
+        images: Any,
+        *,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        ip_address: str | None = None,
+    ) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
+        """Replace the sheet's pictures. Returns (revision, stored, wire).
+
+        `wire` includes `src` only when the caller sent it. An omitted `src`
+        keeps the bytes already stored for that id. An empty list clears them.
+        """
+        path = normalize_sheet_path(path)
+        with self._lock:
+            sheet = self._conn.execute(
+                "SELECT id, revision, floating_images FROM sheets WHERE path = ?",
+                (path,),
+            ).fetchone()
+            if sheet is None:
+                raise SheetValidationError(f"sheet not found: {path}")
+            previous = load_floating_images(
+                sheet["floating_images"] if "floating_images" in sheet.keys() else None
+            )
+            incoming = _images_or_raise(images, require_src=False)
+            try:
+                stored, wire = merge_floating_images(previous, incoming)
+            except FloatingImageError as e:
+                raise SheetValidationError(str(e)) from e
+            revision = sheet["revision"] + 1
+            now = _now()
+            geometry = floating_image_geometry(stored)
+            self._conn.execute(
+                "UPDATE sheets SET floating_images = ?, revision = ?, updated_at = ? WHERE id = ?",
+                (dump_floating_images(stored), revision, now, sheet["id"]),
+            )
+            self._log_event(sheet["id"], revision, "floating_images", {"floatingImages": geometry})
+            self._conn.execute(
+                """
+                INSERT INTO audit_logs (sheet_path, sheet_id, action, actor_type, actor_id, ip_address, revision, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    path,
+                    sheet["id"],
+                    "floating_images.replace",
+                    actor_type,
+                    actor_id,
+                    ip_address,
+                    revision,
+                    json.dumps({"floatingImages": geometry}),
+                    now,
+                ),
+            )
+            self._conn.commit()
+        return revision, stored, wire
+
     def replace_sheet(
         self,
         path: str,
@@ -948,6 +1034,7 @@ class SheetStore:
             max_rows=effective_row_count,
             max_cols=len(columns),
         )
+        floating_images = _images_or_raise(payload.get("floatingImages"), require_src=True)
         col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
         title = _validate_title(payload.get("title"))
         description = _validate_description(payload.get("description"))
@@ -990,7 +1077,7 @@ class SheetStore:
                 UPDATE sheets SET title = ?, description = ?, columns = ?, row_count = ?,
                     ghost_row_count = ?, default_row_height_px = ?,
                     enabled_ui_capabilities = ?, chrome_actions = ?, pdf_export = ?,
-                    cell_overflow = ?, cell_spans = ?, revision = ?, updated_at = ?
+                    cell_overflow = ?, cell_spans = ?, floating_images = ?, revision = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -1005,6 +1092,7 @@ class SheetStore:
                     pdf_export,
                     cell_overflow,
                     _dump_spans(cell_spans),
+                    dump_floating_images(floating_images),
                     revision,
                     now,
                     sheet_id,
@@ -1056,11 +1144,27 @@ class SheetStore:
         applied: list[dict[str, Any]] = []
         audit_cells: list[dict[str, Any]] = []
         applied_spans: list[dict[str, int]] | None = None
+        applied_image_wire: list[dict[str, Any]] | None = None
         with self._lock:
             sheet = self._conn.execute("SELECT * FROM sheets WHERE path = ?", (path,)).fetchone()
             if sheet is None:
                 raise SheetValidationError(f"sheet not found: {path}")
             columns = _parse_json(sheet["columns"]) or []
+            image_dump: str | None = None
+            replace_images = False
+            if "floatingImages" in patch:
+                previous_images = load_floating_images(
+                    sheet["floating_images"] if "floating_images" in sheet.keys() else None
+                )
+                incoming_images = _images_or_raise(patch.get("floatingImages"), require_src=False)
+                try:
+                    stored_images, applied_image_wire = merge_floating_images(
+                        previous_images, incoming_images
+                    )
+                except FloatingImageError as e:
+                    raise SheetValidationError(str(e)) from e
+                image_dump = dump_floating_images(stored_images)
+                replace_images = True
             col_index_by_id = {c["id"]: i + 1 for i, c in enumerate(columns)}
             revision = sheet["revision"] + 1
             row_count = sheet["row_count"]
@@ -1149,6 +1253,9 @@ class SheetStore:
                 )
                 sets.append("cell_spans = ?")
                 params.append(_dump_spans(applied_spans))
+            if replace_images:
+                sets.append("floating_images = ?")
+                params.append(image_dump)
             params.append(sheet["id"])
             self._conn.execute(f"UPDATE sheets SET {', '.join(sets)} WHERE id = ?", params)
             self._log_event(
@@ -1158,7 +1265,9 @@ class SheetStore:
                 {
                     "cells": len(applied),
                     "fields": [
-                        k for k in ("title", "description", "rowCount", "cellSpans") if k in patch
+                        k
+                        for k in ("title", "description", "rowCount", "cellSpans", "floatingImages")
+                        if k in patch
                     ],
                 },
             )
@@ -1178,8 +1287,15 @@ class SheetStore:
                     json.dumps({
                         "appliedCells": audit_cells,
                         "fields": [
-                            k for k in ("title", "description", "rowCount", "cellSpans") if k in patch
+                            k
+                            for k in ("title", "description", "rowCount", "cellSpans", "floatingImages")
+                            if k in patch
                         ],
+                        **(
+                            {"floatingImages": floating_image_geometry(stored_images)}
+                            if replace_images
+                            else {}
+                        ),
                     }),
                     _now(),
                 ),
@@ -1188,6 +1304,8 @@ class SheetStore:
         result: dict[str, Any] = {"revision": revision, "appliedCells": applied}
         if applied_spans is not None:
             result["cellSpans"] = applied_spans
+        if applied_image_wire is not None:
+            result["floatingImages"] = applied_image_wire
         return result
 
     def delete_sheet(
@@ -1363,6 +1481,11 @@ class SheetStore:
         )
         if cell_spans:
             payload["cellSpans"] = cell_spans
+        floating_images = load_floating_images(
+            sheet["floating_images"] if "floating_images" in sheet.keys() else None
+        )
+        if floating_images:
+            payload["floatingImages"] = floating_images
         return payload
 
     # ------------------------------------------------------------ audit logs

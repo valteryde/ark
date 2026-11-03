@@ -23,6 +23,7 @@ const CAP_ICONS: Record<UiToolbarCapability, string> = {
   link: 'ph-link',
   comment: 'ph-chat-circle-text',
   'merge-cells': 'ph-unite',
+  'insert-image': 'ph-image',
   functions: 'ph-sigma',
 };
 
@@ -33,6 +34,7 @@ const TOOLBAR_GROUPS: UiToolbarCapability[][] = [
   ['fill', 'borders'],
   ['align', 'wrap-text'],
   ['merge-cells'],
+  ['insert-image'],
   ['link', 'comment'],
   ['functions'],
 ];
@@ -273,6 +275,25 @@ export function mountFormattingToolbar(
         });
         ui.borders = b;
         host.appendChild(b);
+        continue;
+      }
+
+      if (cap === 'insert-image') {
+        const b = iconButton(CAP_ICONS[cap], 'Insert image');
+        b.setAttribute('aria-label', 'Insert image');
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/png,image/jpeg,image/gif,.png,.jpg,.jpeg,.gif';
+        input.tabIndex = -1;
+        input.hidden = true;
+        input.addEventListener('change', () => {
+          const file = input.files?.[0];
+          input.value = '';
+          if (!file) return;
+          void sheet.insertFloatingImageFile(file);
+        });
+        b.addEventListener('click', () => input.click());
+        host.append(b, input);
         continue;
       }
 

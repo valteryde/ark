@@ -1622,6 +1622,72 @@ a.app-sheet-tabs__tab {
   display: none !important;
 }
 
+/* Pictures sit on the cell area, above the selection outline and under the sticky headers. */
+.sheet-floating-images {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.sheet-floating-image {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  user-select: none;
+  touch-action: none;
+}
+
+.sheet-floating-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.sheet-floating-image--selected {
+  outline: 2px solid var(--sheet-accent);
+  outline-offset: 0;
+}
+
+.sheet-floating-image__handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  background: var(--sheet-accent);
+  border: 1px solid #fff;
+  pointer-events: auto;
+}
+
+.sheet-floating-image__handle[hidden] {
+  display: none;
+}
+
+.sheet-floating-image__handle--nw {
+  left: -4px;
+  top: -4px;
+  cursor: nwse-resize;
+}
+
+.sheet-floating-image__handle--ne {
+  right: -4px;
+  top: -4px;
+  cursor: nesw-resize;
+}
+
+.sheet-floating-image__handle--sw {
+  left: -4px;
+  bottom: -4px;
+  cursor: nesw-resize;
+}
+
+.sheet-floating-image__handle--se {
+  right: -4px;
+  bottom: -4px;
+  cursor: nwse-resize;
+}
+
 /* Visually-hidden live region for screen-reader active-cell announcements */
 .sheet-sr-live {
   position: absolute;

@@ -1,6 +1,8 @@
 import { sanitizeCellStyle } from './cell-style.ts';
+import { cloneFloatingImages } from './floating-image.ts';
 import type {
   CellSpan,
+  FloatingImage,
   SpreadsheetCellInit,
   SpreadsheetDataStore,
   SpreadsheetCellStyleDeclarations,
@@ -41,9 +43,11 @@ function cloneSpans(spans: readonly CellSpan[]): CellSpan[] {
 export function createInMemoryDataStore(
   initial: Record<string, InMemoryDataInitValue> = {},
   cellSpans: readonly CellSpan[] = [],
+  floatingImages: readonly FloatingImage[] = [],
 ): SpreadsheetDataStore {
   const map = new Map<string, StoredCell>();
   let spans = cloneSpans(cellSpans);
+  let images = cloneFloatingImages(floatingImages);
   for (const [k, v] of Object.entries(initial)) {
     const cell = normalizeInitEntry(v);
     if (cell !== undefined) map.set(k, cell);
@@ -132,6 +136,12 @@ export function createInMemoryDataStore(
     },
     setCellSpans(next: readonly CellSpan[]) {
       spans = cloneSpans(next);
+    },
+    getFloatingImages() {
+      return cloneFloatingImages(images);
+    },
+    setFloatingImages(next: readonly FloatingImage[]) {
+      images = cloneFloatingImages(next);
     },
     forEachStoredCell(visit) {
       for (const [key, cell] of map) {

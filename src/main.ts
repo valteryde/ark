@@ -467,6 +467,12 @@ function initPartnerMode(): void {
         liveHandle!.applyExternalSpans(spans);
       });
     },
+    onRemoteImages(images) {
+      if (!liveHandle || !liveStore) return;
+      liveStore.withRemoteApply(() => {
+        liveHandle!.applyExternalImages(images);
+      });
+    },
   });
 
   remountPartnerSheetFromPayload = (
@@ -512,6 +518,9 @@ function initPartnerMode(): void {
       ...(payload.cellStyles !== undefined ? { cellStyles: { ...payload.cellStyles } } : {}),
       ...(payload.cellSpans !== undefined
         ? { cellSpans: payload.cellSpans.map((span) => ({ ...span })) }
+        : {}),
+      ...(payload.floatingImages !== undefined
+        ? { floatingImages: payload.floatingImages.map((image) => ({ ...image })) }
         : {}),
       ...(payload.pdfExport === false ? { pdfExport: false } : {}),
     };
@@ -559,6 +568,18 @@ function initPartnerMode(): void {
             cellSpans: spans.map((span) => ({ ...span })),
             row: anchor?.row ?? 1,
             col: anchor?.col ?? 1,
+            sheetPath: pathForCollab,
+            clientId: collabIdentity.clientId,
+            markerHue: collabIdentity.markerHue,
+          });
+        },
+        floatingImages: payload.floatingImages,
+        onFloatingImages: (images) => {
+          collab.sendFloatingImages({
+            type: 'floating_images.committed',
+            floatingImages: images.map((image) => ({ ...image })),
+            row: 1,
+            col: 1,
             sheetPath: pathForCollab,
             clientId: collabIdentity.clientId,
             markerHue: collabIdentity.markerHue,

@@ -6,15 +6,25 @@ import pytest
 
 from app.pdf_export import (
     MAX_PDF_DATA_ROWS,
+    PdfCellModel,
+    PdfFloatingImage,
+    PdfModel,
     PdfTooLarge,
     _Page,
     _page_commands,
     _plan_pages,
     build_pdf_model,
+    floating_image_slices,
     parse_pdf_color,
     render_sheet_pdf,
     resolve_pdf_cell,
 )
+
+PNG = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+PNG_BYTES = base64.b64decode(PNG.split(",", 1)[1])
 
 COLUMNS = [
     {"id": "name", "header": "Name", "widthPx": 200},
@@ -581,3 +591,87 @@ def test_auto_hide_of_an_empty_sheet_leaves_the_title_alone():
     assert b"(Nothing) Tj" in ops
     assert b"(A) Tj" not in ops
     assert _page_count(body) == 1
+
+
+def test_floating_image_slices_use_column_scale_and_skip_omitted_rows():
+    cell = PdfCellModel(text="Ada")
+    model = PdfModel(
+        title="Clients",
+        filename="clients.pdf",
+        headers=("Name",),
+        col_widths_px=(100.0,),
+        rows=((cell,),),
+        sheet_rows=(1,),
+        default_row_height_px=28.0,
+        images=(PdfFloatingImage(x=10, y=0, width=40, height=28, data=PNG_BYTES),),
+    )
+    pages = [_Page(first=0, last=1, heights=(14.0,), height=14.0, break_in_row=False)]
+    slices = floating_image_slices(
+        model,
+        row_heights=[14.0],
+        pages=pages,
+        header_height=None,
+        title_block=0,
+        table_width=200,
+    )
+    assert len(slices) == 1
+    sl = slices[0]
+    assert sl.page == 1
+    assert sl.x == 20
+    assert sl.width == 80
+    assert sl.height == 56
+    assert sl.clip_h == 14
+    assert sl.clip_y == 0
+
+    below = PdfModel(
+        title="Clients",
+        filename="clients.pdf",
+        headers=("Name",),
+        col_widths_px=(100.0,),
+        rows=((cell,),),
+        sheet_rows=(1,),
+        default_row_height_px=28.0,
+        images=(PdfFloatingImage(x=0, y=28, width=40, height=28, data=PNG_BYTES),),
+    )
+    assert (
+        floating_image_slices(
+            below,
+            row_heights=[14.0],
+            pages=pages,
+            header_height=None,
+            title_block=0,
+            table_width=200,
+        )
+        == []
+    )
+
+
+def test_build_pdf_model_keeps_rows_an_image_sits_on_unless_empty_rows_are_hidden():
+    payload = {
+        "title": "Clients",
+        "columns": [{"id": "name", "header": "Name", "widthPx": 100}],
+        "rows": [{"name": "Ada"}],
+        "defaultRowHeightPx": 28,
+        "floatingImages": [
+            {"id": "pic", "x": 0, "y": 56, "width": 40, "height": 28, "src": PNG},
+        ],
+    }
+    model = build_pdf_model(payload)
+    assert model.sheet_rows == (1, 2, 3)
+    assert len(model.images) == 1
+    hidden = build_pdf_model(payload, empty_rows=False)
+    assert hidden.sheet_rows == (1,)
+
+
+def test_render_sheet_pdf_embeds_a_png():
+    body, _filename = render_sheet_pdf(
+        {
+            "title": "Clients",
+            "columns": [{"id": "name", "header": "Name", "widthPx": 100}],
+            "rows": [{"name": "Ada"}],
+            "floatingImages": [
+                {"id": "pic", "x": 8, "y": 4, "width": 40, "height": 24, "src": PNG},
+            ],
+        }
+    )
+    assert b"/Subtype /Image" in body or b"/Image" in body

@@ -141,6 +141,21 @@ Deno.test('normalizePartnerSheetPayload keeps in-bounds cellSpans', () => {
   assertEquals(result?.cellSpans, [{ row: 1, col: 1, rowSpan: 1, colSpan: 2 }]);
 });
 
+Deno.test('normalizePartnerSheetPayload keeps image data URLs and drops the rest', () => {
+  const src =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const result = normalizePartnerSheetPayload({
+    columns: [{ id: 'name', header: 'Name' }],
+    rows: [{ name: 'Ada' }],
+    floatingImages: [
+      { id: 'pic', x: 4, y: 8, width: 40, height: 24, src },
+      { id: 'bad', x: 0, y: 0, width: 40, height: 24, src: 'data:image/svg+xml;base64,PHN2Zy8+' },
+      { id: 'nosrc', x: 0, y: 0, width: 40, height: 24 },
+    ],
+  });
+  assertEquals(result?.floatingImages, [{ id: 'pic', x: 4, y: 8, width: 40, height: 24, src }]);
+});
+
 Deno.test('normalizePartnerSheetPayload keeps sanitized cellStyles', () => {
   const result = normalizePartnerSheetPayload({
     columns: [{ id: 'name', header: 'Name' }],

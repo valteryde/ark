@@ -1,8 +1,10 @@
 import { cellSpansEqual } from '../spreadsheet/cell-span.ts';
 import { cellStylesEqual } from '../spreadsheet/cell-style.ts';
 import { createInMemoryDataStore, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
+import { floatingImagesEqual, floatingImagesForCommit } from '../spreadsheet/floating-image.ts';
 import type {
   CellSpan,
+  FloatingImage,
   SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
   SpreadsheetDataStore,
@@ -45,10 +47,18 @@ export function createPartnerNotifyDataStore(
   options?: {
     cellSpans?: readonly CellSpan[];
     onCellSpans?: (spans: readonly CellSpan[]) => void;
+    floatingImages?: readonly FloatingImage[];
+    /** Wire list: `src` is omitted when the bytes did not change. */
+    onFloatingImages?: (images: readonly FloatingImage[]) => void;
   },
 ): PartnerNotifyDataStore {
-  const inner = createInMemoryDataStore(initial, options?.cellSpans ?? []);
+  const inner = createInMemoryDataStore(
+    initial,
+    options?.cellSpans ?? [],
+    options?.floatingImages ?? [],
+  );
   const onCellSpans = options?.onCellSpans;
+  const onFloatingImages = options?.onFloatingImages;
   let applyingRemote = false;
 
   function recordIdFor(row: number, col: number): string | number | undefined {
@@ -129,6 +139,15 @@ export function createPartnerNotifyDataStore(
       const after = inner.getCellSpans?.() ?? [];
       if (cellSpansEqual(before, after)) return;
       onCellSpans?.(after);
+    },
+    getFloatingImages: () => inner.getFloatingImages?.() ?? [],
+    setFloatingImages(images) {
+      const before = inner.getFloatingImages?.() ?? [];
+      inner.setFloatingImages?.(images);
+      if (applyingRemote) return;
+      const after = inner.getFloatingImages?.() ?? [];
+      if (floatingImagesEqual(before, after)) return;
+      onFloatingImages?.(floatingImagesForCommit(before, after));
     },
     /** Call around applyExternalValue / remote applies so outbound notify does not fire. */
     withRemoteApply<T>(fn: () => T): T {

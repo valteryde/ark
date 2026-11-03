@@ -56,6 +56,13 @@ import {
   spansOverlap,
   unmergeSpanList,
 } from './cell-span.ts';
+import {
+  cloneFloatingImages,
+  floatingImagesEqual,
+  mergeFloatingImages,
+  normalizeFloatingImages,
+} from './floating-image.ts';
+import { mountFloatingImageLayer, type FloatingImageLayer } from './floating-image-layer.ts';
 import { cellKey } from './data-store.ts';
 import { cellWantsWrap } from './cell-style.ts';
 import { cellMapsEqual, createSpreadsheetHistory, type HistoryCellMap } from './history.ts';
@@ -64,6 +71,7 @@ import { createPersistErrorController } from './persist-error.ts';
 import { createRowContextMenu } from './row-context-menu.ts';
 import type {
   CellSpan,
+  FloatingImage,
   CollabPresenceMode,
   CollabPresencePayload,
   RemoteCollabPeer,
@@ -753,6 +761,24 @@ export function mountSpreadsheet(
     }
   }
 
+  let imageLayer: FloatingImageLayer | null = null;
+
+  function commitFloatingImages(before: readonly FloatingImage[], after: readonly FloatingImage[]): void {
+    if (!data.setFloatingImages) return;
+    if (floatingImagesEqual(before, after)) return;
+    data.setFloatingImages(cloneFloatingImages(after));
+    if (history) {
+      history.pushRecord(new Map(), new Map(), undefined, { before, after });
+    }
+  }
+
+  /** Undo and redo persist, so a reload matches the screen. */
+  function restoreHistoryImages(images: readonly FloatingImage[] | undefined): void {
+    if (!images || !data.setFloatingImages) return;
+    data.setFloatingImages(cloneFloatingImages(images));
+    imageLayer?.sync();
+  }
+
   function doUndo(): boolean {
     if (!history || !data.replaceCell) return false;
     flushActiveInputSkippingHistory();
@@ -760,6 +786,7 @@ export function mountSpreadsheet(
     if (!rec) return false;
     applySnapshot(rec.before);
     restoreHistorySpans(rec.spansBefore);
+    restoreHistoryImages(rec.imagesBefore);
     hydrateFromHistoryRecord(rec.before, rec.after);
     layoutCellSpans();
     snapActiveToSpanAnchor();
@@ -774,6 +801,7 @@ export function mountSpreadsheet(
     if (!rec) return false;
     applySnapshot(rec.after);
     restoreHistorySpans(rec.spansAfter);
+    restoreHistoryImages(rec.imagesAfter);
     hydrateFromHistoryRecord(rec.before, rec.after);
     layoutCellSpans();
     snapActiveToSpanAnchor();
@@ -1404,6 +1432,17 @@ export function mountSpreadsheet(
     inputHintTimer = window.setTimeout(hideInputHint, 2200);
   }
 
+  function showFloatingHint(message: string): void {
+    if (inputHintTimer !== null) clearTimeout(inputHintTimer);
+    inputHintEl.textContent = message;
+    inputHintEl.hidden = false;
+    inputHintEl.classList.add('sheet-input-hint--visible');
+    const r = viewport.getBoundingClientRect();
+    inputHintEl.style.left = `${Math.round(r.left + 12)}px`;
+    inputHintEl.style.top = `${Math.round(r.top + 12)}px`;
+    inputHintTimer = window.setTimeout(hideInputHint, 2200);
+  }
+
   const commentPreviewPop = document.createElement('div');
   commentPreviewPop.className = 'sheet-comment-preview';
   commentPreviewPop.id = 'sheet-comment-preview';
@@ -1809,6 +1848,17 @@ export function mountSpreadsheet(
   selectionOutlineEl.hidden = true;
   selectionOutlineEl.setAttribute('aria-hidden', 'true');
   gridBody.appendChild(selectionOutlineEl);
+
+  imageLayer = mountFloatingImageLayer({
+    gridBody,
+    viewport,
+    rowHeaderWidthPx,
+    getZoom: () => zoomFactor,
+    getImages: () => data.getFloatingImages?.() ?? [],
+    onCommit: commitFloatingImages,
+    showHint: showFloatingHint,
+    focusSheet: () => viewport.focus(),
+  });
 
   const ghostColumnHeaderEls: HTMLDivElement[] = [];
 
@@ -2750,6 +2800,15 @@ export function mountSpreadsheet(
     disconnectLayout = () => ro.disconnect();
   }
 
+  {
+    const previousDisconnect = disconnectLayout;
+    disconnectLayout = () => {
+      imageLayer?.destroy();
+      imageLayer = null;
+      previousDisconnect?.();
+    };
+  }
+
   commentPreviewPop.addEventListener('pointerenter', () => {
     if (commentPreviewHideTimer !== null) {
       clearTimeout(commentPreviewHideTimer);
@@ -3251,6 +3310,8 @@ export function mountSpreadsheet(
   viewport.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
+    if (target.closest('.sheet-floating-image')) return;
+    imageLayer?.selectNone();
 
     // Leave the click intact so the browser follows the URL. Selecting here
     // would focus the grid during pointerdown and cancel that navigation.
@@ -3607,6 +3668,20 @@ export function mountSpreadsheet(
       }
     }
 
+    if (
+      !editMode &&
+      imageLayer !== null &&
+      imageLayer.hasSelection() &&
+      (e.key === 'Backspace' || e.key === 'Delete') &&
+      !e.altKey &&
+      !sheetMod
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      imageLayer.removeSelected();
+      return;
+    }
+
     if (history && sheetMod && (e.key === 'z' || e.key === 'Z') && !e.altKey) {
       e.preventDefault();
       e.stopPropagation();
@@ -3681,6 +3756,7 @@ export function mountSpreadsheet(
 
     if (e.key === 'Escape') {
       e.preventDefault();
+      imageLayer?.selectNone();
       hideSuggestions();
       barDirtyCoord = null;
       if (editMode) {
@@ -4093,6 +4169,22 @@ export function mountSpreadsheet(
       return currentSpans();
     },
     applyExternalSpans,
+    getFloatingImages() {
+      return data.getFloatingImages?.() ?? [];
+    },
+    insertFloatingImage(image) {
+      return imageLayer?.insert(image.src, image.width, image.height) ?? false;
+    },
+    insertFloatingImageFile(file) {
+      return imageLayer?.insertFile(file) ?? Promise.resolve(false);
+    },
+    applyExternalImages(images) {
+      if (!data.setFloatingImages || !data.getFloatingImages) return false;
+      const merged = mergeFloatingImages(data.getFloatingImages(), normalizeFloatingImages(images));
+      data.setFloatingImages(merged);
+      imageLayer?.sync();
+      return true;
+    },
     getCollabPresencePayload,
     setRemoteCollabPresence,
     showCellPersistError: (row, col, message) => persistError.show(row, col, message),
@@ -4112,7 +4204,7 @@ export function mountSpreadsheet(
     focusValueBar() {
       valueBar?.focus();
     },
-    ...(disconnectLayout ? { disconnectLayout } : {}),
+    disconnectLayout,
   };
 
   return handle;

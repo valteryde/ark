@@ -1,5 +1,6 @@
 import type {
   CellSpan,
+  FloatingImage,
   SheetCellOverflowMode,
   SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,
@@ -57,12 +58,29 @@ export interface PartnerSheetPayload {
    * Covered cells are empty. Present only when the sheet has at least one merge.
    */
   cellSpans?: readonly CellSpan[];
+  /**
+   * Pictures placed in cell-area pixels, not inside cells. Present only when
+   * the sheet has at least one. `src` is a base64 PNG, JPEG, or GIF data URL.
+   */
+  floatingImages?: readonly FloatingImage[];
 }
 
 /** Full replacement of the sheet's merge list. An empty array clears every merge. */
 export interface CellSpansCommittedEvent {
   type: 'cell.spans_committed';
   cellSpans: readonly CellSpan[];
+  /** Anchor used when a save failure needs a cell to mark. */
+  row: number;
+  col: number;
+  sheetPath?: string;
+  clientId?: string;
+  markerHue?: number;
+}
+
+/** Full replacement of the sheet's floating images. `src` is omitted when the bytes are unchanged. */
+export interface FloatingImagesCommittedEvent {
+  type: 'floating_images.committed';
+  floatingImages: readonly FloatingImage[];
   /** Anchor used when a save failure needs a cell to mark. */
   row: number;
   col: number;

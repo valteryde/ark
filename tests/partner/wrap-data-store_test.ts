@@ -94,6 +94,30 @@ Deno.test('setCellSpans notifies the full list and remote apply stays quiet', ()
   assertEquals(store.getCellSpans?.(), []);
 });
 
+Deno.test('setFloatingImages omits src on a move and keeps it for a new image', () => {
+  const src =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const batches: unknown[] = [];
+  const store = createPartnerNotifyDataStore(columns, {}, () => {}, undefined, {
+    floatingImages: [{ id: 'pic', x: 0, y: 0, width: 40, height: 24, src }],
+    onFloatingImages: (images) => batches.push(images),
+  });
+  store.setFloatingImages?.([{ id: 'pic', x: 12, y: 4, width: 40, height: 24, src }]);
+  assertEquals(batches, [[{ id: 'pic', x: 12, y: 4, width: 40, height: 24 }]]);
+  store.setFloatingImages?.([
+    { id: 'pic', x: 12, y: 4, width: 40, height: 24, src },
+    { id: 'next', x: 0, y: 0, width: 48, height: 48, src },
+  ]);
+  assertEquals(batches[1], [
+    { id: 'pic', x: 12, y: 4, width: 40, height: 24 },
+    { id: 'next', x: 0, y: 0, width: 48, height: 48, src },
+  ]);
+  store.withRemoteApply(() => {
+    store.setFloatingImages?.([]);
+  });
+  assertEquals(batches.length, 2);
+});
+
 Deno.test('forEachStoredCell walks the inner store', () => {
   const store = createPartnerNotifyDataStore(
     columns,

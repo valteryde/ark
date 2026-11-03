@@ -4,13 +4,20 @@ import type {
   CellSpansCommittedEvent,
   CellStyleCommittedEvent,
   CellValueCommittedEvent,
+  FloatingImagesCommittedEvent,
   RowDeletedEvent,
 } from './types.ts';
 import { normalizeSheetTruthPayload, type SheetTruthNormalized } from './map-sheet-payload.ts';
 import { PARTNER_TOKEN_PARAM, getPartnerToken } from './partner-token.ts';
 import { sanitizeCellStyle } from '../spreadsheet/cell-style.ts';
 import { normalizeCellSpans } from '../spreadsheet/cell-span.ts';
-import type { CellSpan, SpreadsheetCellStyleDeclarations, SpreadsheetColumn } from '../spreadsheet/types.ts';
+import { normalizeFloatingImages } from '../spreadsheet/floating-image.ts';
+import type {
+  CellSpan,
+  FloatingImage,
+  SpreadsheetCellStyleDeclarations,
+  SpreadsheetColumn,
+} from '../spreadsheet/types.ts';
 
 export function collabWsUrl(sheetPath?: string | null): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -129,6 +136,7 @@ export interface CollabConnection {
   sendStyleCommitted(ev: CellStyleCommittedEvent): void;
   sendRowDeleted(ev: RowDeletedEvent): void;
   sendCellSpans(ev: CellSpansCommittedEvent): void;
+  sendFloatingImages(ev: FloatingImagesCommittedEvent): void;
   sendPresence(ev: CellPresenceEvent): void;
   sendPresenceClear(ev: CellPresenceClearEvent): void;
   subscribeSheet(sheetPath: string): void;
@@ -221,6 +229,11 @@ export function openCollabWs(opts: {
   onRemoteRowDeleted?: (row: number) => void;
   /** Peer or partner replaced the sheet's merge list. */
   onRemoteSpans?: (spans: readonly CellSpan[]) => void;
+  /**
+   * Peer or partner replaced the sheet's floating images.
+   * `src` may be omitted for ids this client already has.
+   */
+  onRemoteImages?: (images: readonly FloatingImage[]) => void;
   /** Connection lifecycle; fired on every state transition (including initial `connecting`). */
   onConnectionState?: (state: CollabConnectionState) => void;
   /** Authentication or authorization failed (e.g. 4401/4403 or server unauthorized error). */
@@ -320,6 +333,16 @@ export function openCollabWs(opts: {
       const sheetPath = typeof rec.sheetPath === 'string' ? rec.sheetPath : null;
       if (sheetPath !== null && active !== null && sheetPath !== active) return;
       opts.onRemoteSpans?.(normalizeCellSpans(rec.cellSpans));
+      return;
+    }
+
+    if (rec.type === 'floating_images.committed') {
+      const clientId = typeof rec.clientId === 'string' ? rec.clientId : null;
+      if (clientId !== null && clientId === opts.localClientId) return;
+      const active = opts.getActiveSheetPath();
+      const sheetPath = typeof rec.sheetPath === 'string' ? rec.sheetPath : null;
+      if (sheetPath !== null && active !== null && sheetPath !== active) return;
+      opts.onRemoteImages?.(normalizeFloatingImages(rec.floatingImages));
       return;
     }
 
@@ -451,6 +474,10 @@ export function openCollabWs(opts: {
     queueSend(JSON.stringify(ev));
   }
 
+  function sendFloatingImages(ev: FloatingImagesCommittedEvent): void {
+    queueSend(JSON.stringify(ev));
+  }
+
   function sendPresence(ev: CellPresenceEvent): void {
     queueSend(JSON.stringify(ev));
   }
@@ -471,6 +498,7 @@ export function openCollabWs(opts: {
     sendStyleCommitted,
     sendRowDeleted,
     sendCellSpans,
+    sendFloatingImages,
     sendPresence,
     sendPresenceClear,
     subscribeSheet,

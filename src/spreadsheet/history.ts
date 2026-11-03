@@ -1,5 +1,6 @@
 import { cellSpansEqual, cloneCellSpans } from './cell-span.ts';
-import type { CellSpan, SpreadsheetCellInit } from './types.ts';
+import { cloneFloatingImages, floatingImagesEqual } from './floating-image.ts';
+import type { CellSpan, FloatingImage, SpreadsheetCellInit } from './types.ts';
 
 /** Map key is `row:col`. Value `undefined` means the cell key is absent from the store. */
 export type HistoryCellMap = Map<string, SpreadsheetCellInit | undefined>;
@@ -9,12 +10,20 @@ export type HistorySpanChange = {
   after: readonly CellSpan[];
 };
 
+export type HistoryImageChange = {
+  before: readonly FloatingImage[];
+  after: readonly FloatingImage[];
+};
+
 export type HistoryRecord = {
   before: HistoryCellMap;
   after: HistoryCellMap;
   /** Present only when this step changed the sheet's merge list. */
   spansBefore?: CellSpan[];
   spansAfter?: CellSpan[];
+  /** Present only when this step changed the sheet's floating images. */
+  imagesBefore?: FloatingImage[];
+  imagesAfter?: FloatingImage[];
 };
 
 const DEFAULT_MAX_DEPTH = 100;
@@ -73,7 +82,12 @@ export function cellStatesEqual(
 }
 
 export type SpreadsheetHistoryApi = {
-  pushRecord(before: HistoryCellMap, after: HistoryCellMap, spans?: HistorySpanChange): void;
+  pushRecord(
+    before: HistoryCellMap,
+    after: HistoryCellMap,
+    spans?: HistorySpanChange,
+    images?: HistoryImageChange,
+  ): void;
   /** Pop undo stack; returns record so caller applies `before` to the store. */
   undo(): HistoryRecord | null;
   /** Pop redo stack; returns record so caller applies `after` to the store. */
@@ -99,6 +113,8 @@ export function createSpreadsheetHistory(
   let batchAfter: HistoryCellMap | null = null;
   let batchSpansBefore: CellSpan[] | null = null;
   let batchSpansAfter: CellSpan[] | null = null;
+  let batchImagesBefore: FloatingImage[] | null = null;
+  let batchImagesAfter: FloatingImage[] | null = null;
 
   function notify(): void {
     for (const fn of listeners) fn();
@@ -118,10 +134,12 @@ export function createSpreadsheetHistory(
     before: HistoryCellMap,
     after: HistoryCellMap,
     spans?: HistorySpanChange,
+    images?: HistoryImageChange,
   ): void {
     const spanChange = spans !== undefined && !cellSpansEqual(spans.before, spans.after);
-    if (!spanChange && before.size === 0 && after.size === 0) return;
-    if (!spanChange && cellMapsEqual(before, after)) return;
+    const imageChange = images !== undefined && !floatingImagesEqual(images.before, images.after);
+    if (!spanChange && !imageChange && before.size === 0 && after.size === 0) return;
+    if (!spanChange && !imageChange && cellMapsEqual(before, after)) return;
     undoStack.push({
       before: cloneCellMap(before),
       after: cloneCellMap(after),
@@ -131,6 +149,12 @@ export function createSpreadsheetHistory(
             spansAfter: cloneCellSpans(spans!.after),
           }
         : {}),
+      ...(imageChange
+        ? {
+            imagesBefore: cloneFloatingImages(images!.before),
+            imagesAfter: cloneFloatingImages(images!.after),
+          }
+        : {}),
     });
     redoStack.length = 0;
     trimUndo();
@@ -138,7 +162,12 @@ export function createSpreadsheetHistory(
   }
 
   return {
-    pushRecord(before: HistoryCellMap, after: HistoryCellMap, spans?: HistorySpanChange) {
+    pushRecord(
+      before: HistoryCellMap,
+      after: HistoryCellMap,
+      spans?: HistorySpanChange,
+      images?: HistoryImageChange,
+    ) {
       if (batchDepth > 0) {
         if (batchBefore === null) batchBefore = new Map();
         if (batchAfter === null) batchAfter = new Map();
@@ -150,9 +179,13 @@ export function createSpreadsheetHistory(
           if (batchSpansBefore === null) batchSpansBefore = cloneCellSpans(spans.before);
           batchSpansAfter = cloneCellSpans(spans.after);
         }
+        if (images) {
+          if (batchImagesBefore === null) batchImagesBefore = cloneFloatingImages(images.before);
+          batchImagesAfter = cloneFloatingImages(images.after);
+        }
         return;
       }
-      pushRecordInternal(before, after, spans);
+      pushRecordInternal(before, after, spans, images);
     },
 
     beginBatch() {
@@ -162,6 +195,8 @@ export function createSpreadsheetHistory(
         batchAfter = null;
         batchSpansBefore = null;
         batchSpansAfter = null;
+        batchImagesBefore = null;
+        batchImagesAfter = null;
       }
     },
 
@@ -175,16 +210,24 @@ export function createSpreadsheetHistory(
           batchSpansBefore !== null && batchSpansAfter !== null
             ? { before: batchSpansBefore, after: batchSpansAfter }
             : undefined;
+        const imageChange =
+          batchImagesBefore !== null && batchImagesAfter !== null
+            ? { before: batchImagesBefore, after: batchImagesAfter }
+            : undefined;
         batchBefore = null;
         batchAfter = null;
         batchSpansBefore = null;
         batchSpansAfter = null;
-        pushRecordInternal(b, a, spanChange);
+        batchImagesBefore = null;
+        batchImagesAfter = null;
+        pushRecordInternal(b, a, spanChange, imageChange);
       } else if (batchDepth === 0) {
         batchBefore = null;
         batchAfter = null;
         batchSpansBefore = null;
         batchSpansAfter = null;
+        batchImagesBefore = null;
+        batchImagesAfter = null;
       }
     },
 

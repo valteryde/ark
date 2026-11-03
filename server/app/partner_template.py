@@ -30,6 +30,7 @@ import httpx
 
 from .partner_auth import partner_base_url
 from .cell_span import CellSpanError, parse_cell_spans
+from .floating_image import FloatingImageError, parse_floating_images
 from .cell_style import CellStyleError, parse_cell_styles_map
 from .store import MAX_COLS, MAX_ROWS, SheetValidationError, _validate_columns
 
@@ -46,6 +47,7 @@ _TEMPLATE_PASSTHROUGH_KEYS = (
     "chromeActions",
     "cellStyles",
     "cellSpans",
+    "floatingImages",
     "pdfExport",
 )
 
@@ -106,6 +108,13 @@ def parse_template_response(data: Any) -> dict[str, Any]:
             )
         except CellSpanError as e:
             raise PartnerTemplateError(f"invalid template cellSpans: {e}") from e
+    if "floatingImages" in template:
+        try:
+            template["floatingImages"] = parse_floating_images(
+                template["floatingImages"], require_src=True
+            )
+        except FloatingImageError as e:
+            raise PartnerTemplateError(f"invalid template floatingImages: {e}") from e
     return template
 
 

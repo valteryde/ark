@@ -93,6 +93,7 @@ Ark sends live change notifications as users edit. Events for the same sheet and
 - **`kind: "cell_style"`** — a committed cell style. `style` is the full replacement object (`{}` means formatting was cleared). `row`, `col`, `columnId`, and `recordId` match `kind: "cell"`.
 - **`kind: "row_deleted"`** — user deleted a grid row (cells cleared; rows are not shifted). Any merge that included the row is removed.
 - **`kind: "cell_spans"`** — the sheet's merge list was replaced. `cellSpans` is the full list (`[]` clears every merge). Pull the sheet for the anchor values; this event does not repeat them.
+- **`kind: "floating_images"`** — the sheet's pictures changed. The event has no bytes. Pull the sheet for `floatingImages`.
 - **`kind: "sheet_created"`** — a sheet was auto-created on first visit; includes the `template` name/version it was built from (absent for blank sheets).
 
 The notification is intentionally lightweight: when you need full state, pull the sheet with **`GET /api/partner/sheets/{path}`**. Notifications carry the editing user's `ark_token` as a Bearer header and are fire-and-forget (one retry); Ark never blocks the grid on your response.
@@ -141,7 +142,7 @@ The browser route does not take the flags: in-app export always shows headers an
 | **422** | The sheet could not be laid out on paper (`{ "detail": "pdf_layout_failed" }`). |
 | **400** | Partner route, when `headers`, `empty_columns`, or `empty_rows` is neither true nor false. |
 
-The file is landscape A4. It includes the sheet title (or the path), a repeating header row, and visible columns only (`hidden` columns are left out). With a header row, every page of a long sheet prints it once, and a merge that crosses a page break is cut there so its fill and border carry on down the next page. Select cells print the option **label**. Link cells print the URL. Column widths follow `widthPx`. Empty rows between values stay; trailing empty `rowCount` padding does not. A cell that has a style and no value is still printed.
+The file is landscape A4. It includes the sheet title (or the path), a repeating header row, and visible columns only (`hidden` columns are left out). With a header row, every page of a long sheet prints it once, and a merge that crosses a page break is cut there so its fill and border carry on down the next page. Select cells print the option **label**. Link cells print the URL. Column widths follow `widthPx`. Empty rows between values stay; trailing empty `rowCount` padding does not, except rows a floating image sits on, which are included so the picture keeps its place. A cell that has a style and no value is still printed. Floating images are drawn on top of the table at the same scale as the columns (aspect ratio kept), clipped across page edges. A row omitted with `empty_rows=false` takes its slice of the picture with it.
 
 Painted cell styles are the toolbar declarations stored in `cellStyles`: `background-color`, `color` (`#rgb`, `#rrggbb`, `#rrggbbaa` with alpha dropped), bold (`font-weight` 600/700/`bold`/`bolder`), italic, underline, and strikethrough (`text-decoration-line` tokens), alignment (`justify-content`: `center`, `flex-end`/`end`, otherwise left — this overrides the default right alignment of number columns), and the toolbar border (`box-shadow: inset 0 0 0 1px #64748b`). Other CSS keys are ignored. A select option's `color` and `backgroundColor` are used when the cell has no style of its own for that property. Merged rectangles in `cellSpans` are drawn as one table cell from the anchor. A span whose anchor column is hidden is omitted.
 
@@ -200,7 +201,7 @@ Optional partner request header:
 
 ### `PUT /api/partner/sheets/{path}` (create / replace)
 
-Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `cellOverflow`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`, `cellSpans`, `pdfExport`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**). `cellSpans` seeds merged rectangles (see **Merged cells**). Omitting `cellSpans` on `PUT` clears merges, because `PUT` replaces the document. `pdfExport: false` turns off the in-app export button; omitting it leaves export on.
+Body is a sheet payload: **`columns`** (required), plus optional `rows`, `title`, `description`, `rowCount`, `ghostRowCount`, `defaultRowHeightPx`, `cellOverflow`, `enabledUiCapabilities`, `chromeActions`, `cellStyles`, `cellSpans`, `floatingImages`, `pdfExport`. Field semantics are in the payload reference below. Rows are objects keyed by column `id`. `cellStyles` seeds per-cell formatting (see **Cell styles**). `cellSpans` seeds merged rectangles (see **Merged cells**). `floatingImages` seeds pictures (see **Floating images**). Omitting `cellSpans` or `floatingImages` on `PUT` clears them, because `PUT` replaces the document. `pdfExport: false` turns off the in-app export button; omitting it leaves export on.
 
 ### `PATCH /api/partner/sheets/{path}` (partial update)
 
@@ -246,6 +247,7 @@ Each cell update addresses a cell by **`row` + `columnId`**, **`recordId` + `col
 | `cells` | Sparse out-of-schema cells keyed `"row:col"` (values written outside the defined columns), when present. |
 | `cellStyles` | Sparse per-cell styles keyed `"row:col"` (1-based). Present only when at least one cell has formatting. See **Cell styles**. |
 | `cellSpans` | Merged rectangles. Present only when the sheet has at least one. See **Merged cells**. |
+| `floatingImages` | Pictures in cell-area pixels. Present only when the sheet has at least one. See **Floating images**. |
 | `defaultRowHeightPx` | Passed through to config |
 | `cellOverflow` | **`"clip"`** turns text spill off (each cell is clipped with an ellipsis). Omitted or **`"spill"`** keeps the default: long text paints across the columns to its right while those are empty. See SPREADSHEET.md, **Text overflow and wrap**. |
 | `enabledUiCapabilities` | Toolbar flags (see SPREADSHEET.md) |
@@ -390,6 +392,27 @@ The toolbar capability is **`merge-cells`**. Merging keeps the anchor value and 
 
 PDF export draws each in-range span as one table cell. The anchor's text and style fill the rectangle. Covered cells are left blank in the file. Rows are packed into pages by their measured height, so the header row prints once at the top of every page and never twice on the same page. A merge that reaches a page edge is cut there, and its fill and border keep running on the next page; its text stays on the page where the merge starts. Only a single row taller than a whole page breaks inside itself.
 
+## Floating images
+
+`floatingImages` is an array of pictures placed on the sheet, not inside cells. Each item is `{ "id", "x", "y", "width", "height", "src" }`. `x` and `y` are pixels from the top-left of cell A1. `width` and `height` are at least 24 and at most 4000. `id` is 1–64 characters (`A–Z`, `a–z`, `0–9`, `_`, `-`). `src` is a `data:image/png`, `data:image/jpeg`, or `data:image/gif` base64 URL, at most about 1.5 MB. At most 20 images. SVG and WebP are rejected.
+
+```json
+"floatingImages": [
+  {
+    "id": "hero",
+    "x": 16,
+    "y": 8,
+    "width": 240,
+    "height": 120,
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+  }
+]
+```
+
+The toolbar capability is **`insert-image`**. A move or resize from the browser sends `{ "type": "floating_images.committed", "floatingImages", "row", "col", "sheetPath" }`. Entries that already exist omit `src`; Ark keeps the stored bytes. A new id must include `src`. Ids missing from the list are deleted. An unknown id with no `src` is rejected. The broadcast is that same payload, so other tabs do not re-download unchanged files. `PUT` replaces the document and every image must include `src`; omit `floatingImages` and the list is cleared. `PATCH` may include `floatingImages` with the same omit-`src` rule. The partner notification is `{ "kind": "floating_images" }` with no bytes — pull `GET` for the files.
+
+PDF export draws the pictures on top of the table. Width and height use the column scale, so the aspect ratio stays. The top of a picture sits on the same data row as on screen. A picture that crosses a page is clipped and continues. Export uses each column's `widthPx`, not a width the user changed only in the browser.
+
 ## Browser-facing API (for reference)
 
 - **`GET /api/sheets/{path}`** — sheet payload, auto-creating unknown paths. Requires a valid `ark_token` when `ARK_PARTNER_BASE_URL` is set.
@@ -398,6 +421,7 @@ PDF export draws each in-range span as one table cell. The anchor's text and sty
   - `{ "type": "cell.style_committed", "row", "col", "columnId", "style", "sheetPath", "clientId"?, "markerHue"?, "recordId"? }` — Ark replaces that cell's style (`{}` clears it), broadcasts the sanitized style, and enqueues `kind: "cell_style"`. The cell value is unchanged. Read-only columns are rejected.
   - `{ "type": "row.deleted", "row", "sheetPath", … }` — Ark clears the row's cells, drops any merge that included the row, broadcasts, and notifies.
   - `{ "type": "cell.spans_committed", "cellSpans", "row", "col", "sheetPath", "clientId"?, "markerHue"? }` — Ark replaces the merge list (`[]` clears it), broadcasts the stored list, and enqueues `kind: "cell_spans"`. `row` and `col` mark a cell when the save fails. The anchor values travel as separate cell commits.
+  - `{ "type": "floating_images.committed", "floatingImages", "row", "col", "sheetPath", "clientId"?, "markerHue"? }` — Ark replaces the picture list. `src` may be omitted for an id that already exists. The broadcast keeps that shape. Partner notify is `kind: "floating_images"` with no bytes.
   - `{ "type": "cell.presence" | "cell.presence_clear", … }` — ephemeral cursor presence; broadcast only, never persisted or notified.
   - Browsers must not send `{ "type": "sheet.truth" }`; that shape is reserved for partner `PUT` pushes.
 

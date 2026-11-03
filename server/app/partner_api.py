@@ -379,7 +379,8 @@ async def put_sheet(path: str, request: Request) -> JSONResponse:
         "columns": payload["columns"],
     }
     for k in ("title", "description", "ghostRowCount", "defaultRowHeightPx", "cellOverflow",
-              "enabledUiCapabilities", "chromeActions", "cells", "cellStyles", "cellSpans", "pdfExport"):
+              "enabledUiCapabilities", "chromeActions", "cells", "cellStyles", "cellSpans",
+              "floatingImages", "pdfExport"):
         if k in payload:
             truth[k] = payload[k]
     await hub.broadcast(truth, normalized)
@@ -431,6 +432,17 @@ async def patch_sheet(path: str, request: Request) -> JSONResponse:
             {
                 "type": "cell.spans_committed",
                 "cellSpans": result["cellSpans"],
+                "sheetPath": normalized,
+                "row": 1,
+                "col": 1,
+            },
+            normalized,
+        )
+    if "floatingImages" in result:
+        await hub.broadcast(
+            {
+                "type": "floating_images.committed",
+                "floatingImages": result["floatingImages"],
                 "sheetPath": normalized,
                 "row": 1,
                 "col": 1,

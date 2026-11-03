@@ -15,6 +15,7 @@ export type UiToolbarCapability =
   | 'link'
   | 'comment'
   | 'merge-cells'
+  | 'insert-image'
   | 'functions';
 
 /** How text wider than a cell's box behaves. Default `'spill'`. */
@@ -99,6 +100,23 @@ export interface CellSpan {
   colSpan: number;
 }
 
+/**
+ * A picture placed on the sheet, not inside a cell.
+ * `x` and `y` are pixels from the top-left of cell A1 (below the column
+ * headers, to the right of the row-number gutter). Array order is the
+ * stacking order; the last image paints on top.
+ * `src` is omitted on a move or resize so the file is not sent again.
+ */
+export interface FloatingImage {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** `data:image/png|jpeg|gif;base64,...`. Required when the image is created. */
+  src?: string;
+}
+
 /** One cell in a payload / `createInMemoryDataStore` initial map. */
 export interface SpreadsheetCellInit {
   value: string | number;
@@ -139,6 +157,13 @@ export interface SpreadsheetDataStore {
   getCellSpans?(): readonly CellSpan[];
   /** Replace the sheet's merge list. Does not clear covered cells; the caller does. */
   setCellSpans?(spans: readonly CellSpan[]): void;
+  /**
+   * Pictures placed on the sheet in cell-area pixels. Absent when the store
+   * does not support floating images. Not cell content.
+   */
+  getFloatingImages?(): readonly FloatingImage[];
+  /** Replace the sheet's image list. */
+  setFloatingImages?(images: readonly FloatingImage[]): void;
 }
 
 export interface SpreadsheetConfig {
@@ -223,6 +248,7 @@ export const ALL_UI_CAPABILITIES: UiToolbarCapability[] = [
   'link',
   'comment',
   'merge-cells',
+  'insert-image',
   'functions',
 ];
 
@@ -384,4 +410,20 @@ export interface SpreadsheetMountHandle {
   getActiveCellAddress(): string;
   /** Move keyboard focus to the value bar above the grid (no-op when it is hidden). */
   focusValueBar(): void;
+  /** Pictures currently on the sheet, in stacking order. */
+  getFloatingImages(): readonly FloatingImage[];
+  /**
+   * Drop a picture at the current scroll origin. `width` and `height` are the
+   * file's natural size; the longer side is capped at 240px. Returns false
+   * when `src` is not a PNG, JPEG, or GIF, or the sheet already has 20.
+   */
+  insertFloatingImage(image: { src: string; width: number; height: number }): boolean;
+  /** Read a local file and insert it. Rejects anything that is not a PNG, JPEG, or GIF under 1.5 MB. */
+  insertFloatingImageFile(file: File): Promise<boolean>;
+  /**
+   * Replace images from outside local editing (collab / partner push).
+   * Does not create undo history. Entries may omit `src` when this sheet
+   * already has that id.
+   */
+  applyExternalImages(images: readonly FloatingImage[]): boolean;
 }

@@ -11,6 +11,7 @@ crosses a page edge is cut at that edge with its style on both sides.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from io import BytesIO
@@ -22,9 +23,11 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import Frame, PageTemplate, Paragraph, Spacer, Table
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus.doctemplate import BaseDocTemplate, LayoutError
 
 from .cell_span import CellSpanError, parse_cell_spans
+from .floating_image import FloatingImageError, decode_floating_image_src, parse_floating_images
 
 MAX_PDF_DATA_ROWS = 10_000
 _TOOLBAR_BORDER = "inset 0 0 0 1px #64748b"
@@ -85,6 +88,39 @@ class PdfModel:
     merged_cells: frozenset[tuple[int, int]] = frozenset()
     # False when the caller asked for a file without the column header row.
     show_headers: bool = True
+    # 1-based sheet rows, in the order `rows` prints them. Empty means 1..n.
+    sheet_rows: tuple[int, ...] = ()
+    default_row_height_px: float = 28.0
+    images: tuple[PdfFloatingImage, ...] = ()
+
+
+@dataclass(frozen=True)
+class PdfFloatingImage:
+    x: float
+    y: float
+    width: float
+    height: float
+    data: bytes
+
+
+@dataclass(frozen=True)
+class PdfImageSlice:
+    """One clipped draw of a floating image, in frame points.
+
+    Origin is the top-left of the page frame. `y` grows downward. The dest
+    box may extend outside `clip_*`; the clip is the visible part on this page.
+    """
+
+    page: int
+    x: float
+    y: float
+    width: float
+    height: float
+    clip_x: float
+    clip_y: float
+    clip_w: float
+    clip_h: float
+    data: bytes
 
 
 def parse_pdf_color(value: Any) -> tuple[float, float, float] | None:
@@ -252,6 +288,19 @@ def build_pdf_model(
             if col in visible_cols:
                 max_style_row = max(max_style_row, row)
     row_count = max(len(rows), max_style_row)
+    default_row_height = _default_row_height_px(payload)
+    pdf_images = _pdf_images(payload.get("floatingImages"))
+    if empty_rows and pdf_images:
+        cap = payload.get("rowCount")
+        limit = (
+            cap
+            if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1
+            else MAX_PDF_DATA_ROWS
+        )
+        need = _max_image_row(pdf_images, default_row_height)
+        if need > MAX_PDF_DATA_ROWS:
+            raise PdfTooLarge(f"pdf export exceeds {MAX_PDF_DATA_ROWS} data rows")
+        row_count = max(row_count, min(need, limit, MAX_PDF_DATA_ROWS))
     if row_count > MAX_PDF_DATA_ROWS:
         raise PdfTooLarge(f"pdf export exceeds {MAX_PDF_DATA_ROWS} data rows")
 
@@ -321,7 +370,61 @@ def build_pdf_model(
         spans=tuple(spans),
         merged_cells=frozenset(merged),
         show_headers=headers and bool(headers_out),
+        sheet_rows=tuple(sheet_rows),
+        default_row_height_px=default_row_height,
+        images=pdf_images,
     )
+
+
+def _default_row_height_px(payload: dict[str, Any]) -> float:
+    raw = payload.get("defaultRowHeightPx")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 28.0
+    if raw <= 0:
+        return 28.0
+    return float(raw)
+
+
+def _pdf_images(raw: Any) -> tuple[PdfFloatingImage, ...]:
+    """Keep pictures the PDF can embed. One bad entry is skipped."""
+    if not isinstance(raw, list):
+        return ()
+    out: list[PdfFloatingImage] = []
+    for item in raw:
+        try:
+            parsed = parse_floating_images([item], require_src=True)
+        except FloatingImageError:
+            continue
+        if not parsed:
+            continue
+        img = parsed[0]
+        data = decode_floating_image_src(img["src"])
+        if not data:
+            continue
+        out.append(
+            PdfFloatingImage(
+                x=float(img["x"]),
+                y=float(img["y"]),
+                width=float(img["width"]),
+                height=float(img["height"]),
+                data=data,
+            )
+        )
+        if len(out) >= 20:
+            break
+    return tuple(out)
+
+
+def _max_image_row(images: tuple[PdfFloatingImage, ...], row_height: float) -> int:
+    """Last 1-based sheet row an image overlaps."""
+    if row_height <= 0:
+        return 0
+    last = 0
+    for image in images:
+        bottom = image.y + image.height
+        row = math.ceil(bottom / row_height - 1e-9)
+        last = max(last, row)
+    return last
 
 
 @dataclass(frozen=True)
@@ -665,6 +768,129 @@ def _plan_pages(
     return pages
 
 
+def floating_image_slices(
+    model: PdfModel,
+    *,
+    row_heights: list[float],
+    pages: list[_Page],
+    header_height: float | None,
+    title_block: float,
+    table_width: float,
+) -> list[PdfImageSlice]:
+    """Place each picture on the printed table.
+
+    Width and height use the same scale as the columns, so the picture keeps
+    its aspect ratio. The top sits on the same sheet row as on screen. A row
+    left out of the file takes that slice of the picture with it. A picture
+    that crosses a page edge is clipped and continues on the next page.
+    Coordinates are frame points from the top-left, y downward.
+    """
+    if not model.images or table_width <= 0 or not model.col_widths_px:
+        return []
+    total_px = sum(model.col_widths_px) or 1.0
+    sx = table_width / total_px
+    row_h = model.default_row_height_px if model.default_row_height_px > 0 else 28.0
+    if model.sheet_rows:
+        pairs = list(zip(model.sheet_rows, row_heights))
+    else:
+        pairs = list(zip(range(1, len(row_heights) + 1), row_heights))
+    body_at: dict[int, float] = {}
+    height_by_row: dict[int, float] = {}
+    cursor = 0.0
+    for row, height in pairs:
+        body_at[int(row)] = cursor
+        height_by_row[int(row)] = float(height)
+        cursor += float(height)
+
+    page_spans: list[tuple[float, float, float]] = []
+    body = 0.0
+    for index, page in enumerate(pages):
+        data_heights = page.heights[1:] if header_height is not None else page.heights
+        span = float(sum(data_heights))
+        data_top = (title_block if index == 0 else 0.0) + (header_height or 0.0)
+        page_spans.append((body, body + span, data_top))
+        body += span
+
+    def map_screen_y(screen_y: float) -> float | None:
+        if screen_y < 0:
+            return None
+        row = int(math.floor(screen_y / row_h)) + 1
+        if row not in body_at:
+            return None
+        frac = (screen_y - (row - 1) * row_h) / row_h
+        return body_at[row] + frac * height_by_row[row]
+
+    slices: list[PdfImageSlice] = []
+    for image in model.images:
+        if image.height <= 0 or image.width <= 0:
+            continue
+        left = image.x * sx
+        width = image.width * sx
+        clip_left = max(left, 0.0)
+        clip_right = min(left + width, table_width)
+        clip_w = clip_right - clip_left
+        if clip_w < 0.25:
+            continue
+        y0 = image.y
+        y1 = image.y + image.height
+        first = max(1, int(math.floor(y0 / row_h)) + 1)
+        last = max(first, int(math.ceil(y1 / row_h - 1e-9)))
+        segments: list[tuple[float, float]] = []
+        current: tuple[float, float] | None = None
+        for row in range(first, last + 1):
+            screen0 = (row - 1) * row_h
+            screen1 = row * row_h
+            overlap0 = max(y0, screen0)
+            overlap1 = min(y1, screen1)
+            if overlap1 <= overlap0 + 1e-6:
+                continue
+            if row not in body_at:
+                if current is not None:
+                    segments.append(current)
+                    current = None
+                continue
+            if current is not None and abs(current[1] - overlap0) < 1e-4:
+                current = (current[0], overlap1)
+            else:
+                if current is not None:
+                    segments.append(current)
+                current = (overlap0, overlap1)
+        if current is not None:
+            segments.append(current)
+
+        full_h = image.height * sx
+        for seg0, seg1 in segments:
+            body_top = map_screen_y(seg0)
+            if body_top is None:
+                continue
+            frac0 = (seg0 - y0) / image.height
+            band_h = (seg1 - seg0) * sx
+            if band_h < 0.25:
+                continue
+            dest_body_top = body_top - frac0 * full_h
+            band_bottom = body_top + band_h
+            for page_index, (start, end, data_top) in enumerate(page_spans):
+                vis0 = max(body_top, start)
+                vis1 = min(band_bottom, end)
+                if vis1 - vis0 < 0.25:
+                    continue
+                slices.append(
+                    PdfImageSlice(
+                        page=page_index + 1,
+                        x=left,
+                        y=data_top + (dest_body_top - start),
+                        width=width,
+                        height=full_h,
+                        clip_x=clip_left,
+                        clip_y=data_top + (vis0 - start),
+                        clip_w=clip_w,
+                        clip_h=vis1 - vis0,
+                        data=image.data,
+                    )
+                )
+    return slices
+
+
 def _page_commands(model: PdfModel, page: _Page) -> list[tuple[Any, ...]]:
     """Paint one page: the header band, plain cell fills, and merge rectangles.
 
@@ -727,8 +953,8 @@ def _table_for_page(
     return table
 
 
-def _story_for(model: PdfModel) -> list[Any]:
-    """Title, spacer, and one table per page.
+def _story_for(model: PdfModel) -> tuple[list[Any], list[PdfImageSlice]]:
+    """Title, spacer, and one table per page, plus floating-image slices.
 
     The sheet is paginated from measured row heights instead of letting ReportLab
     split one long table, because that split can start a page with only a couple
@@ -738,7 +964,7 @@ def _story_for(model: PdfModel) -> list[Any]:
     title = _title_flowable(model)
     story: list[Any] = [title, Spacer(1, _TITLE_GAP)]
     if not model.headers:
-        return story
+        return story, []
     cache: dict[tuple[Any, ...], ParagraphStyle] = {}
     header, body = _flowables(model, cache)
     widths = _column_widths(model.col_widths_px)
@@ -755,18 +981,68 @@ def _story_for(model: PdfModel) -> list[Any]:
         if not page.heights:
             continue
         story.append(_table_for_page(model, page, header, body, widths))
-    return story
+    slices = floating_image_slices(
+        model,
+        row_heights=row_heights,
+        pages=pages,
+        header_height=header_height,
+        title_block=used,
+        table_width=_PAGE_WIDTH,
+    )
+    return story, slices
 
 
-def _draw(story: list[Any], title: str) -> bytes:
+def _paint_image_slices(canvas: Any, page: int, slices: list[PdfImageSlice]) -> None:
+    """Draw image slices on top of the table for this page."""
+    for sl in slices:
+        if sl.page != page or sl.clip_w < 0.25 or sl.clip_h < 0.25:
+            continue
+        if sl.width <= 0 or sl.height <= 0:
+            continue
+        x = _PAGE_MARGIN + sl.x
+        y = _PAGE_MARGIN + _PAGE_HEIGHT - sl.y - sl.height
+        clip_x = _PAGE_MARGIN + sl.clip_x
+        clip_y = _PAGE_MARGIN + _PAGE_HEIGHT - sl.clip_y - sl.clip_h
+        canvas.saveState()
+        try:
+            path = canvas.beginPath()
+            path.rect(clip_x, clip_y, sl.clip_w, sl.clip_h)
+            canvas.clipPath(path, stroke=0, fill=0)
+            canvas.drawImage(
+                ImageReader(BytesIO(sl.data)),
+                x,
+                y,
+                width=sl.width,
+                height=sl.height,
+                mask="auto",
+                preserveAspectRatio=False,
+            )
+        except Exception:
+            canvas.restoreState()
+            continue
+        canvas.restoreState()
+
+
+class _SheetDoc(BaseDocTemplate):
+    def __init__(self, buffer: BytesIO, slices: list[PdfImageSlice], **kwargs: Any) -> None:
+        super().__init__(buffer, **kwargs)
+        self._image_slices = slices
+
+    def afterPage(self) -> None:
+        _paint_image_slices(self.canv, self.page, self._image_slices)
+
+
+def _draw(story: list[Any], title: str, slices: list[PdfImageSlice]) -> bytes:
     """Lay the story out on landscape A4 and return the PDF bytes.
 
     The frame is placed by hand with no extra padding, so the planned page
-    heights match the space the story is actually given.
+    heights match the space the story is actually given. Pictures are painted
+    after the table, clipped to the page they fall on.
     """
     buffer = BytesIO()
-    doc = BaseDocTemplate(
+    doc = _SheetDoc(
         buffer,
+        slices,
         pagesize=_PAGE_SIZE,
         leftMargin=_PAGE_MARGIN,
         rightMargin=_PAGE_MARGIN,
@@ -815,7 +1091,8 @@ def render_sheet_pdf(
         empty_rows=empty_rows,
     )
     try:
-        body = _draw(_story_for(model), model.title)
+        story, slices = _story_for(model)
+        body = _draw(story, model.title, slices)
     except LayoutError as exc:
         raise PdfLayoutError(f"pdf layout failed: {exc}") from exc
     return body, model.filename

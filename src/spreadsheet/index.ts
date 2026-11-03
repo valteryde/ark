@@ -3,6 +3,7 @@ export type {
   CollabPresencePayload,
   RemoteCollabPeer,
   CellSpan,
+  FloatingImage,
   SpreadsheetCellInit,
   SpreadsheetCellStyleDeclarations,
   SpreadsheetColumn,

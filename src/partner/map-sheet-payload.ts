@@ -1,4 +1,5 @@
 import { normalizeCellSpans } from '../spreadsheet/cell-span.ts';
+import { normalizeFloatingImages } from '../spreadsheet/floating-image.ts';
 import { sanitizeCellStyle } from '../spreadsheet/cell-style.ts';
 import { cellKey, type InMemoryDataInitValue } from '../spreadsheet/data-store.ts';
 import { sanitizePhosphorIconName } from '../spreadsheet/cell-display.ts';
@@ -119,6 +120,7 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
       cells: i.cells ?? o.cells,
       cellStyles: i.cellStyles ?? o.cellStyles,
       cellSpans: i.cellSpans ?? o.cellSpans,
+      floatingImages: i.floatingImages ?? o.floatingImages,
       pdfExport: i.pdfExport ?? o.pdfExport,
     };
   }
@@ -135,10 +137,12 @@ export function normalizePartnerSheetPayload(raw: unknown): PartnerSheetPayload 
     maxRow: partnerEffectiveRowCount({ columns, rows, rowCount }),
     maxCol: columns.length,
   });
+  const floatingImages = normalizeFloatingImages(src.floatingImages).filter((image) => image.src);
   return {
     ...(sparseCells !== undefined ? { cells: sparseCells } : {}),
     ...(cellStyles !== undefined ? { cellStyles } : {}),
     ...(cellSpans.length > 0 ? { cellSpans } : {}),
+    ...(floatingImages.length > 0 ? { floatingImages } : {}),
     ...(typeof src.revision === 'number' && Number.isFinite(src.revision)
       ? { revision: src.revision }
       : {}),
@@ -324,6 +328,7 @@ export function normalizeSheetTruthPayload(
     maxRow: partnerEffectiveRowCount({ columns, rows, rowCount }),
     maxCol: columns.length,
   });
+  const floatingImages = normalizeFloatingImages(o.floatingImages).filter((image) => image.src);
   const payload: PartnerSheetPayload = {
     title: typeof o.title === 'string' ? o.title : undefined,
     description: typeof o.description === 'string' ? o.description : undefined,
@@ -341,6 +346,7 @@ export function normalizeSheetTruthPayload(
     ...(sparseCells !== undefined ? { cells: sparseCells } : {}),
     ...(cellStyles !== undefined ? { cellStyles } : {}),
     ...(cellSpans.length > 0 ? { cellSpans } : {}),
+    ...(floatingImages.length > 0 ? { floatingImages } : {}),
     ...(o.pdfExport === false ? { pdfExport: false } : {}),
   };
   return { sheetPath, payload };

@@ -102,6 +102,18 @@ Deno.test('undo stack respects maxDepth', () => {
   assertEquals(h.undo(), null);
 });
 
+Deno.test('an image-only change is its own undo step', () => {
+  const h = createSpreadsheetHistory();
+  const before = [{ id: 'a', x: 0, y: 0, width: 40, height: 40, src: 'data:image/png;base64,aa' }];
+  const after = [{ id: 'a', x: 12, y: 4, width: 40, height: 40, src: 'data:image/png;base64,aa' }];
+  h.pushRecord(map({}), map({}), undefined, { before, after });
+  assertEquals(h.canUndo(), true);
+  const undone = h.undo();
+  assertEquals(undone?.imagesBefore?.[0]?.x, 0);
+  assertEquals(undone?.imagesAfter?.[0]?.x, 12);
+  assertEquals(h.redo()?.imagesAfter?.[0]?.x, 12);
+});
+
 Deno.test('subscribe notifies on changes and can unsubscribe', () => {
   const h = createSpreadsheetHistory();
   let calls = 0;

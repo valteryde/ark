@@ -552,6 +552,64 @@ def test_cell_spans_roundtrip_and_row_delete_drops_them(fresh_store):
 
 
 
+PNG = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+COLS = [
+    {"id": "name", "header": "Name", "widthPx": 160},
+    {"id": "note", "header": "Note", "widthPx": 120},
+]
+
+
+def test_floating_images_roundtrip_keeps_src_when_a_move_omits_it(fresh_store):
+    payload = fresh_store.replace_sheet(
+        "clients",
+        {
+            "columns": COLS,
+            "rows": [{"name": "Ada"}],
+            "floatingImages": [
+                {"id": "pic", "x": 4, "y": 8, "width": 40, "height": 24, "src": PNG},
+            ],
+        },
+    )
+    assert payload["floatingImages"][0]["src"] == PNG
+
+    revision, stored, wire = fresh_store.apply_floating_images(
+        "clients",
+        [{"id": "pic", "x": 12, "y": 4, "width": 48, "height": 24}],
+    )
+    assert revision == payload["revision"] + 1
+    assert stored[0]["src"] == PNG
+    assert "src" not in wire[0]
+    again = fresh_store.get_sheet_payload("clients")
+    assert again["floatingImages"][0]["src"] == PNG
+    assert again["floatingImages"][0]["x"] == 12
+
+    with pytest.raises(SheetValidationError, match="unknown"):
+        fresh_store.apply_floating_images(
+            "clients",
+            [{"id": "other", "x": 0, "y": 0, "width": 40, "height": 24}],
+        )
+
+    logs, _total = fresh_store.get_audit_logs(sheet_path="clients", action="floating_images.replace")
+    assert logs
+    dumped = str(logs[0]["details"])
+    assert "base64" not in dumped
+    assert logs[0]["details"]["floatingImages"][0]["id"] == "pic"
+
+    patched = fresh_store.patch_sheet(
+        "clients",
+        {"floatingImages": [{"id": "pic", "x": 1, "y": 2, "width": 40, "height": 24}]},
+    )
+    assert patched["floatingImages"] == [{"id": "pic", "x": 1, "y": 2, "width": 40, "height": 24}]
+    assert fresh_store.get_sheet_payload("clients")["floatingImages"][0]["src"] == PNG
+
+    cleared = fresh_store.replace_sheet("clients", {"columns": COLS, "rows": [{"name": "Ada"}]})
+    assert "floatingImages" not in cleared
+
+
 def test_cell_overflow_mode_round_trips_and_validates(fresh_store):
     cols = [{"id": "a", "header": "A", "widthPx": 100}]
 

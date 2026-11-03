@@ -452,6 +452,29 @@ def _persist_ws_event(
         event = {"kind": "cell_spans", "cellSpans": stored}
         return (True, None, event, revision)
 
+    if msg_type == "floating_images.committed":
+        try:
+            revision, _stored, wire = store.apply_floating_images(
+                sheet_path,
+                data.get("floatingImages"),
+                actor_type="user",
+                actor_id=actor_id,
+                ip_address=client_ip,
+            )
+        except SheetValidationError as e:
+            store.log_audit_event(
+                sheet_path=sheet_path,
+                action="floating_images.rejected",
+                actor_type="user",
+                actor_id=actor_id,
+                ip_address=client_ip,
+                details={"reason": str(e)},
+            )
+            return (False, str(e), None, 0)
+        data["floatingImages"] = wire
+        event = {"kind": "floating_images"}
+        return (True, None, event, revision)
+
     if msg_type == "row.deleted":
         try:
             revision = store.apply_row_delete(
@@ -632,7 +655,12 @@ async def collab_ws(websocket: WebSocket) -> None:
                 _persist_ws_event, data, token, client_ip
             )
             if not ok:
-                if msg_type in ("cell.value_committed", "cell.style_committed", "cell.spans_committed"):
+                if msg_type in (
+                    "cell.value_committed",
+                    "cell.style_committed",
+                    "cell.spans_committed",
+                    "floating_images.committed",
+                ):
                     await _send_persist_status(websocket, data, err)
                 continue
             if partner_event is not None and sheet_path:
