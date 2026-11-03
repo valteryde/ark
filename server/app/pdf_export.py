@@ -688,6 +688,17 @@ def _flowables(
     return header, body
 
 
+def _data_row_height_pt(model: PdfModel) -> float:
+    """On-screen data-row height, in the same scale as the columns.
+
+    The grid paints every data row at `defaultRowHeightPx`, empty or not.
+    Column widths are scaled onto the page, so the row uses that same scale.
+    """
+    total_px = sum(model.col_widths_px) or 1.0
+    row_px = model.default_row_height_px if model.default_row_height_px > 0 else 28.0
+    return row_px * (_PAGE_WIDTH / total_px)
+
+
 def _measure_heights(
     header: list[Any],
     body: list[list[Any]],
@@ -699,8 +710,17 @@ def _measure_heights(
     One probe table holds the whole sheet with the real paddings and the real
     merge rectangles, so a merge stretches the rows it covers the same way it
     does on paper and the pages planned from these heights really do fit.
+    Each data row is at least the on-screen row height. A row with nothing in
+    it would otherwise collapse to the cell padding, and a row whose text needs
+    more room still grows past that floor.
     """
-    probe = Table(([header] if header else []) + body, colWidths=widths)
+    floor = _data_row_height_pt(model)
+    min_heights = ([0.0] if header else []) + [floor] * len(body)
+    probe = Table(
+        ([header] if header else []) + body,
+        colWidths=widths,
+        minRowHeights=min_heights,
+    )
     commands = _table_commands(bool(header))
     for col0, row0, col1, row1 in _model_spans(model, 0 if header else 1):
         commands.append(("SPAN", (col0, row0), (col1, row1)))

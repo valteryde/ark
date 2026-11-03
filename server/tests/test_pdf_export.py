@@ -10,7 +10,12 @@ from app.pdf_export import (
     PdfFloatingImage,
     PdfModel,
     PdfTooLarge,
+    _PAGE_WIDTH,
     _Page,
+    _column_widths,
+    _data_row_height_pt,
+    _flowables,
+    _measure_heights,
     _page_commands,
     _plan_pages,
     build_pdf_model,
@@ -242,8 +247,8 @@ def test_grade_sheet_merges_like_the_karakter_template_export():
 
 
 def test_merge_that_fits_one_page_stays_on_one_page():
-    payload = _tall_sheet(12)
-    payload["cellSpans"] = [{"row": 2, "col": 1, "rowSpan": 11, "colSpan": 1}]
+    payload = _tall_sheet(6)
+    payload["cellSpans"] = [{"row": 2, "col": 1, "rowSpan": 5, "colSpan": 1}]
     body, _ = render_sheet_pdf(payload)
     assert _page_count(body) == 1
 
@@ -329,10 +334,65 @@ def test_header_row_prints_once_on_every_page():
     """
     body, _ = render_sheet_pdf(_band_sheet(45))
     pages = _page_count(body)
-    assert pages == 2
+    assert pages == 6
     ops = _drawing_ops(body)
     assert ops.count(b"(A) Tj") == pages
     assert ops.count(b"(B) Tj") == pages
+
+
+def _sheet_row_height(payload: dict) -> float:
+    """The on-screen data-row height for a payload, in page points."""
+    return _data_row_height_pt(build_pdf_model(payload))
+
+
+def test_empty_rows_keep_the_on_screen_row_height():
+    """A blank row is the same height as a filled one, matching the grid.
+
+    The grid paints every data row at `defaultRowHeightPx`. Measuring from the
+    text alone leaves a row with nothing in it as short as the cell padding.
+    """
+    payload = {
+        "title": "Rows",
+        "columns": [
+            {"id": "a", "header": "A", "widthPx": 200},
+            {"id": "b", "header": "B", "widthPx": 120},
+        ],
+        "rows": [{"a": "Ada", "b": "1"}, {"a": "", "b": ""}, {"a": "Bea"}],
+        "defaultRowHeightPx": 36,
+    }
+    model = build_pdf_model(payload)
+    header, body = _flowables(model, {})
+    _header_height, row_heights = _measure_heights(
+        header, body, model, _column_widths(model.col_widths_px)
+    )
+    expected = 36 * _PAGE_WIDTH / sum(model.col_widths_px)
+    assert row_heights == pytest.approx([expected, expected, expected])
+
+    # A value that wraps past the on-screen height still grows past that floor.
+    # The neighbour column keeps this one narrow once both are scaled to the page.
+    tall = {
+        "title": "Rows",
+        "columns": [
+            {"id": "a", "header": "A", "widthPx": 40},
+            {"id": "b", "header": "B", "widthPx": 400},
+        ],
+        "rows": [
+            {
+                "a": "This sentence is long enough to wrap several times inside a narrow column",
+                "b": "",
+            },
+            {"a": "", "b": ""},
+        ],
+        "defaultRowHeightPx": 16,
+    }
+    tall_model = build_pdf_model(tall)
+    tall_header, tall_body = _flowables(tall_model, {})
+    _tall_header, tall_heights = _measure_heights(
+        tall_header, tall_body, tall_model, _column_widths(tall_model.col_widths_px)
+    )
+    floor = _data_row_height_pt(tall_model)
+    assert tall_heights[0] > floor + 1
+    assert tall_heights[1] == pytest.approx(floor)
 
 
 def test_band_that_runs_past_a_page_keeps_fill_and_border_on_the_next():
@@ -348,7 +408,7 @@ def test_band_that_runs_past_a_page_keeps_fill_and_border_on_the_next():
     # One fragment of the band per page, and all of its 44 rows still painted.
     band_heights = _band_heights(ops)
     assert len(band_heights) == pages
-    assert abs(sum(band_heights) - 44 * _ROW_HEIGHT) < 1.0
+    assert abs(sum(band_heights) - 44 * _sheet_row_height(_band_sheet(45))) < 1.0
     # The toolbar border is drawn around the fragment on each page as well.
     # ReportLab drops the leading zero, so accept either spelling.
     assert len(re.findall(rb"\.?392157 \.?454902 \.?545098 RG", ops)) == pages
@@ -454,12 +514,12 @@ def test_export_can_leave_the_column_header_row_out():
 def test_export_without_headers_still_paginates_and_runs_a_band_down():
     body, _ = render_sheet_pdf(_band_sheet(45), headers=False)
     pages = _page_count(body)
-    assert pages == 2
+    assert pages == 6
     ops = _drawing_ops(body)
     assert b"(A) Tj" not in ops
     band_heights = _band_heights(ops)
     assert len(band_heights) == pages
-    assert abs(sum(band_heights) - 44 * _ROW_HEIGHT) < 1.0
+    assert abs(sum(band_heights) - 44 * _sheet_row_height(_band_sheet(45))) < 1.0
 
 
 def test_a_page_without_a_header_row_numbers_its_rows_from_zero():
